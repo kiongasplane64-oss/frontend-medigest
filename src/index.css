@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* On nettoie les styles par défaut de Vite pour laisser place au design de l'ERP */
+:root {
+  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: #f8fafc; /* Slate-50 : plus doux pour un ERP */
+  color: #1e293b; /* Slate-800 */
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  display: block; /* Vite met 'flex' par défaut, ce qui casse souvent les layouts */
+}
+
+/* On supprime les styles de boutons par défaut de Vite qui entrent en conflit avec nos classes Tailwind */
+button {
+  background-color: transparent;
+  color: inherit;
+  padding: 0;
+  border: none;
+  cursor: pointer;
+}
