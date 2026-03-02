@@ -30,37 +30,38 @@ export default function Login() {
   e.preventDefault();
   setIsLoading(true);
   setError('');
+  setSuccessMsg('');
 
   try {
     const response = await api.post('/auth/login', { email, password });
-    
-    // 1. Extraire les données de la réponse
+
     const { user, access_token } = response.data;
 
-    // 2. Mettre à jour le store global
+    // ✅ Cas normal: compte actif => token reçu => accès
     setAuth(user, access_token);
-
-    // 3. LOGIQUE DE REDIRECTION CORRIGÉE
-    // Votre backend renvoie 'user.actif' (booléen)
-    if (user.actif === true) {
-      // Si le compte est déjà vérifié, direction Dashboard
-      navigate('/dashboard');
-    } else {
-      // Uniquement si actif est false, on demande l'OTP
-      navigate(`/verify-otp?email=${encodeURIComponent(user.email)}`);
-    }
+    navigate('/dashboard');
 
   } catch (err: any) {
-    // Gestion des erreurs 403 (Comptes bloqués ou non activés selon votre backend)
+    const status = err.response?.status;
     const errorData = err.response?.data;
-    
-    if (err.response?.status === 403 && errorData?.detail?.verification_required) {
-      // Cas où le backend refuse la connexion car non activé (HTTP 403)
+
+    // ✅ Cas "Facebook-like": compte non activé => on va OTP
+    // Ton backend renvoie un HTTPException(403, {...})
+    // Donc errorData.detail contient l'objet
+    const detail = errorData?.detail;
+
+    if (status === 403 && detail?.verification_required) {
       navigate(`/verify-otp?email=${encodeURIComponent(email)}`);
-    } else {
-      const errorMsg = errorData?.detail || "Erreur de connexion.";
-      setError(typeof errorMsg === 'string' ? errorMsg : "Identifiants invalides.");
+      return;
     }
+
+    // Autres erreurs (401, 404, etc.)
+    const msg =
+      typeof detail === 'string'
+        ? detail
+        : detail?.message || "Erreur de connexion.";
+
+    setError(msg);
   } finally {
     setIsLoading(false);
   }

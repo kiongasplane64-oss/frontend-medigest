@@ -47,9 +47,13 @@ export default function VerifyOtp() {
     setLoading(true);
     try {
       const res = await authService.verifySms(email, fullCode);
-      if (res.user && res.access_token) setAuth(res.user, res.access_token);
+
+      if (res?.access_token) {
+        // si user absent, on garde au minimum le token (ou on fetch /tenants/me ensuite)
+        setAuth(res.user ?? { email, actif: true }, res.access_token);
+      }
       setIsSuccess(true);
-      setTimeout(() => navigate('/dashboard'), 1500);
+      navigate('/dashboard');
     } catch (error: any) {
       setErrorMsg("Code incorrect ou expiré.");
       setOtp(['', '', '', '', '', '']);
@@ -59,22 +63,36 @@ export default function VerifyOtp() {
     }
   };
 
-  const handleResend = async (method: ResendMethod) => {
-    if (timer > 0) return;
-    setLoading(true);
-    setShowResendOptions(false);
-    try {
-      // Correction 2554: Maintenant accepté grâce à la modif du service
-      await authService.resendSms(email, method); 
-      setTimer(60);
-      setOtp(['', '', '', '', '', '']);
-      setErrorMsg(null); // Nettoie les erreurs précédentes
-    } catch (err: any) {
-      setErrorMsg("Échec de l'envoi du code.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleResend = async (_method: ResendMethod) => {
+  // On garde _method pour l'UI (sms/whatsapp/email) mais le backend actuel ne gère que /resend-sms (email uniquement)
+  if (!email) {
+    setErrorMsg("Email manquant.");
+    return;
+  }
+
+  if (timer > 0 || loading) return;
+
+  setLoading(true);
+  setShowResendOptions(false);
+  setErrorMsg(null);
+
+  try {
+    // ✅ Backend: POST /api/v1/auth/resend-sms  body: { email }
+    await authService.resendSms(email);
+
+    setTimer(60);
+    setOtp(['', '', '', '', '', '']);
+    inputs.current[0]?.focus();
+  } catch (err: any) {
+    const msg =
+      err?.response?.data?.detail?.message ||
+      err?.response?.data?.detail ||
+      "Échec de l'envoi du code.";
+    setErrorMsg(typeof msg === "string" ? msg : "Échec de l'envoi du code.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
