@@ -13,15 +13,41 @@ export interface RegisterData {
   plan_name: string;
 }
 
+type VerifySmsResponse = {
+  message?: string;
+  access_token: string;
+  token_type?: string;
+  user?: {
+    id: string;
+    email: string;
+    nom_complet?: string;
+    role?: string;
+    activated?: boolean;
+    actif?: boolean;
+    tenant_id?: string;
+  };
+  tenant?: any;
+  pharmacy?: any;
+};
+
+type ResendSmsResponse = {
+  message: string;
+  sms_sent: boolean;
+  expires_in: number;
+};
+
 export const authService = {
   /**
    * Inscription d'un nouveau tenant (officine)
    */
   register: async (data: RegisterData) => {
-    const response = await api.post('/auth/tenants/register', data);
+    const response = await api.post('/auth/tenants/register', {
+      ...data,
+      email: data.email.toLowerCase(),
+    });
     return response.data;
   },
-  
+
   /**
    * Vérification de disponibilité (email, nom, téléphone)
    */
@@ -31,26 +57,30 @@ export const authService = {
   },
 
   /**
-   * Vérification du code OTP (SMS/WhatsApp/Email)
-   * Note : Le backend attend 'verification_code' selon votre implémentation précédente
+   * ✅ Vérification OTP (flow Facebook/WhatsApp)
+   * Backend attendu: POST /api/v1/auth/verify-sms
+   * Body: { email, code }
    */
-  verifySms: async (email: string, code: string) => {
-    const response = await api.post('/auth/login-with-code', { 
-      email: email.toLowerCase(), 
-      verification_code: code 
+  verifySms: async (email: string, code: string): Promise<VerifySmsResponse> => {
+    const response = await api.post('/auth/verify-sms', {
+      email: email.toLowerCase(),
+      code: code.trim(),
     });
     return response.data;
   },
 
   /**
-   * Renvoi du code de vérification via un canal spécifique
-   * @param method 'sms' | 'whatsapp' | 'email'
+   * ✅ Renvoi OTP
+   * Backend attendu: POST /api/v1/auth/resend-sms
+   * Body: { email }
+   *
+   * Note: Le backend actuel ne gère pas encore method (sms/whatsapp/email).
+   * On le garde optionnel pour l'UI mais on ne l'envoie pas.
    */
-  resendSms: async (email: string, method: string = 'sms') => {
-    const response = await api.post('/auth/resend-sms', { 
-      email: email.toLowerCase(), 
-      method: method // 'sms', 'whatsapp' ou 'email'
+  resendSms: async (email: string, _method: 'sms' | 'whatsapp' | 'email' = 'sms'): Promise<ResendSmsResponse> => {
+    const response = await api.post('/auth/resend-sms', {
+      email: email.toLowerCase(),
     });
     return response.data;
-  }
+  },
 };
