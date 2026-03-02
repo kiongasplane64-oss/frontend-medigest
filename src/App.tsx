@@ -4,7 +4,7 @@ import AppRoutes from './routes/AppRoutes';
 import { startSyncManager } from '@/services/syncService';
 
 function App() {
-  // Initialisation du gestionnaire de synchronisation offline
+  // Initialisation du gestionnaire de synchronisation offlinE
   useEffect(() => {
     startSyncManager();
   }, []);

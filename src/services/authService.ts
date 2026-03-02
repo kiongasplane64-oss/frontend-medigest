@@ -47,7 +47,7 @@ export const authService = {
    * @param method 'sms' | 'whatsapp' | 'email'
    */
   resendSms: async (email: string, method: string = 'sms') => {
-    const response = await api.post('/auth/resend-verification-code', { 
+    const response = await api.post('/auth/resend-sms', { 
       email: email.toLowerCase(), 
       method: method // 'sms', 'whatsapp' ou 'email'
     });
