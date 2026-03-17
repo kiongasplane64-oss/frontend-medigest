@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { CheckCircle2, X, AlertTriangle, PackageCheck } from 'lucide-react';
-import { Transfer } from '@/services/inventoryService';
+import { Transfers } from '@/types/inventory.types';
 
-// 1. Définition des interfaces pour corriger les erreurs de type "any" et "property not exist"
+// Interface pour les éléments du transfert
 interface TransferItem {
   product_id: string;
   product_name: string;
@@ -11,6 +11,7 @@ interface TransferItem {
   unit_price: string | number;
 }
 
+// Interface pour les éléments avec prix de vente
 interface LocalPricingItem {
   product_id: string;
   name: string;
@@ -22,14 +23,14 @@ interface LocalPricingItem {
 }
 
 interface ReceiveTransferModalProps {
-  // On s'assure que transfer contient items (Intersection type si le type global Transfer est incomplet)
-  transfer: Transfer & { items?: TransferItem[] };
+  // On étend le type Transfers pour inclure items
+  transfer: Transfers & { items?: TransferItem[] };
   onClose: () => void;
   onConfirm: (pricingData: LocalPricingItem[]) => void;
 }
 
 export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: ReceiveTransferModalProps) {
-  // 2. Initialisation typée
+  // Initialisation typée
   const [items, setItems] = useState<LocalPricingItem[]>(
     transfer.items?.map((item: TransferItem) => ({
       product_id: item.product_id,
@@ -54,7 +55,6 @@ export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: R
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-      {/* Correction Tailwind: rounded-4xl au lieu de rounded-[32px] */}
       <div className="bg-white w-full max-w-4xl rounded-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* HEADER */}
@@ -105,6 +105,7 @@ export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: R
                   <td className="px-4 py-4">
                     <input 
                       type="number"
+                      min="0"
                       value={item.received_qty}
                       onChange={(e) => handleUpdateItem(item.product_id, 'received_qty', Number(e.target.value))}
                       className="w-20 px-3 py-2 bg-slate-50 border-none rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none"
@@ -114,6 +115,8 @@ export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: R
                     <div className="relative">
                       <input 
                         type="number"
+                        min="0"
+                        step="0.01"
                         value={item.sale_price}
                         onChange={(e) => handleUpdateItem(item.product_id, 'sale_price', e.target.value)}
                         className="w-full pl-3 pr-3 py-2 bg-blue-50/50 border border-blue-100 rounded-xl text-sm font-black text-blue-600 outline-none"
@@ -122,7 +125,7 @@ export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: R
                   </td>
                   <td className="px-4 py-4 text-right">
                     <p className="text-sm font-bold text-slate-700">
-                      {(Number(item.sale_price) * Number(item.received_qty)).toLocaleString()}
+                      {(Number(item.sale_price) * Number(item.received_qty)).toLocaleString()} FG
                     </p>
                   </td>
                 </tr>
@@ -136,7 +139,9 @@ export default function ReceiveTransferModal({ transfer, onClose, onConfirm }: R
           <div className="hidden md:block">
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Valeur Totale Réceptionnée</p>
             <p className="text-xl font-black text-slate-800">
-              {items.reduce((acc: number, curr: LocalPricingItem) => acc + (Number(curr.sale_price) * Number(curr.received_qty)), 0).toLocaleString()} FG
+              {items.reduce((acc: number, curr: LocalPricingItem) => 
+                acc + (Number(curr.sale_price) * Number(curr.received_qty)), 0
+              ).toLocaleString()} FG
             </p>
           </div>
           <div className="flex gap-3 w-full md:w-auto">

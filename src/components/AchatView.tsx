@@ -1,6 +1,6 @@
 // components/AchatView.tsx
 import { useState, useEffect, useMemo } from 'react';
-import { Product } from '@/types/inventory.types';
+import { Product, Category } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
 import { formatPrice } from '@/utils/formatters';
 import BarcodeScanner from './BarcodeScanner';
@@ -21,6 +21,13 @@ interface AchatViewProps {
   onClose: () => void;
   onSuccess?: () => void;
 }
+
+// Fonction utilitaire pour obtenir le nom de la catégorie
+const getCategoryName = (category: string | Category | undefined): string => {
+  if (!category) return '';
+  if (typeof category === 'string') return category;
+  return category.name || '';
+};
 
 export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) {
   // États
@@ -56,16 +63,29 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
     }
   };
 
-  // Filtrage des produits
+  // Filtrage des produits - CORRECTION: gestion de category qui peut être string ou objet
   const filteredProducts = useMemo(() => {
     if (!searchTerm) return products;
     const term = searchTerm.toLowerCase();
-    return products.filter(p =>
-      p.name.toLowerCase().includes(term) ||
-      p.code.toLowerCase().includes(term) ||
-      p.barcode?.toLowerCase().includes(term) ||
-      p.category?.toLowerCase().includes(term)
-    );
+    
+    return products.filter(p => {
+      // Vérification du nom
+      if (p.name.toLowerCase().includes(term)) return true;
+      
+      // Vérification du code
+      if (p.code.toLowerCase().includes(term)) return true;
+      
+      // Vérification du code-barres
+      if (p.barcode && p.barcode.toLowerCase().includes(term)) return true;
+      
+      // Vérification de la catégorie (gestion des deux types)
+      if (p.category) {
+        const categoryName = getCategoryName(p.category);
+        if (categoryName.toLowerCase().includes(term)) return true;
+      }
+      
+      return false;
+    });
   }, [products, searchTerm]);
 
   // Gestion du panier
@@ -341,8 +361,8 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
         <div className="sticky top-0 bg-white border-b border-slate-100 z-10">
           <div className="p-4 md:p-6 flex justify-between items-center">
             <div className="flex items-center gap-2 md:gap-3">
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-medical/10 flex items-center justify-center">
-                <ShoppingCart className="text-medical" size={20} />
+              <div className="w-10 h-10 md:w-12 md:h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                <ShoppingCart className="text-blue-500" size={20} />
               </div>
               <div>
                 <h2 className="text-lg md:text-2xl font-black uppercase italic text-slate-900">
@@ -378,14 +398,14 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                 <button
                   onClick={() => { setStep('selection'); setIsMobileMenuOpen(false); }}
                   className={`w-full p-3 rounded-xl text-left font-bold transition-colors
-                    ${step === 'selection' ? 'bg-medical text-white' : 'bg-white'}`}
+                    ${step === 'selection' ? 'bg-blue-500 text-white' : 'bg-white'}`}
                 >
                   Sélection produits
                 </button>
                 <button
                   onClick={() => { setStep('validation'); setIsMobileMenuOpen(false); }}
                   className={`w-full p-3 rounded-xl text-left font-bold transition-colors
-                    ${step === 'validation' ? 'bg-medical text-white' : 'bg-white'}`}
+                    ${step === 'validation' ? 'bg-blue-500 text-white' : 'bg-white'}`}
                 >
                   Panier ({cart.length})
                 </button>
@@ -434,7 +454,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                   placeholder="Rechercher un produit..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-medical/5"
+                  className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-blue-500/5"
                 />
               </div>
 
@@ -442,7 +462,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
               <div className="bg-slate-50 rounded-xl p-2 max-h-[50vh] md:max-h-96 overflow-auto">
                 {loading ? (
                   <div className="flex items-center justify-center py-8">
-                    <Loader2 className="animate-spin text-medical" size={24} />
+                    <Loader2 className="animate-spin text-blue-500" size={24} />
                   </div>
                 ) : filteredProducts.length === 0 ? (
                   <p className="text-center text-slate-400 py-8">Aucun produit trouvé</p>
@@ -453,7 +473,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                       onClick={() => setSelectedProduct(product)}
                       className={`p-3 rounded-lg cursor-pointer transition-colors mb-1
                         ${selectedProduct?.id === product.id
-                          ? 'bg-medical text-white'
+                          ? 'bg-blue-500 text-white'
                           : 'hover:bg-white'
                         }`}
                     >
@@ -461,7 +481,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                       <p className={`text-xs ${selectedProduct?.id === product.id ? 'text-white/80' : 'text-slate-400'}`}>
                         Code: {product.code} | Stock: {product.quantity}
                       </p>
-                      <p className={`text-xs font-bold mt-1 ${selectedProduct?.id === product.id ? 'text-white' : 'text-medical'}`}>
+                      <p className={`text-xs font-bold mt-1 ${selectedProduct?.id === product.id ? 'text-white' : 'text-blue-500'}`}>
                         {formatPrice(product.purchase_price)}
                       </p>
                     </div>
@@ -471,8 +491,8 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
 
               {/* Selected product actions */}
               {selectedProduct && (
-                <div className="mt-4 p-4 bg-medical-light/20 rounded-xl">
-                  <h4 className="font-bold text-medical-dark mb-2">{selectedProduct.name}</h4>
+                <div className="mt-4 p-4 bg-blue-50 rounded-xl">
+                  <h4 className="font-bold text-blue-800 mb-2">{selectedProduct.name}</h4>
                   <p className="text-xs text-slate-600 mb-3">
                     Stock actuel: {selectedProduct.quantity}
                   </p>
@@ -495,7 +515,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                     </div>
                     <button
                       onClick={handleAddToCart}
-                      className="flex-1 bg-medical text-white py-3 rounded-lg font-bold hover:bg-medical-dark transition-colors text-sm"
+                      className="flex-1 bg-blue-500 text-white py-3 rounded-lg font-bold hover:bg-blue-600 transition-colors text-sm"
                     >
                       Ajouter
                     </button>
@@ -525,7 +545,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                         </div>
                         <button
                           onClick={() => handleUpdateQuantity(item.product.id, 0)}
-                          className="text-red-500 hover:text-red-700 p-1 flex-shrink-0"
+                          className="text-red-500 hover:text-red-700 p-1 shrink-0"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -562,7 +582,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                     placeholder="Fournisseur"
                     value={supplier}
                     onChange={(e) => setSupplier(e.target.value)}
-                    className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-medical/5"
+                    className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-blue-500/5"
                   />
                 </div>
                 <div className="relative">
@@ -572,7 +592,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                     placeholder="Référence"
                     value={reference}
                     onChange={(e) => setReference(e.target.value)}
-                    className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-medical/5"
+                    className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-blue-500/5"
                   />
                 </div>
                 <textarea
@@ -580,15 +600,15 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                   rows={2}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  className="w-full border-none rounded-xl p-3 bg-slate-50 font-bold outline-none focus:ring-4 focus:ring-medical/5 resize-none"
+                  className="w-full border-none rounded-xl p-3 bg-slate-50 font-bold outline-none focus:ring-4 focus:ring-blue-500/5 resize-none"
                 />
               </div>
 
               {/* Total and actions */}
-              <div className="mt-4 p-4 bg-medical-light/20 rounded-xl">
+              <div className="mt-4 p-4 bg-blue-50 rounded-xl">
                 <div className="flex justify-between items-center mb-3">
                   <span className="font-bold text-slate-600">Total:</span>
-                  <span className="text-xl md:text-2xl font-black text-medical-dark">
+                  <span className="text-xl md:text-2xl font-black text-blue-800">
                     {formatPrice(calculateTotal())}
                   </span>
                 </div>
@@ -603,7 +623,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                   <button
                     onClick={handleValidate}
                     disabled={loading || cart.length === 0}
-                    className="flex-1 bg-success text-white py-3 rounded-lg font-bold hover:bg-success-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
+                    className="flex-1 bg-green-500 text-white py-3 rounded-lg font-bold hover:bg-green-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
                   >
                     {loading ? (
                       <>
@@ -627,7 +647,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
         <div className="md:hidden bg-white border-t border-slate-100 p-4">
           <div className="flex justify-between items-center mb-3">
             <span className="text-sm text-slate-500">Total:</span>
-            <span className="text-xl font-black text-medical-dark">
+            <span className="text-xl font-black text-blue-600">
               {formatPrice(calculateTotal())}
             </span>
           </div>
@@ -635,14 +655,14 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
             <button
               onClick={() => setStep('selection')}
               className={`p-3 rounded-xl font-bold transition-colors text-sm
-                ${step === 'selection' ? 'bg-medical text-white' : 'bg-slate-100'}`}
+                ${step === 'selection' ? 'bg-blue-500 text-white' : 'bg-slate-100'}`}
             >
               Produits
             </button>
             <button
               onClick={() => setStep('validation')}
               className={`p-3 rounded-xl font-bold transition-colors text-sm relative
-                ${step === 'validation' ? 'bg-medical text-white' : 'bg-slate-100'}`}
+                ${step === 'validation' ? 'bg-blue-500 text-white' : 'bg-slate-100'}`}
             >
               Panier
               {cart.length > 0 && (

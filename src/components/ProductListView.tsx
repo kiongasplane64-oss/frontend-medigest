@@ -1,10 +1,10 @@
 // components/ProductListView.tsx
 import { useState, useMemo } from 'react';
-import { Product } from '@/types/inventory.types';
+import { Product, Category } from '@/types/inventory.types';
 import { formatPrice, formatDate } from '@/utils/formatters';
 import {
   X, Search, ChevronLeft, ChevronRight, Printer,
-  Package, AlertCircle, Filter, Grid, List
+  Package, Grid, List
 } from 'lucide-react';
 
 interface ProductListViewProps {
@@ -16,6 +16,13 @@ interface ProductListViewProps {
 }
 
 type ViewMode = 'grid' | 'list';
+
+// Fonction utilitaire pour obtenir le nom de la catégorie
+const getCategoryName = (category: string | Category | undefined): string => {
+  if (!category) return '';
+  if (typeof category === 'string') return category;
+  return category.name || '';
+};
 
 export default function ProductListView({
   open,
@@ -30,9 +37,14 @@ export default function ProductListView({
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const itemsPerPage = 20;
 
+  // Extraction des catégories uniques
   const categories = useMemo(() => {
-    const cats = new Set(products.map(p => p.category).filter(Boolean));
-    return ['all', ...Array.from(cats)];
+    const cats = new Set<string>();
+    products.forEach(p => {
+      const catName = getCategoryName(p.category);
+      if (catName) cats.add(catName);
+    });
+    return ['all', ...Array.from(cats).sort()];
   }, [products]);
 
   const filteredProducts = useMemo(() => {
@@ -40,17 +52,23 @@ export default function ProductListView({
 
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
-      filtered = filtered.filter(p =>
-        p.name.toLowerCase().includes(term) ||
-        p.code.toLowerCase().includes(term) ||
-        p.category?.toLowerCase().includes(term) ||
-        p.supplier?.toLowerCase().includes(term) ||
-        p.barcode?.toLowerCase().includes(term)
-      );
+      filtered = filtered.filter(p => {
+        const categoryName = getCategoryName(p.category);
+        return (
+          p.name.toLowerCase().includes(term) ||
+          p.code.toLowerCase().includes(term) ||
+          categoryName.toLowerCase().includes(term) ||
+          (p.supplier && p.supplier.toLowerCase().includes(term)) ||
+          (p.barcode && p.barcode.toLowerCase().includes(term))
+        );
+      });
     }
 
     if (categoryFilter !== 'all') {
-      filtered = filtered.filter(p => p.category === categoryFilter);
+      filtered = filtered.filter(p => {
+        const categoryName = getCategoryName(p.category);
+        return categoryName === categoryFilter;
+      });
     }
 
     return filtered;
@@ -112,7 +130,7 @@ export default function ProductListView({
                   setSearchTerm(e.target.value);
                   setPage(1);
                 }}
-                className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-medical/5"
+                className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-blue-500/5"
               />
             </div>
             <select
@@ -121,11 +139,13 @@ export default function ProductListView({
                 setCategoryFilter(e.target.value);
                 setPage(1);
               }}
-              className="px-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-medical/5"
+              className="px-4 py-3 bg-slate-50 border-none rounded-xl font-bold outline-none focus:ring-4 focus:ring-blue-500/5 min-w-45"
             >
               <option value="all">Toutes les catégories</option>
               {categories.filter(c => c !== 'all').map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
               ))}
             </select>
           </div>
@@ -136,7 +156,7 @@ export default function ProductListView({
           {viewMode === 'list' ? (
             // List View
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[800px]">
+              <table className="w-full min-w-200">
                 <thead className="bg-slate-50 sticky top-0">
                   <tr>
                     <th className="p-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Code</th>
@@ -152,14 +172,18 @@ export default function ProductListView({
                 <tbody className="divide-y divide-slate-50">
                   {paginatedProducts.map((product) => {
                     const isLowStock = product.quantity <= product.alert_threshold;
-                    const isExpired = product.expiry_date && new Date(product.expiry_date) < new Date();
-                    const isExpiringSoon = product.expiry_date &&
-                      new Date(product.expiry_date) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                    const expiryDate = product.expiry_date ? new Date(product.expiry_date) : null;
+                    const isExpired = expiryDate ? expiryDate < new Date() : false;
+                    const isExpiringSoon = expiryDate ?
+                      expiryDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) &&
+                      expiryDate >= new Date() : false;
+
+                    const categoryName = getCategoryName(product.category);
 
                     return (
                       <tr
                         key={product.id}
-                        className={`hover:bg-medical-light/20 transition-colors cursor-pointer
+                        className={`hover:bg-blue-50 transition-colors cursor-pointer
                           ${isExpired ? 'bg-red-50' : isExpiringSoon ? 'bg-amber-50' : ''}
                         `}
                         onClick={() => onSelectProduct(product)}
@@ -171,7 +195,9 @@ export default function ProductListView({
                             <p className="text-xs text-slate-400">{product.supplier}</p>
                           )}
                         </td>
-                        <td className="p-4">{product.category}</td>
+                        <td className="p-4">
+                          {categoryName || '-'}
+                        </td>
                         <td className="p-4 text-center">
                           <span className={`px-3 py-1 rounded-full text-xs font-bold
                             ${isLowStock
@@ -182,7 +208,7 @@ export default function ProductListView({
                           </span>
                         </td>
                         <td className="p-4 text-right font-bold">{formatPrice(product.selling_price)}</td>
-                        <td className="p-4 text-right font-medium text-medical">
+                        <td className="p-4 text-right font-medium text-blue-600">
                           {formatPrice(product.quantity * product.selling_price)}
                         </td>
                         <td className="p-4 text-center">
@@ -218,9 +244,13 @@ export default function ProductListView({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {paginatedProducts.map((product) => {
                 const isLowStock = product.quantity <= product.alert_threshold;
-                const isExpired = product.expiry_date && new Date(product.expiry_date) < new Date();
-                const isExpiringSoon = product.expiry_date &&
-                  new Date(product.expiry_date) <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+                const expiryDate = product.expiry_date ? new Date(product.expiry_date) : null;
+                const isExpired = expiryDate ? expiryDate < new Date() : false;
+                const isExpiringSoon = expiryDate ?
+                  expiryDate <= new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) &&
+                  expiryDate >= new Date() : false;
+
+                const categoryName = getCategoryName(product.category);
 
                 return (
                   <div
@@ -251,7 +281,7 @@ export default function ProductListView({
                     <div className="space-y-2 mb-3">
                       <div className="flex justify-between text-sm">
                         <span className="text-slate-500">Catégorie:</span>
-                        <span className="font-bold">{product.category || '-'}</span>
+                        <span className="font-bold">{categoryName || '-'}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-slate-500">Stock:</span>
@@ -261,7 +291,7 @@ export default function ProductListView({
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-slate-500">Prix:</span>
-                        <span className="font-bold text-medical">
+                        <span className="font-bold text-blue-600">
                           {formatPrice(product.selling_price)}
                         </span>
                       </div>
@@ -281,7 +311,7 @@ export default function ProductListView({
 
                     <div className="pt-3 border-t border-slate-100">
                       <p className="text-xs text-slate-400">Valeur stock</p>
-                      <p className="font-bold text-lg text-medical">
+                      <p className="font-bold text-lg text-blue-600">
                         {formatPrice(product.quantity * product.selling_price)}
                       </p>
                     </div>
@@ -313,7 +343,7 @@ export default function ProductListView({
               >
                 <ChevronLeft size={18} />
               </button>
-              <span className="px-4 py-2 bg-medical-light text-medical-dark rounded-lg font-bold">
+              <span className="px-4 py-2 bg-blue-50 text-blue-700 rounded-lg font-bold">
                 Page {page} / {totalPages || 1}
               </span>
               <button

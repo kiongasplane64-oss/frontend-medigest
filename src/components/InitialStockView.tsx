@@ -1,9 +1,10 @@
 // components/InitialStockView.tsx
 import { useState } from 'react';
 import { inventoryService } from '@/services/inventoryService';
+import type { ProductCreate } from '@/types/inventory.types';
 import {
   X, Save, Loader2, Upload, Plus, Trash2,
-  AlertCircle, Package, Check
+  AlertCircle, Package
 } from 'lucide-react';
 
 interface InitialProduct {
@@ -35,9 +36,9 @@ export default function InitialStockView({
 
   if (!open) return null;
 
-  const generateCode = () => `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
+  const generateCode = (): string => `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  const addProduct = () => {
+  const addProduct = (): void => {
     setProducts([
       ...products,
       {
@@ -53,17 +54,17 @@ export default function InitialStockView({
     ]);
   };
 
-  const removeProduct = (index: number) => {
+  const removeProduct = (index: number): void => {
     setProducts(products.filter((_, i) => i !== index));
   };
 
-  const updateProduct = (index: number, field: keyof InitialProduct, value: any) => {
+  const updateProduct = (index: number, field: keyof InitialProduct, value: string | number): void => {
     const updated = [...products];
     updated[index] = { ...updated[index], [field]: value };
     setProducts(updated);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (): Promise<void> => {
     if (products.length === 0) {
       setError("Ajoutez au moins un produit");
       return;
@@ -80,12 +81,21 @@ export default function InitialStockView({
 
     try {
       for (const product of products) {
-        await inventoryService.createProduct({
-          ...product,
-          selling_price: product.selling_price || product.purchase_price * 1.3,
+        // Préparation des données au format ProductCreate
+        const productData: ProductCreate = {
+          code: product.code || generateCode(), // Code obligatoire, on génère si absent
+          name: product.name,
+          quantity: product.quantity,
+          purchase_price: product.purchase_price,
+          selling_price: product.selling_price || Math.round(product.purchase_price * 1.3 * 100) / 100,
           alert_threshold: 10,
-          description: 'Stock initial'
-        });
+          description: 'Stock initial',
+          expiry_date: product.expiry_date || undefined,
+          category: product.category || undefined,
+          supplier: product.supplier || undefined
+        };
+
+        await inventoryService.createProduct(productData);
       }
       
       if (onSuccess) onSuccess();
@@ -98,7 +108,7 @@ export default function InitialStockView({
     }
   };
 
-  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -115,7 +125,7 @@ export default function InitialStockView({
     }
   };
 
-  const downloadTemplate = async () => {
+  const downloadTemplate = async (): Promise<void> => {
     try {
       const blob = await inventoryService.getImportTemplate();
       const url = window.URL.createObjectURL(blob);
@@ -136,8 +146,8 @@ export default function InitialStockView({
         <div className="sticky top-0 bg-white border-b border-slate-100 p-6">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-medical/10 flex items-center justify-center">
-                <Package className="text-medical" size={20} />
+              <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                <Package className="text-blue-500" size={20} />
               </div>
               <div>
                 <h2 className="text-xl font-black uppercase italic text-slate-900">
@@ -164,7 +174,7 @@ export default function InitialStockView({
               onClick={() => setImportMode('manual')}
               className={`flex-1 md:flex-none px-6 py-3 rounded-xl font-bold text-sm transition-colors
                 ${importMode === 'manual' 
-                  ? 'bg-medical text-white' 
+                  ? 'bg-blue-500 text-white' 
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
             >
@@ -174,7 +184,7 @@ export default function InitialStockView({
               onClick={() => setImportMode('file')}
               className={`flex-1 md:flex-none px-6 py-3 rounded-xl font-bold text-sm transition-colors
                 ${importMode === 'file' 
-                  ? 'bg-medical text-white' 
+                  ? 'bg-blue-500 text-white' 
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
             >
@@ -195,7 +205,7 @@ export default function InitialStockView({
           {importMode === 'file' ? (
             <div className="space-y-6">
               <div className="bg-slate-50 p-6 rounded-xl text-center">
-                <Upload className="mx-auto text-medical mb-3" size={32} />
+                <Upload className="mx-auto text-blue-500 mb-3" size={32} />
                 <h3 className="font-bold text-lg mb-2">Importer un fichier Excel</h3>
                 <p className="text-sm text-slate-500 mb-4">
                   Format accepté: .xlsx, .xls (max 5Mo)
@@ -207,13 +217,14 @@ export default function InitialStockView({
                   >
                     Télécharger le modèle
                   </button>
-                  <label className="px-6 py-3 bg-medical text-white rounded-xl font-bold hover:bg-medical-dark transition-colors cursor-pointer">
+                  <label className="px-6 py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-600 transition-colors cursor-pointer">
                     Choisir un fichier
                     <input
                       type="file"
                       hidden
                       accept=".xlsx,.xls"
                       onChange={handleFileImport}
+                      disabled={loading}
                     />
                   </label>
                 </div>
@@ -234,7 +245,7 @@ export default function InitialStockView({
               {/* Add button */}
               <button
                 onClick={addProduct}
-                className="w-full sm:w-auto bg-medical text-white px-6 py-3 rounded-xl font-bold hover:bg-medical-dark transition-colors flex items-center justify-center gap-2"
+                className="w-full sm:w-auto bg-blue-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
               >
                 <Plus size={18} />
                 Ajouter un produit
@@ -271,9 +282,9 @@ export default function InitialStockView({
                         <input
                           type="text"
                           placeholder="Code"
-                          value={product.code}
+                          value={product.code || ''}
                           onChange={(e) => updateProduct(index, 'code', e.target.value)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="text"
@@ -281,49 +292,54 @@ export default function InitialStockView({
                           required
                           value={product.name}
                           onChange={(e) => updateProduct(index, 'name', e.target.value)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="text"
                           placeholder="Catégorie"
-                          value={product.category}
+                          value={product.category || ''}
                           onChange={(e) => updateProduct(index, 'category', e.target.value)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="number"
                           placeholder="Quantité *"
+                          min="0"
                           value={product.quantity}
                           onChange={(e) => updateProduct(index, 'quantity', parseInt(e.target.value) || 0)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="number"
                           placeholder="Prix achat *"
+                          min="0"
+                          step="0.01"
                           value={product.purchase_price}
                           onChange={(e) => updateProduct(index, 'purchase_price', parseFloat(e.target.value) || 0)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="number"
                           placeholder="Prix vente"
-                          value={product.selling_price}
+                          min="0"
+                          step="0.01"
+                          value={product.selling_price || ''}
                           onChange={(e) => updateProduct(index, 'selling_price', parseFloat(e.target.value) || 0)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="text"
                           placeholder="Fournisseur"
-                          value={product.supplier}
+                          value={product.supplier || ''}
                           onChange={(e) => updateProduct(index, 'supplier', e.target.value)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                         <input
                           type="date"
                           placeholder="Péremption"
-                          value={product.expiry_date}
+                          value={product.expiry_date || ''}
                           onChange={(e) => updateProduct(index, 'expiry_date', e.target.value)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-medical"
+                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
                     </div>
@@ -333,7 +349,7 @@ export default function InitialStockView({
                   <button
                     onClick={handleSubmit}
                     disabled={loading}
-                    className="w-full bg-success text-white py-4 rounded-xl font-black uppercase tracking-widest hover:bg-success-dark transition-all disabled:opacity-50 flex items-center justify-center gap-2 mt-6"
+                    className="w-full bg-green-500 text-white py-4 rounded-xl font-black uppercase tracking-widest hover:bg-green-600 transition-all disabled:opacity-50 flex items-center justify-center gap-2 mt-6"
                   >
                     {loading ? (
                       <>

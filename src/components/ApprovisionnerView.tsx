@@ -5,7 +5,7 @@ import { inventoryService } from '@/services/inventoryService';
 import { formatPrice } from '@/utils/formatters';
 import {
   X, RefreshCw, Plus, Minus, Loader2, AlertTriangle,
-  Package, Calendar, FileText, Check
+  Package, Check
 } from 'lucide-react';
 
 interface ApprovisionnerViewProps {
@@ -64,8 +64,8 @@ export default function ApprovisionnerView({
         <div className="p-6 border-b border-slate-100">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-medical/10 flex items-center justify-center">
-                <RefreshCw className="text-medical" size={20} />
+              <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                <RefreshCw className="text-blue-500" size={20} />
               </div>
               <div>
                 <h2 className="text-xl font-black uppercase italic text-slate-900">
@@ -97,7 +97,7 @@ export default function ApprovisionnerView({
           {/* Product info */}
           <div className="bg-slate-50 p-4 rounded-xl space-y-3">
             <div className="flex items-start gap-3">
-              <Package className="text-medical flex-shrink-0" size={20} />
+              <Package className="text-blue-500 shrink-0" size={20} />
               <div className="flex-1 min-w-0">
                 <p className="font-bold text-slate-800 truncate">{product.name}</p>
                 <p className="text-xs text-slate-400">Code: {product.code}</p>
@@ -140,7 +140,7 @@ export default function ApprovisionnerView({
                 min="1"
                 value={quantity}
                 onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                className="flex-1 text-center border-none rounded-xl p-3 bg-slate-100 font-bold outline-none focus:ring-4 focus:ring-medical/5"
+                className="flex-1 text-center border-none rounded-xl p-3 bg-slate-100 font-bold outline-none focus:ring-4 focus:ring-blue-500/5"
               />
               <button
                 onClick={() => setQuantity(quantity + 1)}
@@ -161,19 +161,19 @@ export default function ApprovisionnerView({
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Ex: Lot N°12345, Fournisseur..."
               rows={2}
-              className="w-full border-none rounded-xl p-3 bg-slate-100 font-bold outline-none focus:ring-4 focus:ring-medical/5 resize-none"
+              className="w-full border-none rounded-xl p-3 bg-slate-100 font-bold outline-none focus:ring-4 focus:ring-blue-500/5 resize-none"
             />
           </div>
 
           {/* Summary */}
-          <div className="p-4 bg-medical-light/20 rounded-xl space-y-2">
+          <div className="p-4 bg-blue-50 rounded-xl space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-sm text-slate-600">Stock après opération:</span>
               <span className="font-bold text-lg">{product.quantity + quantity}</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-slate-600">Valeur ajoutée:</span>
-              <span className="font-bold text-success text-lg">
+              <span className="font-bold text-green-600 text-lg">
                 {formatPrice(quantity * product.purchase_price)}
               </span>
             </div>
@@ -190,7 +190,7 @@ export default function ApprovisionnerView({
             <button
               onClick={handleRestock}
               disabled={loading}
-              className="flex-1 bg-medical text-white py-4 rounded-xl font-bold text-sm hover:bg-medical-dark transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              className="flex-1 bg-blue-500 text-white py-4 rounded-xl font-bold text-sm hover:bg-blue-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading ? (
                 <>
