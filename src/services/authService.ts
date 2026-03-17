@@ -58,7 +58,7 @@ export const authService = {
 
   /**
    * ✅ Vérification OTP (flow Facebook/WhatsApp)
-   * Backend attendu: POST /api/v1/auth/verify-sms
+   * Backend attendu: POST /auth/verify-sms
    * Body: { email, code }
    */
   verifySms: async (email: string, code: string): Promise<VerifySmsResponse> => {
@@ -71,7 +71,7 @@ export const authService = {
 
   /**
    * ✅ Renvoi OTP
-   * Backend attendu: POST /api/v1/auth/resend-sms
+   * Backend attendu: POST /auth/resend-sms
    * Body: { email }
    *
    * Note: Le backend actuel ne gère pas encore method (sms/whatsapp/email).

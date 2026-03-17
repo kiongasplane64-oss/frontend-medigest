@@ -10,8 +10,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
-        name: 'PharmaSaaS ERP',
-        short_name: 'PharmaSaaS',
+        name: 'Medigest PRO',
+        short_name: 'MedigestPro',
         description: 'Gestion intelligente pour pharmacies',
         theme_color: '#2563eb', // Bleu-600
         icons: [
