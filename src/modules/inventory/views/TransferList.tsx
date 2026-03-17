@@ -4,19 +4,13 @@ import {
   ChevronRight, Clock, CheckCircle2, Truck, RefreshCw, AlertCircle 
 } from 'lucide-react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { inventoryService, Transfer } from '@/services/inventoryService';
+import { inventoryService } from '@/services/inventoryService';
+import type { Transfers, PricingUpdate } from '@/types/inventory.types';
 import ReceiveTransferModal from '@/components/ReceiveTransferModal'; 
 import toast, { Toaster } from 'react-hot-toast';
 import api from '@/api/client';
 
-// Interface pour le typage des données envoyées au backend
-interface PricingUpdate {
-  product_id: string;
-  received_qty: number;
-  sale_price: string;
-}
-
-const statusStyles = {
+const statusStyles: Record<string, string> = {
   pending: "bg-amber-50 text-amber-600 border-amber-100",
   shipped: "bg-blue-50 text-blue-600 border-blue-100",
   received: "bg-green-50 text-green-600 border-green-100",
@@ -25,15 +19,15 @@ const statusStyles = {
 
 export default function TransferList() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedTransfer, setSelectedTransfer] = useState<Transfer | null>(null);
+  const [selectedTransfer, setSelectedTransfer] = useState<Transfers | null>(null);
 
   // 1. Récupération des données
-  const { data: transfers, isLoading, isError, refetch } = useQuery<Transfer[]>({
+  const { data: transfers = [], isLoading, isError, refetch } = useQuery<Transfers[]>({
     queryKey: ['transfers'],
-    queryFn: inventoryService.getTransfers
+    queryFn: () => inventoryService.getTransfers()
   });
 
-  // 2. Mutation pour la réception avec feedback visuel
+  // 2. Mutation pour la réception
   const { mutate: confirmReceipt, isPending: isReceiving } = useMutation({
     mutationFn: (data: PricingUpdate[]) => api.post(`/transfers/${selectedTransfer?.id}/receive`, data),
     onMutate: () => {
@@ -54,11 +48,11 @@ export default function TransferList() {
     }
   });
 
-  // 3. Filtrage optimisé
-  const filteredTransfers = transfers?.filter((t: Transfer) => 
-    t.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.source_depot.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.destination_depot.toLowerCase().includes(searchTerm.toLowerCase())
+  // 3. Filtrage sécurisé
+  const filteredTransfers = transfers.filter((transfer: Transfers) => 
+    transfer.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    transfer.source_depot.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    transfer.destination_depot.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   if (isLoading) {
@@ -99,29 +93,29 @@ export default function TransferList() {
         </button>
       </div>
 
-      {/* STATS CARDS - Correction rounded-[2rem] -> rounded-4xl */}
+      {/* STATS CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {[
           { label: 'À Recevoir', key: 'pending', icon: <Clock />, color: 'amber' },
           { label: 'En Transit', key: 'shipped', icon: <Truck />, color: 'blue' },
           { label: 'Terminés', key: 'received', icon: <CheckCircle2 />, color: 'green' }
         ].map((stat) => (
-          <div key={stat.key} className="bg-white p-6 rounded-4xl border border-slate-100 shadow-sm flex items-center gap-5 group hover:border-blue-200 transition-all">
-            <div className={`w-14 h-14 bg-${stat.color}-50 text-${stat.color}-500 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-110 transition-transform`}>
+          <div key={stat.key} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-5 group hover:border-blue-200 transition-all">
+            <div className={`w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-110 transition-transform`}>
               {stat.icon}
             </div>
             <div>
               <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">{stat.label}</p>
               <p className="text-2xl font-black text-slate-800">
-                {transfers?.filter(t => t.status === stat.key).length.toString().padStart(2, '0')}
+                {transfers.filter((t: Transfers) => t.status === stat.key).length.toString().padStart(2, '0')}
               </p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* TABLEAU DES TRANSFERTS - Correction rounded-[2.5rem] -> rounded-5xl (ou 4xl) */}
-      <div className="bg-white rounded-4xl border border-slate-100 shadow-sm overflow-hidden">
+      {/* TABLEAU DES TRANSFERTS */}
+      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-50 flex flex-col md:flex-row gap-4 justify-between bg-slate-50/30">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={20} />
@@ -150,31 +144,31 @@ export default function TransferList() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {filteredTransfers?.map((t) => (
-                <tr key={t.id} className="hover:bg-blue-50/20 transition-colors group">
+              {filteredTransfers.map((transfer: Transfers) => (
+                <tr key={transfer.id} className="hover:bg-blue-50/20 transition-colors group">
                   <td className="px-8 py-6">
-                    <p className="text-sm font-black text-slate-700">{t.reference}</p>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">{new Date(t.date_transfert).toLocaleDateString('fr-FR')}</p>
+                    <p className="text-sm font-black text-slate-700">{transfer.reference}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">{new Date(transfer.date_transfert).toLocaleDateString('fr-FR')}</p>
                   </td>
                   <td className="px-8 py-6">
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">{t.source_depot}</span>
+                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">{transfer.source_depot}</span>
                       <ArrowLeftRight size={12} className="text-blue-400" />
-                      <span className="text-[11px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-lg">{t.destination_depot}</span>
+                      <span className="text-[11px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-lg">{transfer.destination_depot}</span>
                     </div>
                   </td>
                   <td className="px-8 py-6 text-center">
-                    <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1 rounded-md">{t.items_count}</span>
+                    <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1 rounded-md">{transfer.items_count}</span>
                   </td>
                   <td className="px-8 py-6">
-                    <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border-2 ${statusStyles[t.status as keyof typeof statusStyles]}`}>
-                      {t.status}
+                    <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border-2 ${statusStyles[transfer.status] || ""}`}>
+                      {transfer.status}
                     </span>
                   </td>
                   <td className="px-8 py-6 text-right">
-                    {t.status === 'pending' || t.status === 'shipped' ? (
+                    {transfer.status === 'pending' || transfer.status === 'shipped' ? (
                       <button 
-                        onClick={() => setSelectedTransfer(t)}
+                        onClick={() => setSelectedTransfer(transfer)}
                         className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black hover:bg-blue-600 transition-all shadow-lg shadow-slate-200 active:scale-95"
                       >
                         RÉCEPTIONNER
@@ -192,7 +186,7 @@ export default function TransferList() {
         </div>
       </div>
 
-      {/* MODAL DE RÉCEPTION AVEC PROTECTION CHARGEMENT */}
+      {/* MODAL DE RÉCEPTION */}
       {selectedTransfer && (
         <ReceiveTransferModal 
           transfer={selectedTransfer}

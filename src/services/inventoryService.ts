@@ -1,33 +1,59 @@
 import api from '@/api/client';
 import type {
-  ApiResponse,
-  BulkImportResult,
-  Category,
-  CategoryStats,
-  DeleteResponse,
-  ExpiryAlert,
-  ExportFormat,
-  InventoryAlertsResponse,
-  InventoryCount,
-  PaginatedApiResponse,
-  Product,
-  ProductCreate,
-  ProductListResponse,
-  ProductMergeRequest,
-  ProductSearch,
-  ProductUpdate,
-  Purchase,
-  PurchaseCreate,
-  RestockRequest,
-  StockAdjustment,
-  StockAlert,
-  StockMovement,
-  StockMovementCreate,
-  StockMovementListResponse,
-  StockStats,
+  // Transferts
+  Transfers,
+  TransfersResponse,
+  PricingUpdate,
+  
+  // Stock Transfer
   StockTransfer,
   StockTransferCreate,
   StockTransferUpdate,
+  
+  // Catégories
+  Category,
+  CategoryStats,
+  
+  // Produits
+  Product,
+  ProductCreate,
+  ProductUpdate,
+  ProductSearch,
+  ProductListResponse,
+  ProductMergeRequest,
+  
+  // Statistiques et alertes
+  StockStats,
+  StockAlert,
+  ExpiryAlert,
+  InventoryAlertsResponse,
+  
+  // Mouvements
+  StockMovement,
+  StockMovementCreate,
+  StockMovementListResponse,
+  StockAdjustment,
+  InventoryCount,
+  
+  // Achats
+  Purchase,
+  PurchaseCreate,
+  RestockRequest,
+  
+  // Fusion / Déduplication
+  DuplicatesResponse,
+  
+  // Import / Export
+  BulkImportResult,
+  ExportFormat,
+  
+  // Réponses API
+  ApiResponse,
+  PaginatedApiResponse,
+  DeleteResponse,
+  
+  // Types de base
+  ID
 } from '@/types/inventory.types';
 
 class InventoryService {
@@ -35,7 +61,7 @@ class InventoryService {
   private inventoryBaseUrl = '/inventory';
 
   // =========================================================
-  // HELPERS
+  // HELPERS PRIVÉS
   // =========================================================
 
   private cleanParams<T extends Record<string, unknown>>(params?: T): Partial<T> | undefined {
@@ -64,7 +90,7 @@ class InventoryService {
       total: Number(response?.total ?? response?.products?.length ?? 0),
       page: Number(response?.page ?? 1),
       limit: Number(response?.limit ?? response?.products?.length ?? 0),
-      products: Array.isArray(response?.products) ? response!.products : [],
+      products: Array.isArray(response?.products) ? response.products : [],
       summary: response?.summary,
     };
   }
@@ -77,7 +103,32 @@ class InventoryService {
     if (response && typeof response === 'object' && 'product' in (response as Record<string, unknown>)) {
       return (response as ApiResponse<T>).product as T;
     }
+    if (response && typeof response === 'object' && 'products' in (response as Record<string, unknown>)) {
+      return (response as ApiResponse<T>).products as T;
+    }
     return response as T;
+  }
+
+  private normalizeTransfersResponse(data: unknown): Transfers[] {
+    if (Array.isArray(data)) {
+      return data as Transfers[];
+    }
+    
+    if (data && typeof data === 'object') {
+      const response = data as Record<string, unknown>;
+      
+      if ('transfers' in response && Array.isArray(response.transfers)) {
+        return response.transfers as Transfers[];
+      }
+      if ('data' in response && Array.isArray(response.data)) {
+        return response.data as Transfers[];
+      }
+      if ('items' in response && Array.isArray(response.items)) {
+        return response.items as Transfers[];
+      }
+    }
+    
+    return [];
   }
 
   downloadBlob(blob: Blob, filename: string): void {
@@ -169,6 +220,21 @@ class InventoryService {
     }
   }
 
+  async createCategory(data: { name: string; description?: string }): Promise<ApiResponse<Category>> {
+    const response = await api.post(`${this.stockBaseUrl}/categories`, data);
+    return response.data;
+  }
+
+  async updateCategory(id: ID, data: { name?: string; description?: string }): Promise<ApiResponse<Category>> {
+    const response = await api.put(`${this.stockBaseUrl}/categories/${id}`, data);
+    return response.data;
+  }
+
+  async deleteCategory(id: ID): Promise<DeleteResponse> {
+    const response = await api.delete(`${this.stockBaseUrl}/categories/${id}`);
+    return response.data;
+  }
+
   async getCategoryStats(): Promise<{ categories: CategoryStats[] }> {
     const response = await api.get(`${this.stockBaseUrl}/stats/categories`);
     return response.data;
@@ -238,12 +304,12 @@ class InventoryService {
     return response.data;
   }
 
-  async analyzeStockValue(): Promise<unknown> {
+  async analyzeStockValue(): Promise<any> {
     const response = await api.get(`${this.stockBaseUrl}/analysis/value`);
     return response.data;
   }
 
-  async analyzeABC(): Promise<unknown> {
+  async analyzeABC(): Promise<any> {
     const response = await api.get(`${this.stockBaseUrl}/analysis/abc`);
     return response.data;
   }
@@ -290,11 +356,52 @@ class InventoryService {
     limit?: number;
     status?: string;
     product_id?: string;
-  }): Promise<PaginatedApiResponse<StockTransfer> | { transfers: StockTransfer[] }> {
+  }): Promise<Transfers[]> {
     const response = await api.get(`${this.stockBaseUrl}/transfers`, {
       params: this.cleanParams(params),
     });
-    return response.data;
+    
+    return this.normalizeTransfersResponse(response.data);
+  }
+
+  async getTransfersPaginated(params?: {
+    page?: number;
+    limit?: number;
+    status?: string;
+    product_id?: string;
+  }): Promise<TransfersResponse> {
+    const response = await api.get(`${this.stockBaseUrl}/transfers`, {
+      params: this.cleanParams(params),
+    });
+    
+    const data = response.data;
+    
+    if (data && typeof data === 'object') {
+      if ('data' in data && Array.isArray(data.data)) {
+        return {
+          data: data.data as Transfers[],
+          total: (data.total as number) || data.data.length,
+          page: (data.page as number) || 1,
+          limit: (data.limit as number) || data.data.length,
+        };
+      }
+      if ('transfers' in data && Array.isArray(data.transfers)) {
+        return {
+          data: data.transfers as Transfers[],
+          total: (data.total as number) || data.transfers.length,
+          page: (data.page as number) || 1,
+          limit: (data.limit as number) || data.transfers.length,
+        };
+      }
+    }
+    
+    const transfersArray = this.normalizeTransfersResponse(data);
+    return {
+      data: transfersArray,
+      total: transfersArray.length,
+      page: 1,
+      limit: transfersArray.length,
+    };
   }
 
   async createTransfer(data: StockTransferCreate): Promise<ApiResponse<StockTransfer>> {
@@ -314,6 +421,11 @@ class InventoryService {
 
   async cancelTransfer(id: string): Promise<ApiResponse<StockTransfer>> {
     const response = await api.post(`${this.stockBaseUrl}/transfers/${id}/cancel`);
+    return response.data;
+  }
+
+  async receiveTransfer(id: string, data: PricingUpdate[]): Promise<ApiResponse<StockTransfer>> {
+    const response = await api.post(`${this.stockBaseUrl}/transfers/${id}/receive`, data);
     return response.data;
   }
 
@@ -351,17 +463,13 @@ class InventoryService {
   async mergeProducts(request: ProductMergeRequest): Promise<{
     message: string;
     merged_product: Product;
-    merged_details: unknown;
+    merged_details: any;
   }> {
     const response = await api.post(`${this.stockBaseUrl}/merge`, request);
     return response.data;
   }
 
-  async findDuplicates(similarity_threshold: number = 0.8): Promise<{
-    duplicates: unknown[];
-    total_groups: number;
-    similarity_threshold: number;
-  }> {
+  async findDuplicates(similarity_threshold: number = 0.8): Promise<DuplicatesResponse> {
     const response = await api.get(`${this.stockBaseUrl}/duplicates`, {
       params: { similarity_threshold },
     });
@@ -473,7 +581,7 @@ class InventoryService {
   async getInventorySummary(params?: {
     start_date?: string;
     end_date?: string;
-  }): Promise<Record<string, unknown>> {
+  }): Promise<Record<string, any>> {
     const response = await api.get(`${this.inventoryBaseUrl}/stats/summary`, {
       params: this.cleanParams(params),
     });
@@ -489,10 +597,14 @@ class InventoryService {
     return response.data;
   }
 
-  async getHealth(): Promise<Record<string, unknown>> {
+  async getHealth(): Promise<Record<string, any>> {
     const response = await api.get('/health');
     return response.data;
   }
 }
 
+// Export d'une instance unique
 export const inventoryService = new InventoryService();
+
+// Export également la classe pour pouvoir créer des instances si nécessaire
+export default InventoryService;

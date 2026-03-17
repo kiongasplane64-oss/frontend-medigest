@@ -17,11 +17,13 @@ export type MovementType =
   | 'loss'
   | 'manual_adjustment';
 
-export type BillingCurrency = 'CDF' | 'USD' | 'EUR' | string;
+export type TransferStatus = 'pending' | 'shipped' | 'received' | 'cancelled';
+
+export type BillingCurrency = 'CDF' | 'USD' | 'EUR';
 export type InventoryViewMode = 'grid' | 'list';
 
 // =========================================================
-// FORMATS D'EXPORT (EXPORTÉS EXPLICITEMENT)
+// FORMATS D'EXPORT
 // =========================================================
 
 export type ExportFormat = 'excel' | 'csv' | 'pdf';
@@ -31,6 +33,74 @@ export const ExportFormat = {
   CSV: 'csv' as ExportFormat,
   PDF: 'pdf' as ExportFormat,
 } as const;
+
+// =========================================================
+// TRANSFERTS
+// =========================================================
+
+export interface Transfers {
+  id: string;
+  reference: string;
+  source_depot: string;
+  destination_depot: string;
+  date_transfert: string;
+  status: TransferStatus;
+  items_count: number;
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TransfersResponse {
+  data: Transfers[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface PricingUpdate {
+  product_id: string;
+  received_qty: number;
+  sale_price: string;
+}
+
+// =========================================================
+// STOCK TRANSFER (pour compatibilité avec l'existant)
+// =========================================================
+
+export interface StockTransfer {
+  id: ID;
+  product_id: ID;
+  product_name?: string;
+  product_code?: string;
+  quantity: number;
+  from_location: string;
+  to_location: string;
+  status: 'pending' | 'in_transit' | 'completed' | 'cancelled';
+  notes?: string;
+  created_by?: ID;
+  approved_by?: ID;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string | null;
+}
+
+export interface StockTransferCreate {
+  product_id: ID;
+  quantity: number;
+  from_location: string;
+  to_location: string;
+  notes?: string;
+}
+
+export interface StockTransferUpdate {
+  quantity?: number;
+  from_location?: string;
+  to_location?: string;
+  status?: 'pending' | 'in_transit' | 'completed' | 'cancelled';
+  notes?: string;
+}
 
 // =========================================================
 // CATÉGORIES
@@ -135,44 +205,32 @@ export interface Product {
 export interface ProductCreate {
   code: string;
   name: string;
-
   commercial_name?: string;
   description?: string;
-
   category?: string;
   category_id?: ID;
-
   purchase_price: number;
   selling_price: number;
-
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
-
   alert_threshold?: number;
   minimum_stock?: number;
   maximum_stock?: number;
-
   expiry_date?: string;
-
   supplier?: string;
   main_supplier?: string;
   supplier_id?: ID;
-
   location?: string;
   barcode?: string;
-
   laboratory?: string;
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
-
   has_tva?: boolean;
   tva_rate?: number;
-
   is_active?: boolean;
   is_available?: boolean;
-
   image_url?: string;
   notes?: string;
 }
@@ -180,44 +238,32 @@ export interface ProductCreate {
 export interface ProductUpdate {
   code?: string;
   name?: string;
-
   commercial_name?: string;
   description?: string;
-
   category?: string;
   category_id?: ID;
-
   purchase_price?: number;
   selling_price?: number;
-
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
-
   alert_threshold?: number;
   minimum_stock?: number;
   maximum_stock?: number;
-
   expiry_date?: string | null;
-
   supplier?: string;
   main_supplier?: string;
   supplier_id?: ID;
-
   location?: string;
   barcode?: string;
-
   laboratory?: string;
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
-
   has_tva?: boolean;
   tva_rate?: number;
-
   is_active?: boolean;
   is_available?: boolean;
-
   image_url?: string | null;
   notes?: string | null;
 }
@@ -321,17 +367,14 @@ export interface InventoryAlertsResponse {
   has_subscription?: boolean;
   access_mode?: 'full' | 'read_only';
   is_read_only?: boolean;
-
   low_stock_count: number;
   expiring_soon_count: number;
   expired_count: number;
-
   alerts: {
     low_stock: InventoryAlertItem[];
     expiring_soon: InventoryAlertItem[];
     expired: InventoryAlertItem[];
   };
-
   restrictions?: {
     can_view: boolean;
     can_create: boolean;
@@ -380,38 +423,25 @@ export interface InventoryCount {
   notes?: string;
 }
 
-export interface ProductMergeRequest {
-  product_ids: ID[];
-  keep_product_id: ID;
-  merge_strategy: 'sum' | 'average' | 'max' | 'min' | 'keep_main';
-  expiry_strategy: 'earliest' | 'latest' | 'keep_main';
-}
-
 export interface StockMovement {
   id: ID;
   product_id: ID;
   product_name?: string;
   product_code?: string;
-
   movement_type: MovementType;
   reason?: string;
   reference_number?: string;
-
   quantity_before: number;
   quantity_after: number;
   quantity_change: number;
-
   unit_cost?: number;
   total_value?: number;
   notes?: string;
-
   source_location?: string;
   destination_location?: string;
-
   created_by?: ID;
   created_by_name?: string;
   tenant_id?: ID;
-
   created_at: string;
   updated_at?: string;
 }
@@ -433,48 +463,6 @@ export interface StockMovementListResponse {
   page: number;
   limit: number;
   movements: StockMovement[];
-}
-
-// =========================================================
-// TRANSFERTS
-// =========================================================
-
-export interface StockTransfer {
-  id: ID;
-  product_id: ID;
-  product_name?: string;
-  product_code?: string;
-
-  quantity: number;
-
-  from_location: string;
-  to_location: string;
-
-  status: 'pending' | 'in_transit' | 'completed' | 'cancelled';
-  notes?: string;
-
-  created_by?: ID;
-  approved_by?: ID;
-
-  created_at: string;
-  updated_at?: string;
-  completed_at?: string | null;
-}
-
-export interface StockTransferCreate {
-  product_id: ID;
-  quantity: number;
-  from_location: string;
-  to_location: string;
-  notes?: string;
-}
-
-export interface StockTransferUpdate {
-  quantity?: number;
-  from_location?: string;
-  to_location?: string;
-  status?: 'pending' | 'in_transit' | 'completed' | 'cancelled';
-  notes?: string;
 }
 
 // =========================================================
@@ -533,6 +521,28 @@ export interface RestockRequest {
 }
 
 // =========================================================
+// FUSION / DÉDUPLICATION
+// =========================================================
+
+export interface ProductMergeRequest {
+  product_ids: ID[];
+  keep_product_id: ID;
+  merge_strategy: 'sum' | 'average' | 'max' | 'min' | 'keep_main';
+  expiry_strategy: 'earliest' | 'latest' | 'keep_main';
+}
+
+export interface DuplicateGroup {
+  products: Product[];
+  similarity: number;
+}
+
+export interface DuplicatesResponse {
+  duplicates: DuplicateGroup[];
+  total_groups: number;
+  similarity_threshold: number;
+}
+
+// =========================================================
 // IMPORT / EXPORT
 // =========================================================
 
@@ -558,7 +568,6 @@ export interface ExportRequest {
   expiry_status?: string;
 }
 
-// Note: ExportResponse est conservé car utilisé dans inventoryService
 export interface ExportResponse {
   success: boolean;
   message: string;
@@ -614,5 +623,24 @@ export interface InventoryDashboardCard {
 export enum ExportFormatEnum {
   EXCEL = 'excel',
   CSV = 'csv',
-  PDF = 'pdf',
+  PDF = 'pdf'
+}
+
+export enum TransferStatusEnum {
+  PENDING = 'pending',
+  SHIPPED = 'shipped',
+  RECEIVED = 'received',
+  CANCELLED = 'cancelled'
+}
+
+export enum MovementTypeEnum {
+  PURCHASE = 'purchase',
+  SALE = 'sale',
+  TRANSFER_IN = 'transfer_in',
+  TRANSFER_OUT = 'transfer_out',
+  INVENTORY_ADJUSTMENT = 'inventory_adjustment',
+  RETURN = 'return',
+  DAMAGE = 'damage',
+  LOSS = 'loss',
+  MANUAL_ADJUSTMENT = 'manual_adjustment'
 }
