@@ -3,14 +3,18 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useAlerts } from '@/hooks/useAlerts';
 import { useSubscription } from '@/hooks/useSubscription';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import api from '@/api/client';
 import { 
   ShoppingCart, Package, ArrowLeftRight, 
   RotateCcw, BadgeEuro, TrendingUp, Users, FileText, 
   Settings, Truck, UserCircle, Wallet, Bell, AlertTriangle,
-  LayoutDashboard, Menu, X, LogOut, Home, ChevronDown,
-  DollarSign, Shield, HelpCircle
+  LayoutDashboard, Menu, X, LogOut, ChevronDown,
+  DollarSign, Shield, HelpCircle, History, ShoppingBag,
+  LineChart, CreditCard, UsersRound, TruckIcon,
+  Clock, Calculator
 } from 'lucide-react';
 import NotificationDrawer from './NotificationDrawer';
+import OutOfService from '../modules/core/endehors';
 
 // Types
 type Role = "super_admin" | "admin" | "gestionnaire" | "pharmacien" | "caissier" | "vendeur" | "comptable" | "stockiste" | "preparateur";
@@ -28,12 +32,44 @@ interface MenuGroup {
   items: MenuItem[];
 }
 
+interface ServiceStatus {
+  in_service: boolean;
+  restrictions_enabled: boolean;
+  current_time_utc: string;
+  current_day: string;
+  is_working_day: boolean;
+  is_within_hours: boolean;
+  working_hours: {
+    start: string;
+    end: string;
+    overtime?: string;
+  };
+  message: string;
+  next_service_time?: string;
+}
+
+interface WorkingHours {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+  overtimeEndTime?: string;
+  daysOff: {
+    monday: boolean;
+    tuesday: boolean;
+    wednesday: boolean;
+    thursday: boolean;
+    friday: boolean;
+    saturday: boolean;
+    sunday: boolean;
+  };
+}
+
 // Fonction utilitaire pour formater le rôle
 const formatRole = (role: string): string => {
   return role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 };
 
-// Configuration des menus
+// Configuration des menus mise à jour
 const menuGroups: MenuGroup[] = [
   {
     title: "Général",
@@ -43,13 +79,7 @@ const menuGroups: MenuGroup[] = [
         label: 'Tableau de bord', 
         href: '/dashboard', 
         roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
-      },
-      { 
-        icon: <Home size={20}/>, 
-        label: 'Accueil', 
-        href: '/', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
-      },
+      }
     ]
   },
   {
@@ -63,10 +93,16 @@ const menuGroups: MenuGroup[] = [
       },
       { 
         icon: <Package size={20}/>, 
-        label: 'Stocks', 
+        label: 'Inventaire', 
         href: '/inventory', 
         roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "stockiste", "preparateur"],
         badge: (alerts) => alerts?.length || null
+      },
+      { 
+        icon: <ShoppingBag size={20}/>, 
+        label: 'Achats', 
+        href: '/purchases', 
+        roles: ["super_admin", "admin", "gestionnaire", "stockiste"] 
       },
       { 
         icon: <ArrowLeftRight size={20}/>, 
@@ -80,6 +116,41 @@ const menuGroups: MenuGroup[] = [
         href: '/returns', 
         roles: ["super_admin", "admin", "pharmacien", "gestionnaire"] 
       },
+      { 
+        icon: <TruckIcon size={20}/>, 
+        label: 'Livraisons', 
+        href: '/deliveries', 
+        roles: ["super_admin", "admin", "gestionnaire", "pharmacien"] 
+      }
+    ]
+  },
+  {
+    title: "Gestion",
+    items: [
+      { 
+        icon: <History size={20}/>, 
+        label: 'Historique', 
+        href: '/history', 
+        roles: ["super_admin", "admin", "gestionnaire", "comptable", "pharmacien"] 
+      },
+      { 
+        icon: <CreditCard size={20}/>, 
+        label: 'Dettes', 
+        href: '/debts', 
+        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+      },
+      { 
+        icon: <LineChart size={20}/>, 
+        label: 'Monitoring', 
+        href: '/monitoring', 
+        roles: ["super_admin", "admin", "gestionnaire"] 
+      },
+      { 
+        icon: <Calculator size={20}/>, 
+        label: 'Capital', 
+        href: '/capital', 
+        roles: ["super_admin", "admin", "comptable"] 
+      }
     ]
   },
   {
@@ -108,7 +179,18 @@ const menuGroups: MenuGroup[] = [
         label: 'Caisse', 
         href: '/cash-register', 
         roles: ["super_admin", "admin", "comptable", "caissier"] 
-      },
+      }
+    ]
+  },
+  {
+    title: "Ressources humaines",
+    items: [
+      { 
+        icon: <UsersRound size={20}/>, 
+        label: 'Employés', 
+        href: '/employees', 
+        roles: ["super_admin", "admin", "gestionnaire"] 
+      }
     ]
   },
   {
@@ -125,7 +207,7 @@ const menuGroups: MenuGroup[] = [
         label: 'Clients', 
         href: '/clients', 
         roles: ["super_admin", "admin", "vendeur", "caissier", "pharmacien"] 
-      },
+      }
     ]
   },
   {
@@ -154,7 +236,7 @@ const menuGroups: MenuGroup[] = [
         label: 'Paramètres', 
         href: '/settings', 
         roles: ["super_admin", "admin"] 
-      },
+      }
     ]
   },
   {
@@ -165,7 +247,7 @@ const menuGroups: MenuGroup[] = [
         label: 'Aide', 
         href: '/help', 
         roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
-      },
+      }
     ]
   }
 ];
@@ -181,6 +263,12 @@ const Sidebar: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(menuGroups.map(g => g.title));
+  
+  // États pour la vérification des heures de service
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [workingHours, setWorkingHours] = useState<WorkingHours | null>(null);
+  const [loadingService, setLoadingService] = useState<boolean>(true);
+  const [showOutOfService, setShowOutOfService] = useState<boolean>(false);
 
   // Détecter si on est sur mobile
   useEffect(() => {
@@ -194,12 +282,141 @@ const Sidebar: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Charger la configuration et le statut du service
+  useEffect(() => {
+    const loadServiceStatus = async () => {
+      if (!user?.pharmacy_id) {
+        setLoadingService(false);
+        return;
+      }
+
+      try {
+        // Charger la configuration pour les heures de service
+        const configResponse = await api.get<{ config: { workingHours: WorkingHours } }>(
+          `/pharmacies/${user.pharmacy_id}/config`
+        );
+        
+        if (configResponse.data?.config?.workingHours) {
+          setWorkingHours(configResponse.data.config.workingHours);
+        }
+
+        // Vérifier le statut du service
+        const statusResponse = await api.get<ServiceStatus>(
+          `/pharmacies/${user.pharmacy_id}/service-status`
+        );
+        
+        setServiceStatus(statusResponse.data);
+        setShowOutOfService(!statusResponse.data.in_service);
+        
+      } catch (err) {
+        console.error('Erreur lors du chargement du service:', err);
+      } finally {
+        setLoadingService(false);
+      }
+    };
+
+    loadServiceStatus();
+
+    // Vérifier le statut toutes les minutes
+    const interval = setInterval(async () => {
+      if (user?.pharmacy_id) {
+        try {
+          const response = await api.get<ServiceStatus>(
+            `/pharmacies/${user.pharmacy_id}/service-status`
+          );
+          setServiceStatus(response.data);
+          setShowOutOfService(!response.data.in_service);
+        } catch (err) {
+          console.error('Erreur lors de la vérification du service:', err);
+        }
+      }
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Intercepter la navigation
+  useEffect(() => {
+    const checkNavigation = async () => {
+      // Ne pas vérifier pour les routes d'authentification ou les pages hors service
+      if (location.pathname === '/login' || location.pathname === '/logout' || 
+          location.pathname === '/out-of-service' || showOutOfService) {
+        return;
+      }
+
+      if (!user?.pharmacy_id) return;
+
+      try {
+        const response = await api.get<ServiceStatus>(
+          `/pharmacies/${user.pharmacy_id}/service-status`
+        );
+        
+        if (!response.data.in_service) {
+          setShowOutOfService(true);
+          
+          // Rediriger vers la page hors service
+          navigate('/out-of-service', { 
+            state: { 
+              from: location.pathname,
+              message: response.data.message,
+              nextServiceTime: response.data.next_service_time,
+              workingHours: response.data.working_hours
+            } 
+          });
+        }
+      } catch (err) {
+        console.error('Erreur lors de la vérification du service:', err);
+      }
+    };
+
+    checkNavigation();
+  }, [location.pathname, user, navigate, showOutOfService]);
+
+  // Fonction pour gérer le clic sur un lien
+  const handleLinkClick = async (e: React.MouseEvent, href: string) => {
+    e.preventDefault();
+    
+    if (!user?.pharmacy_id) {
+      navigate(href);
+      return;
+    }
+
+    try {
+      const response = await api.get<ServiceStatus>(
+        `/pharmacies/${user.pharmacy_id}/service-status`
+      );
+      
+      if (!response.data.in_service) {
+        // Afficher une notification ou un modal
+        setShowOutOfService(true);
+        
+        // Rediriger vers la page hors service
+        navigate('/out-of-service', { 
+          state: { 
+            from: href,
+            message: response.data.message,
+            nextServiceTime: response.data.next_service_time,
+            workingHours: response.data.working_hours
+          } 
+        });
+      } else {
+        navigate(href);
+        if (isMobile) {
+          setIsSidebarOpen(false);
+        }
+      }
+    } catch (err) {
+      console.error('Erreur lors de la vérification du service:', err);
+      navigate(href);
+    }
+  };
+
   // Fermer la sidebar quand on change de page sur mobile
   useEffect(() => {
-    if (isMobile) {
+    if (isMobile && !showOutOfService) {
       setIsSidebarOpen(false);
     }
-  }, [location.pathname, isMobile]);
+  }, [location.pathname, isMobile, showOutOfService]);
 
   // Rôle de l'utilisateur avec fallback
   const userRole = useMemo((): Role => {
@@ -215,9 +432,6 @@ const Sidebar: React.FC = () => {
 
   // Vérifier si un élément est actif
   const isActive = useCallback((href: string): boolean => {
-    if (href === '/') {
-      return location.pathname === '/';
-    }
     return location.pathname.startsWith(href);
   }, [location.pathname]);
 
@@ -244,6 +458,43 @@ const Sidebar: React.FC = () => {
   const unreadAlertsCount = useMemo(() => {
     return alerts?.length || 0;
   }, [alerts]);
+
+  // Formater les heures de service pour OutOfService
+  const formattedWorkingHours = useMemo(() => {
+    if (!workingHours) return undefined;
+    
+    return {
+      startTime: workingHours.startTime,
+      endTime: workingHours.endTime,
+      daysOff: Object.entries(workingHours.daysOff)
+        .filter(([, isOpen]) => isOpen)
+        .map(([day]) => day)
+    };
+  }, [workingHours]);
+
+  // Si en chargement
+  if (loadingService) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Clock className="w-12 h-12 text-blue-600 animate-pulse mx-auto mb-4" />
+          <p className="text-slate-600">Vérification des heures de service...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Afficher la page hors service
+  if (showOutOfService) {
+    const state = location.state as any;
+    return (
+      <OutOfService 
+        workingHours={formattedWorkingHours}
+        message={state?.message || serviceStatus?.message}
+        nextServiceTime={state?.nextServiceTime || serviceStatus?.next_service_time}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden relative">
@@ -274,7 +525,7 @@ const Sidebar: React.FC = () => {
         <div className="p-4 sm:p-6 flex items-center justify-between border-b border-slate-100">
           <div>
             <div className="text-xl sm:text-2xl font-bold text-blue-600 tracking-tight">
-              PharmaSaaS
+              MedigestPro
             </div>
             <div className="text-[8px] sm:text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-widest">
               {formatRole(userRole)}
@@ -298,6 +549,11 @@ const Sidebar: React.FC = () => {
               )}
             </button>
             
+            {/* Indicateur de service */}
+            {serviceStatus?.in_service && (
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Service actif" />
+            )}
+            
             {/* Bouton fermer sur mobile */}
             {isMobile && isSidebarOpen && (
               <button
@@ -316,6 +572,10 @@ const Sidebar: React.FC = () => {
           <div className="px-3 sm:px-4 mt-4">
             <Link 
               to="/subscription"
+              onClick={(e) => {
+                e.preventDefault();
+                handleLinkClick(e, '/subscription');
+              }}
               className={`flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl border transition-all hover:scale-[1.02] ${
                 isExpired 
                   ? 'bg-red-50 border-red-100 text-red-700 hover:bg-red-100' 
@@ -368,10 +628,11 @@ const Sidebar: React.FC = () => {
                     const itemBadge = item.badge?.(alerts);
                     
                     return (
-                      <Link
+                      <a
                         key={item.label}
-                        to={item.href}
-                        className={`flex items-center justify-between gap-2 sm:gap-3 p-2 sm:p-2.5 rounded-lg transition-all group ${
+                        href={item.href}
+                        onClick={(e) => handleLinkClick(e, item.href)}
+                        className={`flex items-center justify-between gap-2 sm:gap-3 p-2 sm:p-2.5 rounded-lg transition-all group cursor-pointer ${
                           active 
                             ? 'bg-blue-600 text-white shadow-md shadow-blue-100' 
                             : 'text-slate-600 hover:bg-blue-50 hover:text-blue-600'
@@ -394,7 +655,7 @@ const Sidebar: React.FC = () => {
                             {itemBadge}
                           </span>
                         )}
-                      </Link>
+                      </a>
                     );
                   })}
                 </div>

@@ -8,6 +8,7 @@ export interface User {
   role: string;
   nom_complet: string;
   tenant_id?: string | null;
+  pharmacy_id?: string | null; // Ajout de pharmacy_id dans l'interface User
   telephone?: string;
   phone?: string;
   actif: boolean;
@@ -21,6 +22,7 @@ type UserInput = Partial<User> & {
   role?: string;
   nom_complet?: string;
   tenant_id?: string | null;
+  pharmacy_id?: string | null; // Ajout de pharmacy_id dans UserInput
   telephone?: string;
   phone?: string;
   actif?: boolean;
@@ -33,7 +35,7 @@ interface JwtPayload {
   email?: string;
   role?: string;
   tenant_id?: string | null;
-  pharmacy_id?: string | null;
+  pharmacy_id?: string | null; // Déjà présent, on le garde
   subscription_active?: boolean;
   exp?: number;
   type?: string;
@@ -45,7 +47,7 @@ interface AuthState {
   token: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
-  currentPharmacyId: string | null;
+  currentPharmacyId: string | null; // On garde pour la compatibilité
   tenantId: string | null;
   subscriptionActive: boolean;
   isLoading: boolean;
@@ -63,11 +65,13 @@ interface AuthState {
   clearAuth: () => void;
   logout: () => void;
 
+  // Getters
   isSuperAdmin: () => boolean;
   isAdmin: () => boolean;
   hasRole: (role: string) => boolean;
   hasPermission: (permission: string) => boolean;
   isTokenExpired: () => boolean;
+  getCurrentPharmacyId: () => string | null; // Nouvelle méthode pour récupérer le pharmacy_id
 }
 
 const STORAGE_NAME = 'pharma-auth-storage';
@@ -117,6 +121,7 @@ const normalizeUser = (user: UserInput): User => {
     role: String(user?.role ?? 'user').trim(),
     nom_complet: String(user?.nom_complet ?? 'Utilisateur').trim(),
     tenant_id: user?.tenant_id ?? null,
+    pharmacy_id: user?.pharmacy_id ?? null, // Normalisation du pharmacy_id
     telephone: user?.telephone ?? user?.phone ?? '',
     phone: user?.phone ?? user?.telephone ?? '',
     actif,
@@ -161,6 +166,7 @@ const mergeUserWithTokenPayload = (user: UserInput | null, token: string): User 
     role: user?.role ?? String(payload?.role ?? 'user'),
     nom_complet: user?.nom_complet ?? 'Utilisateur',
     tenant_id: user?.tenant_id ?? payload?.tenant_id ?? null,
+    pharmacy_id: user?.pharmacy_id ?? (payload?.pharmacy_id as string | null) ?? null, // Fusion du pharmacy_id
     telephone: user?.telephone ?? user?.phone ?? '',
     phone: user?.phone ?? user?.telephone ?? '',
     actif: user?.actif ?? user?.activated ?? true,
@@ -203,7 +209,9 @@ export const useAuthStore = create<AuthState>()(
         const payload = decodeJwt(token);
 
         const tenantId = normalizedUser.tenant_id ?? payload?.tenant_id ?? null;
-        const pharmacyId = (payload?.pharmacy_id as string | null | undefined) ?? null;
+        const pharmacyId = normalizedUser.pharmacy_id ?? 
+                          (payload?.pharmacy_id as string | null | undefined) ?? 
+                          null;
         const subscriptionActive = Boolean(payload?.subscription_active ?? false);
 
         syncTokensToStorage(token, refreshToken);
@@ -248,8 +256,9 @@ export const useAuthStore = create<AuthState>()(
           user: nextUser,
           isAuthenticated: true,
           tenantId: nextUser.tenant_id ?? payload?.tenant_id ?? null,
-          currentPharmacyId:
-            (payload?.pharmacy_id as string | null | undefined) ?? get().currentPharmacyId,
+          currentPharmacyId: nextUser.pharmacy_id ?? 
+                           (payload?.pharmacy_id as string | null | undefined) ?? 
+                           get().currentPharmacyId,
           subscriptionActive: Boolean(payload?.subscription_active ?? get().subscriptionActive),
           isLoading: false,
         });
@@ -268,7 +277,13 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setPharmacy: (id) => {
-        set({ currentPharmacyId: id });
+        set({ 
+          currentPharmacyId: id,
+          user: get().user ? { 
+            ...get().user!, 
+            pharmacy_id: id 
+          } : null 
+        });
       },
 
       setTenantId: (id) => {
@@ -340,8 +355,9 @@ export const useAuthStore = create<AuthState>()(
             token: persistedToken,
             refreshToken: persistedRefreshToken,
             isAuthenticated: true,
-            currentPharmacyId:
-              (payload?.pharmacy_id as string | null | undefined) ?? null,
+            currentPharmacyId: normalizedUser.pharmacy_id ?? 
+                             (payload?.pharmacy_id as string | null | undefined) ?? 
+                             null,
             tenantId: normalizedUser.tenant_id ?? payload?.tenant_id ?? null,
             subscriptionActive: Boolean(payload?.subscription_active ?? false),
             isLoading: false,
@@ -457,6 +473,12 @@ export const useAuthStore = create<AuthState>()(
       isTokenExpired: () => {
         return isJwtExpired(get().token);
       },
+
+      getCurrentPharmacyId: () => {
+        const state = get();
+        // Priorité : user.pharmacy_id > currentPharmacyId > null
+        return state.user?.pharmacy_id ?? state.currentPharmacyId ?? null;
+      },
     }),
     {
       name: STORAGE_NAME,
@@ -513,4 +535,15 @@ export const useInitializeAuth = () => {
   };
 
   return { initialize };
+};
+
+// Hook personnalisé pour récupérer facilement le pharmacy_id
+export const usePharmacyId = () => {
+  return useAuthStore((state) => state.getCurrentPharmacyId());
+};
+
+// Hook personnalisé pour vérifier si un pharmacy_id est disponible
+export const useHasPharmacy = () => {
+  const pharmacyId = useAuthStore((state) => state.getCurrentPharmacyId());
+  return Boolean(pharmacyId);
 };

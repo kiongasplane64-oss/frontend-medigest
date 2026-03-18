@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Product, ProductCreate } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
+import { useAuthStore } from '@/store/useAuthStore';
 import {
   X,
   Save,
@@ -22,6 +23,12 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 
+// Extension du type Product pour inclure pharmacy_id (si nécessaire)
+// Ou bien mettez à jour votre fichier inventory.types.ts
+interface ExtendedProduct extends Partial<Product> {
+  pharmacy_id?: string | null;
+}
+
 interface CreateProductViewInitialValues {
   code?: string;
   barcode?: string;
@@ -29,14 +36,16 @@ interface CreateProductViewInitialValues {
   category?: string;
   supplier?: string;
   location?: string;
+  pharmacy_id?: string; // Ajout du pharmacy_id optionnel
 }
 
 interface CreateProductViewProps {
   open: boolean;
   onClose: () => void;
-  product?: Product | null;
+  product?: ExtendedProduct | null; // Utilisation du type étendu
   onSuccess?: () => void;
   initialValues?: CreateProductViewInitialValues;
+  pharmacyId?: string; // Ajout du pharmacy_id en prop
 }
 
 type FormTab = 'general' | 'pricing' | 'advanced';
@@ -57,6 +66,7 @@ interface FormState {
   expiry_date: string;
   location: string;
   laboratory: string;
+  pharmacy_id: string; // Ajout du champ pharmacy_id dans le state
 }
 
 const DEFAULT_MARGIN_PERCENT = 20;
@@ -81,8 +91,9 @@ function generateProductCode(): string {
 }
 
 function buildInitialFormState(
-  product?: Product | null,
+  product?: ExtendedProduct | null,
   initialValues?: CreateProductViewInitialValues,
+  defaultPharmacyId?: string,
 ): FormState {
   return {
     code: toInputString(initialValues?.code ?? product?.code ?? ''),
@@ -100,6 +111,7 @@ function buildInitialFormState(
     expiry_date: normalizeDateForInput(product?.expiry_date ?? ''),
     location: toInputString(initialValues?.location ?? product?.location ?? ''),
     laboratory: toInputString(product?.laboratory ?? ''),
+    pharmacy_id: toInputString(initialValues?.pharmacy_id ?? product?.pharmacy_id ?? defaultPharmacyId ?? ''),
   };
 }
 
@@ -109,7 +121,9 @@ export default function CreateProductView({
   product,
   onSuccess,
   initialValues,
+  pharmacyId: propPharmacyId, // Récupération du pharmacy_id depuis les props
 }: CreateProductViewProps) {
+  const { user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<FormTab>('general');
@@ -117,20 +131,23 @@ export default function CreateProductView({
   const [tvaRate, setTvaRate] = useState<number>(product?.tva_rate ?? 0);
   const [marginPercent, setMarginPercent] = useState<number>(DEFAULT_MARGIN_PERCENT);
 
+  // Déterminer le pharmacy_id par défaut (prop > user > undefined)
+  const defaultPharmacyId = propPharmacyId || user?.pharmacy_id || undefined;
+
   const [form, setForm] = useState<FormState>(() =>
-    buildInitialFormState(product, initialValues),
+    buildInitialFormState(product, initialValues, defaultPharmacyId),
   );
 
   useEffect(() => {
     if (!open) return;
 
-    setForm(buildInitialFormState(product, initialValues));
+    setForm(buildInitialFormState(product, initialValues, defaultPharmacyId));
     setHasTva(product?.has_tva ?? false);
     setTvaRate(product?.tva_rate ?? 0);
     setMarginPercent(DEFAULT_MARGIN_PERCENT);
     setActiveTab('general');
     setError(null);
-  }, [open, product, initialValues]);
+  }, [open, product, initialValues, defaultPharmacyId]);
 
   useEffect(() => {
     if (!open) return;
@@ -182,6 +199,11 @@ export default function CreateProductView({
   };
 
   const validateForm = (): string | null => {
+    // Validation du pharmacy_id
+    if (!form.pharmacy_id.trim()) {
+      return "L'identifiant de la pharmacie est obligatoire. Veuillez vous assurer d'être connecté à une pharmacie.";
+    }
+
     if (!form.code.trim()) {
       return 'Le code produit est obligatoire.';
     }
@@ -230,6 +252,7 @@ export default function CreateProductView({
   };
 
   const buildPayload = (): ProductCreate => {
+    // Construction du payload avec pharmacy_id
     const payload: ProductCreate = {
       code: form.code.trim(),
       barcode: form.barcode.trim() || undefined,
@@ -248,6 +271,8 @@ export default function CreateProductView({
       laboratory: form.laboratory.trim() || undefined,
       has_tva: hasTva,
       tva_rate: hasTva ? Number(tvaRate || 0) : 0,
+      // Ajout du pharmacy_id s'il est défini
+      ...(form.pharmacy_id.trim() ? { pharmacy_id: form.pharmacy_id.trim() } : {}),
     };
 
     return payload;
@@ -291,9 +316,29 @@ export default function CreateProductView({
 
       onSuccess?.();
       onClose();
-    } catch (err) {
-      console.error(err);
-      setError('Erreur lors de la sauvegarde du produit.');
+    } catch (err: any) {
+      console.error('Erreur lors de la sauvegarde:', err);
+
+      // Gestion spécifique des erreurs de validation
+      if (err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        if (Array.isArray(detail)) {
+          // Erreur de validation Pydantic
+          const missingFields = detail
+            .filter((d: any) => d.type === 'missing')
+            .map((d: any) => d.loc.join('.'));
+
+          if (missingFields.length > 0) {
+            setError(`Champs obligatoires manquants : ${missingFields.join(', ')}`);
+          } else {
+            setError(detail.map((d: any) => d.msg).join(', '));
+          }
+        } else {
+          setError(detail);
+        }
+      } else {
+        setError('Erreur lors de la sauvegarde du produit.');
+      }
     } finally {
       setLoading(false);
     }
@@ -366,7 +411,7 @@ export default function CreateProductView({
               <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
                 <AlertCircle size={18} className="mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-black">Validation</p>
+                  <p className="font-black">Erreur de validation</p>
                   <p className="text-sm">{error}</p>
                 </div>
               </div>
@@ -384,6 +429,13 @@ export default function CreateProductView({
                 </div>
               </div>
             ) : null}
+
+            {/* Champ caché pharmacy_id pour débogage (optionnel) */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
+                <span className="font-bold">Pharmacy ID:</span> {form.pharmacy_id || 'Non défini'}
+              </div>
+            )}
 
             {activeTab === 'general' ? (
               <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
@@ -884,6 +936,11 @@ export default function CreateProductView({
                     <div className="mt-4 space-y-3 text-sm">
                       <div className="rounded-2xl bg-slate-50 p-4">
                         <p className="font-bold text-slate-700">
+                          {form.pharmacy_id ? '✓ Pharmacie ID renseigné' : '• Pharmacie ID manquant'}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <p className="font-bold text-slate-700">
                           {form.code.trim() ? '✓ Code produit renseigné' : '• Code produit manquant'}
                         </p>
                       </div>
@@ -910,8 +967,7 @@ export default function CreateProductView({
                       Notes
                     </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      Les champs principaux obligatoires pour éviter les erreurs backend sont :
-                      code, désignation, prix d’achat et prix de vente.
+                      Les champs obligatoires sont : pharmacie, code, désignation, prix d'achat et prix de vente.
                     </p>
                   </div>
                 </div>

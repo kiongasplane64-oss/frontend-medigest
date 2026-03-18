@@ -27,10 +27,11 @@ import UsersPage from '@/pages/UsersPage';
 import Suppliers from '@/modules/inventory/views/Suppliers';
 import PaymentPage from '@/pages/PaymentPage';
 import PaymentSuccessPage from '@/pages/PaymentSuccessPage';
-import ConfigurationView from '@/modules/core/ConfigView';
+import ConfigViewWrapper from '@/modules/core/ConfigViewWrapper';
 import Facture from '@/modules/sales/views/Facture';
 import Rapports from '@/modules/sales/views/Rapports';
 import Historique from '@/modules/sales/views/Historique';
+import OutOfService from '@/modules/core/endehors';
 
 /**
  * Composant pour les modules en cours de développement
@@ -77,6 +78,10 @@ export default function AppRoutes() {
       {/* Route OTP accessible sans authentification complète */}
       <Route path="/verify-otp" element={<VerifyOtp />} />
 
+      {/* ========== ROUTE HORS SERVICE (PUBLIQUE) ========== */}
+      {/* Cette route doit être accessible même sans authentification */}
+      <Route path="/out-of-service" element={<OutOfService />} />
+
       {/* ========== ROUTES PRIVÉES (Utilisateurs connectés) ========== */}
       <Route element={<PrivateRoute />}>
         <Route element={<Sidebar />}>
@@ -108,7 +113,8 @@ export default function AppRoutes() {
           <Route path="/subscription" element={<SubscriptionPage />} />
           <Route path="/payment" element={<PaymentPage />} />
           <Route path="/payment-success" element={<PaymentSuccessPage />} />
-          <Route path="/settings" element={<ConfigurationView />} />
+          <Route path="/settings" element={<ConfigViewWrapper />} />
+          <Route path="/settings/:pharmacyId" element={<ConfigViewWrapper />} />
           
           {/* === Redirection par défaut === */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

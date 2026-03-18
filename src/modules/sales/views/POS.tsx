@@ -34,7 +34,7 @@ import { toast } from 'react-hot-toast';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useOnline } from '@/hooks/useOnline';
 import { useSubscription } from '@/hooks/useSubscription';
-import { db, OfflineSale } from '@/db/offlineDb'; // Supprimé OfflineProduct qui n'est pas utilisé
+import { db, OfflineSale } from '@/db/offlineDb'; 
 import api from '@/api/client';
 import { useAuthStore } from '@/store/useAuthStore';
 import { debounce } from '@/utils/debounce';
