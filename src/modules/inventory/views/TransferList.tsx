@@ -1,3 +1,4 @@
+// src/modules/inventory/views/TransferList.tsx
 import { useState } from 'react';
 import { 
   ArrowLeftRight, Plus, Search, Filter, 
@@ -17,6 +18,15 @@ const statusStyles: Record<string, string> = {
   cancelled: "bg-red-50 text-red-600 border-red-100",
 };
 
+interface LocalPricingItem {
+  product_id: string;
+  received_qty: number;
+  purchase_price: number | string;
+  selling_price?: number;
+  sale_price?: string;
+  expiry_date?: string;
+}
+
 export default function TransferList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTransfer, setSelectedTransfer] = useState<Transfers | null>(null);
@@ -29,7 +39,12 @@ export default function TransferList() {
 
   // 2. Mutation pour la réception
   const { mutate: confirmReceipt, isPending: isReceiving } = useMutation({
-    mutationFn: (data: PricingUpdate[]) => api.post(`/transfers/${selectedTransfer?.id}/receive`, data),
+    mutationFn: (data: PricingUpdate[]) => {
+      if (!selectedTransfer?.id) {
+        throw new Error('Aucun transfert sélectionné');
+      }
+      return api.post(`/transfers/${selectedTransfer.id}/receive`, data);
+    },
     onMutate: () => {
       toast.loading('Mise à jour de l\'inventaire...', { id: 'receive-loader' });
     },
@@ -48,12 +63,35 @@ export default function TransferList() {
     }
   });
 
-  // 3. Filtrage sécurisé
-  const filteredTransfers = transfers.filter((transfer: Transfers) => 
-    transfer.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    transfer.source_depot.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    transfer.destination_depot.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // 3. Gestionnaire de confirmation avec conversion des types
+  const handleConfirmReceipt = (items: LocalPricingItem[]) => {
+    // Convertir LocalPricingItem[] en PricingUpdate[]
+    const pricingUpdates: PricingUpdate[] = items.map(item => ({
+      product_id: item.product_id,
+      purchase_price: typeof item.purchase_price === 'string' 
+        ? parseFloat(item.purchase_price) 
+        : item.purchase_price,
+      selling_price: item.selling_price,
+      received_qty: item.received_qty,
+      sale_price: item.sale_price
+    }));
+    
+    confirmReceipt(pricingUpdates);
+  };
+
+  // 4. Filtrage sécurisé avec vérification des undefined
+  const filteredTransfers = transfers.filter((transfer: Transfers) => {
+    const searchLower = searchTerm.toLowerCase();
+    
+    // Vérifier chaque champ et fournir une valeur par défaut vide si undefined
+    const reference = transfer.reference?.toLowerCase() || '';
+    const sourceDepot = transfer.source_depot?.toLowerCase() || '';
+    const destinationDepot = transfer.destination_depot?.toLowerCase() || '';
+    
+    return reference.includes(searchLower) || 
+           sourceDepot.includes(searchLower) || 
+           destinationDepot.includes(searchLower);
+  });
 
   if (isLoading) {
     return (
@@ -147,29 +185,41 @@ export default function TransferList() {
               {filteredTransfers.map((transfer: Transfers) => (
                 <tr key={transfer.id} className="hover:bg-blue-50/20 transition-colors group">
                   <td className="px-8 py-6">
-                    <p className="text-sm font-black text-slate-700">{transfer.reference}</p>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">{new Date(transfer.date_transfert).toLocaleDateString('fr-FR')}</p>
+                    <p className="text-sm font-black text-slate-700">{transfer.reference || 'Sans réf.'}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">
+                      {transfer.date_transfert 
+                        ? new Date(transfer.date_transfert).toLocaleDateString('fr-FR')
+                        : 'Date inconnue'
+                      }
+                    </p>
                   </td>
                   <td className="px-8 py-6">
                     <div className="flex items-center gap-3">
-                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">{transfer.source_depot}</span>
+                      <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg">
+                        {transfer.source_depot || 'Non spécifié'}
+                      </span>
                       <ArrowLeftRight size={12} className="text-blue-400" />
-                      <span className="text-[11px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-lg">{transfer.destination_depot}</span>
+                      <span className="text-[11px] font-black text-blue-700 bg-blue-50 px-2 py-1 rounded-lg">
+                        {transfer.destination_depot || 'Non spécifié'}
+                      </span>
                     </div>
                   </td>
                   <td className="px-8 py-6 text-center">
-                    <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1 rounded-md">{transfer.items_count}</span>
+                    <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1 rounded-md">
+                      {transfer.items_count || 0}
+                    </span>
                   </td>
                   <td className="px-8 py-6">
-                    <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border-2 ${statusStyles[transfer.status] || ""}`}>
-                      {transfer.status}
+                    <span className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border-2 ${statusStyles[transfer.status || 'pending'] || statusStyles.pending}`}>
+                      {transfer.status || 'pending'}
                     </span>
                   </td>
                   <td className="px-8 py-6 text-right">
-                    {transfer.status === 'pending' || transfer.status === 'shipped' ? (
+                    {(transfer.status === 'pending' || transfer.status === 'shipped') ? (
                       <button 
                         onClick={() => setSelectedTransfer(transfer)}
-                        className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black hover:bg-blue-600 transition-all shadow-lg shadow-slate-200 active:scale-95"
+                        disabled={isReceiving}
+                        className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-[10px] font-black hover:bg-blue-600 transition-all shadow-lg shadow-slate-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         RÉCEPTIONNER
                       </button>
@@ -191,7 +241,7 @@ export default function TransferList() {
         <ReceiveTransferModal 
           transfer={selectedTransfer}
           onClose={() => !isReceiving && setSelectedTransfer(null)}
-          onConfirm={(data) => confirmReceipt(data)}
+          onConfirm={handleConfirmReceipt}
         />
       )}
     </div>
