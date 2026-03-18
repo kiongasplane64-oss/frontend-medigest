@@ -8,10 +8,9 @@
  * - Des statistiques clés (ventes, stocks, bénéfices)
  * - Des alertes (stocks critiques, produits expirés)
  * - Un aperçu rapide des performances
- * - Des modales de détails pour chaque métrique
- * - Export PDF des rapports
  * - Vérification des heures de service selon configuration
  * - Application du thème selon configuration
+ * - Affichage du nom de la pharmacie connectée
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -25,7 +24,8 @@ import {
   RefreshCw, ArrowRight, Package, Clock, 
   Calendar, Download, X, ChevronDown, ChevronUp,
   LayoutDashboard, ShieldAlert, FileText,
-  Printer, DollarSign, BarChart3, AlertCircle
+  Printer, DollarSign, BarChart3, AlertCircle,
+  Building2, CheckCircle, MapPin, Phone, Mail
 } from 'lucide-react';
 
 // Composants et hooks personnalisés
@@ -36,6 +36,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import OutOfService from '@/modules/core/endehors';
 import api from '@/api/client';
+import { useTimezone} from '@/hooks/useTimezone';
 
 // ===================================================================
 // TYPES
@@ -50,6 +51,9 @@ interface DetailModalProps {
   onExportPDF: () => void;
   userName?: string;
   pharmacyName?: string;
+  pharmacyAddress?: string;
+  pharmacyPhone?: string;
+  pharmacyEmail?: string;
 }
 
 interface StatsCard {
@@ -66,6 +70,8 @@ interface ServiceStatus {
   in_service: boolean;
   restrictions_enabled: boolean;
   current_time_utc: string;
+  current_time_local: string;
+  timezone: string;
   current_day: string;
   is_working_day: boolean;
   is_within_hours: boolean;
@@ -83,6 +89,7 @@ interface WorkingHours {
   startTime: string;
   endTime: string;
   overtimeEndTime?: string;
+  timezone?: string;
   daysOff: {
     monday: boolean;
     tuesday: boolean;
@@ -94,33 +101,44 @@ interface WorkingHours {
   };
 }
 
+interface PharmacyInfo {
+  name: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  licenseNumber?: string;
+  logo?: string;
+}
+
 interface PharmacyConfig {
   theme: 'light' | 'dark' | 'system';
   workingHours: WorkingHours;
-  pharmacyInfo: {
-    name: string;
-  };
+  pharmacyInfo: PharmacyInfo;
+  pharmacyId?: string;
+}
+
+interface PharmacyResponse {
+  id: string;
+  name: string;
+  license_number: string;
+  address: string;
+  city: string;
+  country: string;
+  phone: string;
+  email: string;
+  is_active: boolean;
+  config: PharmacyConfig;
 }
 
 // ===================================================================
 // COMPOSANTS UTILITAIRES
 // ===================================================================
 
-const CheckCircle = ({ size, className }: { size: number; className?: string }): React.ReactElement => (
-  <svg 
-    width={size} 
-    height={size} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round"
-    className={className}
-  >
-    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-    <polyline points="22 4 12 14.01 9 11.01" />
-  </svg>
+const InfoBadge: React.FC<{ icon: React.ReactNode; text: string }> = ({ icon, text }) => (
+  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded-lg text-xs text-slate-600 dark:text-slate-300">
+    {icon}
+    <span>{text}</span>
+  </div>
 );
 
 // ===================================================================
@@ -131,7 +149,10 @@ const generatePDF = (
   type: string, 
   data: DashboardStats | null, 
   userName: string = 'Non spécifié',
-  pharmacyName: string = 'Non spécifiée'
+  pharmacyName: string = 'Non spécifiée',
+  pharmacyAddress?: string,
+  pharmacyPhone?: string,
+  pharmacyEmail?: string
 ): void => {
   if (!data) return;
   
@@ -158,14 +179,18 @@ const generatePDF = (
     doc.setFont('helvetica', 'normal');
     doc.text(`Rapport - ${type}`, 105, 30, { align: 'center' });
 
-    // Informations
+    // Informations pharmacie
     doc.setTextColor(0, 0, 0);
     doc.setFontSize(10);
     doc.text(`Généré le : ${date}`, 20, 50);
     doc.text(`Pharmacie : ${pharmacyName}`, 20, 57);
-    doc.text(`Utilisateur : ${userName}`, 20, 64);
+    if (pharmacyAddress) doc.text(`Adresse : ${pharmacyAddress}`, 20, 64);
+    if (pharmacyPhone) doc.text(`Téléphone : ${pharmacyPhone}`, 20, 71);
+    if (pharmacyEmail) doc.text(`Email : ${pharmacyEmail}`, 20, 78);
+    doc.text(`Utilisateur : ${userName}`, 20, 85);
 
     // Contenu selon type
+    let startY = 95;
     if (type.includes('Ventes') || type.includes('sales')) {
       autoTable(doc, {
         head: [['Période', 'Montant', 'Tendance']],
@@ -174,7 +199,7 @@ const generatePDF = (
           ['Ce mois', formatCurrency(data.monthly_sales || 0), '-'],
           ['Stock total', formatCurrency(data.total_stock_value || 0), '-']
         ],
-        startY: 80,
+        startY: startY,
         theme: 'striped',
         headStyles: { fillColor: [37, 99, 235] },
         styles: { fontSize: 10 }
@@ -200,7 +225,7 @@ const generatePDF = (
       doc.setFontSize(8);
       doc.setTextColor(150, 150, 150);
       doc.text(
-        `Document généré par MédiGest - Page ${i} sur ${pageCount}`,
+        `Document généré par MédiGest - ${pharmacyName} - Page ${i} sur ${pageCount}`,
         105,
         287,
         { align: 'center' }
@@ -225,7 +250,8 @@ const DetailModal: React.FC<DetailModalProps> = ({
   type, 
   onExportPDF,
   userName,
-  pharmacyName 
+  pharmacyName,
+  pharmacyAddress,
 }) => {
   if (!isOpen) return null;
 
@@ -271,9 +297,10 @@ const DetailModal: React.FC<DetailModalProps> = ({
               </div>
             </div>
             
-            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
               <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
               <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
+              {pharmacyAddress && <p>Adresse : {pharmacyAddress}</p>}
             </div>
           </div>
         );
@@ -307,9 +334,10 @@ const DetailModal: React.FC<DetailModalProps> = ({
                 </p>
               </div>
             </div>
-            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
               <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
               <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
+              {pharmacyAddress && <p>Adresse : {pharmacyAddress}</p>}
             </div>
           </div>
         );
@@ -324,7 +352,7 @@ const DetailModal: React.FC<DetailModalProps> = ({
               </div>
               <p className="text-slate-500 font-medium">Aucune alerte en cours</p>
               <p className="text-sm text-slate-400 mt-1">Tout est sous contrôle</p>
-              <div className="mt-6 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+              <div className="mt-6 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
                 <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
                 <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
               </div>
@@ -373,7 +401,7 @@ const DetailModal: React.FC<DetailModalProps> = ({
                 </div>
               </div>
             ))}
-            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
               <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
               <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
             </div>
@@ -408,7 +436,7 @@ const DetailModal: React.FC<DetailModalProps> = ({
                   : "Aucun produit à risque d'expiration prochaine."}
               </p>
             </div>
-            <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+            <div className="mt-2 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
               <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
               <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
             </div>
@@ -420,7 +448,7 @@ const DetailModal: React.FC<DetailModalProps> = ({
           <div className="text-center py-8 text-slate-500">
             <FileText size={48} className="mx-auto mb-4 opacity-50" />
             <p>Aucune donnée disponible</p>
-            <div className="mt-6 p-3 bg-gray-50 rounded-xl text-xs text-slate-500">
+            <div className="mt-6 p-3 bg-gray-50 rounded-xl text-xs text-slate-500 space-y-1">
               <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
               <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
             </div>
@@ -474,8 +502,14 @@ const Dashboard: React.FC = () => {
   const { user, isAuthenticated, isSuperAdmin } = useAuthStore();
   
   const [pharmacyConfig, setPharmacyConfig] = useState<PharmacyConfig | null>(null);
+  const [pharmacyDetails, setPharmacyDetails] = useState<PharmacyResponse | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
+  const [configError, setConfigError] = useState<string | null>(null);
+  
+  const timezoneHook = useTimezone();
+  const browserTimezone = timezoneHook.timezone;
+  const browserOffset = timezoneHook.offset;
   
   const { 
     stats,           
@@ -498,15 +532,20 @@ const Dashboard: React.FC = () => {
   const [showAllStats, setShowAllStats] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
-  // Charger la configuration de la pharmacie
+  // Charger la configuration et les détails de la pharmacie
   useEffect(() => {
-    const loadPharmacyConfig = async () => {
+    const loadPharmacyData = async () => {
       if (!user?.pharmacy_id) {
+        setConfigError("Aucune pharmacie associée à votre compte");
         setLoadingConfig(false);
         return;
       }
 
       try {
+        // Charger les détails de la pharmacie
+        const pharmacyResponse = await api.get<PharmacyResponse>(`/pharmacies/${user.pharmacy_id}`);
+        setPharmacyDetails(pharmacyResponse.data);
+        
         // Charger la configuration
         const configResponse = await api.get<{ config: PharmacyConfig }>(`/pharmacies/${user.pharmacy_id}/config`);
         
@@ -520,15 +559,17 @@ const Dashboard: React.FC = () => {
         // Vérifier le statut du service
         const statusResponse = await api.get<ServiceStatus>(`/pharmacies/${user.pharmacy_id}/service-status`);
         setServiceStatus(statusResponse.data);
+        setConfigError(null);
         
-      } catch (err) {
+      } catch (err: any) {
         console.error('Erreur lors du chargement de la configuration:', err);
+        setConfigError(err.response?.data?.detail || "Erreur lors du chargement des données de la pharmacie");
       } finally {
         setLoadingConfig(false);
       }
     };
 
-    loadPharmacyConfig();
+    loadPharmacyData();
 
     // Vérifier le statut toutes les minutes
     const interval = setInterval(async () => {
@@ -577,13 +618,6 @@ const Dashboard: React.FC = () => {
     }
   }, [isAuthenticated, isSuperAdmin, navigate]);
 
-  // Log des erreurs
-  useEffect(() => {
-    if (error) {
-      console.error('Erreur chargement dashboard:', error);
-    }
-  }, [error]);
-
   // Rafraîchir les données
   const handleRefresh = useCallback(async (): Promise<void> => {
     setIsRefreshing(true);
@@ -597,9 +631,12 @@ const Dashboard: React.FC = () => {
       type, 
       data, 
       user?.nom_complet || 'Non spécifié',
-      pharmacyConfig?.pharmacyInfo?.name || (user as any)?.pharmacy?.name || (user as any)?.pharmacy_name || 'Non spécifiée'
+      pharmacyDetails?.name || pharmacyConfig?.pharmacyInfo?.name || 'Pharmacie non spécifiée',
+      pharmacyDetails?.address || pharmacyConfig?.pharmacyInfo?.address,
+      pharmacyDetails?.phone || pharmacyConfig?.pharmacyInfo?.phone,
+      pharmacyDetails?.email || pharmacyConfig?.pharmacyInfo?.email
     );
-  }, [user, pharmacyConfig]);
+  }, [user, pharmacyDetails, pharmacyConfig]);
 
   // Configuration des cartes de statistiques
   const statsCards: StatsCard[] = useMemo((): StatsCard[] => {
@@ -692,6 +729,17 @@ const Dashboard: React.FC = () => {
 
   const visibleStats = showAllStats ? statsCards : statsCards.slice(0, 4);
 
+  // Déterminer le nom de la pharmacie à afficher
+  const pharmacyDisplayName = pharmacyDetails?.name || 
+                              pharmacyConfig?.pharmacyInfo?.name || 
+                              (user as any)?.pharmacy?.name || 
+                              (user as any)?.pharmacy_name || 
+                              'Pharmacie non spécifiée';
+
+  const pharmacyAddress = pharmacyDetails?.address || pharmacyConfig?.pharmacyInfo?.address;
+  const pharmacyPhone = pharmacyDetails?.phone || pharmacyConfig?.pharmacyInfo?.phone;
+  const pharmacyEmail = pharmacyDetails?.email || pharmacyConfig?.pharmacyInfo?.email;
+
   // État de chargement
   if (loadingConfig || loadingStats) {
     return (
@@ -704,22 +752,47 @@ const Dashboard: React.FC = () => {
     );
   }
 
-  // Vérification du service
-  if (serviceStatus && !serviceStatus.in_service) {
+  // Erreur de configuration
+  if (configError) {
     return (
-    <OutOfService 
-        workingHours={pharmacyConfig?.workingHours ? {
-          startTime: pharmacyConfig.workingHours.startTime,
-          endTime: pharmacyConfig.workingHours.endTime,
-          daysOff: Object.entries(pharmacyConfig.workingHours.daysOff)
-            .filter(([, isOpen]) => isOpen)
-            .map(([day]) => day)
-        } : undefined} 
+      <div className="h-[80vh] flex flex-col items-center justify-center text-red-500">
+        <ShieldAlert size={48} className="mb-4" />
+        <p className="font-bold text-lg mb-2">Erreur de configuration</p>
+        <p className="text-sm text-slate-600 mb-4 text-center max-w-md">
+          {configError}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
+        >
+          <RefreshCw size={16} />
+          Réessayer
+        </button>
+      </div>
+    );
+  }
+
+  // Vérification du service - avec structure complète pour OutOfService
+  if (serviceStatus && !serviceStatus.in_service) {
+    // Préparer les workingHours au format attendu par OutOfService
+    const workingHoursForDisplay = pharmacyConfig?.workingHours ? {
+      enabled: pharmacyConfig.workingHours.enabled,
+      startTime: pharmacyConfig.workingHours.startTime,
+      endTime: pharmacyConfig.workingHours.endTime,
+      overtimeEndTime: pharmacyConfig.workingHours.overtimeEndTime,
+      daysOff: pharmacyConfig.workingHours.daysOff  // Objet complet avec booléens
+    } : undefined;
+
+    return (
+      <OutOfService 
+        workingHours={workingHoursForDisplay}
+        message={serviceStatus.message}
+        nextServiceTime={serviceStatus.next_service_time}
       />
     );
   }
 
-  // État d'erreur
+  // État d'erreur des stats
   if (error) {
     return (
       <div className="h-[80vh] flex flex-col items-center justify-center text-red-500">
@@ -742,24 +815,66 @@ const Dashboard: React.FC = () => {
   // Rendu principal
   return (
     <div className="space-y-6 pb-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto transition-colors">
-      {/* Header */}
+      {/* Header avec informations pharmacie */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
-        <div>
+        <div className="space-y-2">
           <h1 className="text-2xl sm:text-3xl font-black text-slate-800 dark:text-slate-200 tracking-tight flex items-center gap-2">
             <LayoutDashboard className="text-blue-600 dark:text-blue-400" size={28} />
             Tableau de Bord
           </h1>
-          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 font-medium">
-            Ravi de vous revoir, <span className="text-blue-600 dark:text-blue-400 font-bold">{user?.nom_complet}</span>
-            {isAdmin && (
-              <span className="ml-2 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs rounded-full">
-                Admin
-              </span>
+          
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Building2 size={16} className="text-blue-500 dark:text-blue-400" />
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                {pharmacyDisplayName}
+              </p>
+            </div>
+            
+            {pharmacyAddress && (
+              <InfoBadge 
+                icon={<MapPin size={12} />} 
+                text={pharmacyAddress.length > 30 ? pharmacyAddress.substring(0, 30) + '...' : pharmacyAddress} 
+              />
             )}
-          </p>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-            {pharmacyConfig?.pharmacyInfo?.name || (user as any)?.pharmacy?.name || (user as any)?.pharmacy_name || 'Pharmacie non spécifiée'}
-          </p>
+            
+            {pharmacyPhone && (
+              <InfoBadge icon={<Phone size={12} />} text={pharmacyPhone} />
+            )}
+            
+            {pharmacyEmail && (
+              <InfoBadge icon={<Mail size={12} />} text={pharmacyEmail} />
+            )}
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <p className="text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1">
+              <span>👤 {user?.nom_complet}</span>
+              {isAdmin && (
+                <span className="ml-1 px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full text-[10px] font-bold">
+                  Admin
+                </span>
+              )}
+            </p>
+            
+            {serviceStatus && serviceStatus.in_service && (
+              <div className="flex items-center gap-1 px-2 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-full">
+                <CheckCircle size={12} />
+                <span className="text-[10px] font-bold">En service</span>
+              </div>
+            )}
+            
+            {pharmacyConfig?.workingHours?.timezone && (
+              <div className="flex items-center gap-1 px-2 py-0.5 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full">
+                <Clock size={12} />
+                <span className="text-[10px]">{pharmacyConfig.workingHours.timezone}</span>
+              </div>
+            )}
+            
+            <div className="flex items-center gap-1 px-2 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded-full">
+              <span className="text-[10px]">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</span>
+            </div>
+          </div>
         </div>
         
         <div className="flex items-center gap-3 w-full sm:w-auto">
@@ -922,7 +1037,10 @@ const Dashboard: React.FC = () => {
           type={selectedModal.type}
           onExportPDF={() => handleExportPDF(selectedModal.title, selectedModal.data as DashboardStats | null)}
           userName={user?.nom_complet}
-          pharmacyName={pharmacyConfig?.pharmacyInfo?.name || (user as any)?.pharmacy?.name || (user as any)?.pharmacy_name}
+          pharmacyName={pharmacyDisplayName}
+          pharmacyAddress={pharmacyAddress}
+          pharmacyPhone={pharmacyPhone}
+          pharmacyEmail={pharmacyEmail}
         />
       )}
     </div>

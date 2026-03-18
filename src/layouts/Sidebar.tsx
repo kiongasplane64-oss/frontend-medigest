@@ -1,3 +1,4 @@
+// components/Sidebar.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAlerts } from '@/hooks/useAlerts';
@@ -9,12 +10,13 @@ import {
   RotateCcw, BadgeEuro, TrendingUp, Users, FileText, 
   Settings, Truck, UserCircle, Wallet, Bell, AlertTriangle,
   LayoutDashboard, Menu, X, LogOut, ChevronDown,
-  DollarSign, Shield, HelpCircle, History, ShoppingBag,
+  DollarSign, HelpCircle, History, ShoppingBag,
   LineChart, CreditCard, UsersRound, TruckIcon,
-  Clock, Calculator
-} from 'lucide-react';
+  Clock, Calculator, Crown, Info
+} from 'lucide-react'; // Retiré 'Shield' qui n'est pas utilisé
 import NotificationDrawer from './NotificationDrawer';
-import OutOfService from '../modules/core/endehors';
+import OutOfService from '@/modules/core/endehors';
+import { useTimezone } from '@/hooks/useTimezone';
 
 // Types
 type Role = "super_admin" | "admin" | "gestionnaire" | "pharmacien" | "caissier" | "vendeur" | "comptable" | "stockiste" | "preparateur";
@@ -36,6 +38,8 @@ interface ServiceStatus {
   in_service: boolean;
   restrictions_enabled: boolean;
   current_time_utc: string;
+  current_time_local: string;
+  timezone: string;
   current_day: string;
   is_working_day: boolean;
   is_within_hours: boolean;
@@ -53,6 +57,7 @@ interface WorkingHours {
   startTime: string;
   endTime: string;
   overtimeEndTime?: string;
+  timezone?: string;
   daysOff: {
     monday: boolean;
     tuesday: boolean;
@@ -63,6 +68,8 @@ interface WorkingHours {
     sunday: boolean;
   };
 }
+
+// Supprimé l'interface PharmacyConfig qui n'est pas utilisée
 
 // Fonction utilitaire pour formater le rôle
 const formatRole = (role: string): string => {
@@ -214,6 +221,12 @@ const menuGroups: MenuGroup[] = [
     title: "Administration",
     items: [
       { 
+        icon: <Crown size={20}/>, 
+        label: 'Abonnement', 
+        href: '/subscription', 
+        roles: ["super_admin", "admin"] 
+      },
+      { 
         icon: <Users size={20}/>, 
         label: 'Utilisateurs', 
         href: '/users', 
@@ -224,12 +237,6 @@ const menuGroups: MenuGroup[] = [
         label: 'Rapports', 
         href: '/reports', 
         roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
-      },
-      { 
-        icon: <Shield size={20}/>, 
-        label: 'Abonnement', 
-        href: '/subscription', 
-        roles: ["super_admin"] 
       },
       { 
         icon: <Settings size={20}/>, 
@@ -259,16 +266,22 @@ const Sidebar: React.FC = () => {
   const { alerts } = useAlerts();
   const { isExpired, daysRemaining, plan_name, subscription } = useSubscription();
   
+  const timezoneHook = useTimezone();
+  const browserTimezone = timezoneHook.timezone;
+  const browserOffset = timezoneHook.offset;
+  
   const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(menuGroups.map(g => g.title));
+  const [showServiceInfo, setShowServiceInfo] = useState<boolean>(false);
   
   // États pour la vérification des heures de service
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [workingHours, setWorkingHours] = useState<WorkingHours | null>(null);
   const [loadingService, setLoadingService] = useState<boolean>(true);
   const [showOutOfService, setShowOutOfService] = useState<boolean>(false);
+  const [timeRemaining, setTimeRemaining] = useState<string | null>(null);
 
   // Détecter si on est sur mobile
   useEffect(() => {
@@ -281,6 +294,33 @@ const Sidebar: React.FC = () => {
     
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Calculer le temps restant avant la fermeture
+  const calculateTimeRemaining = useCallback((): string | null => {
+    if (!serviceStatus?.in_service || !workingHours?.endTime) return null;
+
+    const now = new Date();
+    const [endHours, endMinutes] = workingHours.endTime.split(':').map(Number);
+    
+    const endTime = new Date();
+    endTime.setHours(endHours, endMinutes, 0);
+    
+    if (now > endTime) {
+      // Déjà après l'heure de fermeture
+      return null;
+    }
+    
+    const diffMs = endTime.getTime() - now.getTime();
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const remainingMinutes = diffMinutes % 60;
+    
+    if (diffHours > 0) {
+      return `${diffHours}h ${remainingMinutes}min`;
+    } else {
+      return `${remainingMinutes}min`;
+    }
+  }, [serviceStatus, workingHours]);
 
   // Charger la configuration et le statut du service
   useEffect(() => {
@@ -335,10 +375,22 @@ const Sidebar: React.FC = () => {
     return () => clearInterval(interval);
   }, [user]);
 
+  // Mettre à jour le temps restant toutes les minutes
+  useEffect(() => {
+    if (serviceStatus?.in_service) {
+      setTimeRemaining(calculateTimeRemaining());
+      
+      const timer = setInterval(() => {
+        setTimeRemaining(calculateTimeRemaining());
+      }, 60000);
+      
+      return () => clearInterval(timer);
+    }
+  }, [serviceStatus, calculateTimeRemaining]);
+
   // Intercepter la navigation
   useEffect(() => {
     const checkNavigation = async () => {
-      // Ne pas vérifier pour les routes d'authentification ou les pages hors service
       if (location.pathname === '/login' || location.pathname === '/logout' || 
           location.pathname === '/out-of-service' || showOutOfService) {
         return;
@@ -353,16 +405,6 @@ const Sidebar: React.FC = () => {
         
         if (!response.data.in_service) {
           setShowOutOfService(true);
-          
-          // Rediriger vers la page hors service
-          navigate('/out-of-service', { 
-            state: { 
-              from: location.pathname,
-              message: response.data.message,
-              nextServiceTime: response.data.next_service_time,
-              workingHours: response.data.working_hours
-            } 
-          });
         }
       } catch (err) {
         console.error('Erreur lors de la vérification du service:', err);
@@ -370,46 +412,7 @@ const Sidebar: React.FC = () => {
     };
 
     checkNavigation();
-  }, [location.pathname, user, navigate, showOutOfService]);
-
-  // Fonction pour gérer le clic sur un lien
-  const handleLinkClick = async (e: React.MouseEvent, href: string) => {
-    e.preventDefault();
-    
-    if (!user?.pharmacy_id) {
-      navigate(href);
-      return;
-    }
-
-    try {
-      const response = await api.get<ServiceStatus>(
-        `/pharmacies/${user.pharmacy_id}/service-status`
-      );
-      
-      if (!response.data.in_service) {
-        // Afficher une notification ou un modal
-        setShowOutOfService(true);
-        
-        // Rediriger vers la page hors service
-        navigate('/out-of-service', { 
-          state: { 
-            from: href,
-            message: response.data.message,
-            nextServiceTime: response.data.next_service_time,
-            workingHours: response.data.working_hours
-          } 
-        });
-      } else {
-        navigate(href);
-        if (isMobile) {
-          setIsSidebarOpen(false);
-        }
-      }
-    } catch (err) {
-      console.error('Erreur lors de la vérification du service:', err);
-      navigate(href);
-    }
-  };
+  }, [location.pathname, user, showOutOfService]);
 
   // Fermer la sidebar quand on change de page sur mobile
   useEffect(() => {
@@ -459,19 +462,6 @@ const Sidebar: React.FC = () => {
     return alerts?.length || 0;
   }, [alerts]);
 
-  // Formater les heures de service pour OutOfService
-  const formattedWorkingHours = useMemo(() => {
-    if (!workingHours) return undefined;
-    
-    return {
-      startTime: workingHours.startTime,
-      endTime: workingHours.endTime,
-      daysOff: Object.entries(workingHours.daysOff)
-        .filter(([, isOpen]) => isOpen)
-        .map(([day]) => day)
-    };
-  }, [workingHours]);
-
   // Si en chargement
   if (loadingService) {
     return (
@@ -486,12 +476,19 @@ const Sidebar: React.FC = () => {
 
   // Afficher la page hors service
   if (showOutOfService) {
-    const state = location.state as any;
+    const workingHoursForDisplay = workingHours ? {
+      enabled: workingHours.enabled,
+      startTime: workingHours.startTime,
+      endTime: workingHours.endTime,
+      overtimeEndTime: workingHours.overtimeEndTime,
+      daysOff: workingHours.daysOff
+    } : undefined;
+
     return (
       <OutOfService 
-        workingHours={formattedWorkingHours}
-        message={state?.message || serviceStatus?.message}
-        nextServiceTime={state?.nextServiceTime || serviceStatus?.next_service_time}
+        workingHours={workingHoursForDisplay}
+        message={serviceStatus?.message || "L'application n'est pas disponible en dehors des heures de service."}
+        nextServiceTime={serviceStatus?.next_service_time}
       />
     );
   }
@@ -527,12 +524,74 @@ const Sidebar: React.FC = () => {
             <div className="text-xl sm:text-2xl font-bold text-blue-600 tracking-tight">
               MedigestPro
             </div>
-            <div className="text-[8px] sm:text-[10px] text-slate-400 uppercase font-bold mt-1 tracking-widest">
-              {formatRole(userRole)}
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-[8px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-widest">
+                {formatRole(userRole)}
+              </span>
+              {serviceStatus?.in_service && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-green-100 rounded-full">
+                  <span className="text-[6px] sm:text-[8px] text-green-700 font-bold">EN SERVICE</span>
+                </div>
+              )}
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            {/* Bouton d'information sur le service */}
+            <div className="relative">
+              <button
+                onClick={() => setShowServiceInfo(!showServiceInfo)}
+                onBlur={() => setTimeout(() => setShowServiceInfo(false), 200)}
+                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all relative"
+                aria-label="Informations service"
+                title="Temps de service restant"
+              >
+                <Info size={18} className="sm:w-5 sm:h-5" />
+                {timeRemaining && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                )}
+              </button>
+              
+              {/* Tooltip d'information */}
+              {showServiceInfo && (
+                <div className="absolute right-0 top-10 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-50 text-xs">
+                  <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-1">
+                    <Clock size={14} className="text-blue-500" />
+                    Horaires de service
+                  </h4>
+                  
+                  {workingHours && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-slate-600">
+                        <span>Heures:</span>
+                        <span className="font-medium">{workingHours.startTime} - {workingHours.endTime}</span>
+                      </div>
+                      
+                      {timeRemaining && (
+                        <div className="bg-green-50 p-2 rounded-lg">
+                          <p className="text-green-700 font-medium text-center">
+                            ⏳ Fermeture dans {timeRemaining}
+                          </p>
+                        </div>
+                      )}
+                      
+                      {workingHours.overtimeEndTime && (
+                        <div className="flex justify-between text-amber-600 text-[10px]">
+                          <span>Supplément:</span>
+                          <span>jusqu'à {workingHours.overtimeEndTime}</span>
+                        </div>
+                      )}
+                      
+                      <div className="border-t border-slate-100 pt-2 mt-1">
+                        <p className="text-[10px] text-slate-400 mb-1">Fuseau: {workingHours.timezone || 'Africa/Kinshasa'}</p>
+                        <p className="text-[10px] text-slate-400">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
             <button 
               onClick={() => setIsNotifOpen(true)}
               className={`relative p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all ${
@@ -548,11 +607,6 @@ const Sidebar: React.FC = () => {
                 </span>
               )}
             </button>
-            
-            {/* Indicateur de service */}
-            {serviceStatus?.in_service && (
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" title="Service actif" />
-            )}
             
             {/* Bouton fermer sur mobile */}
             {isMobile && isSidebarOpen && (
@@ -572,10 +626,6 @@ const Sidebar: React.FC = () => {
           <div className="px-3 sm:px-4 mt-4">
             <Link 
               to="/subscription"
-              onClick={(e) => {
-                e.preventDefault();
-                handleLinkClick(e, '/subscription');
-              }}
               className={`flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl border transition-all hover:scale-[1.02] ${
                 isExpired 
                   ? 'bg-red-50 border-red-100 text-red-700 hover:bg-red-100' 
@@ -628,16 +678,16 @@ const Sidebar: React.FC = () => {
                     const itemBadge = item.badge?.(alerts);
                     
                     return (
-                      <a
+                      <Link
                         key={item.label}
-                        href={item.href}
-                        onClick={(e) => handleLinkClick(e, item.href)}
+                        to={item.href}
                         className={`flex items-center justify-between gap-2 sm:gap-3 p-2 sm:p-2.5 rounded-lg transition-all group cursor-pointer ${
                           active 
                             ? 'bg-blue-600 text-white shadow-md shadow-blue-100' 
                             : 'text-slate-600 hover:bg-blue-50 hover:text-blue-600'
                         }`}
                         title={item.label}
+                        onClick={() => isMobile && setIsSidebarOpen(false)}
                       >
                         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                           <span className={`shrink-0 ${active ? 'text-white' : 'text-slate-400 group-hover:text-blue-600'}`}>
@@ -655,7 +705,7 @@ const Sidebar: React.FC = () => {
                             {itemBadge}
                           </span>
                         )}
-                      </a>
+                      </Link>
                     );
                   })}
                 </div>
@@ -684,6 +734,7 @@ const Sidebar: React.FC = () => {
                   </span>
                 )}
               </div>
+              
               <button 
                 onClick={handleLogout}
                 className="text-[9px] sm:text-[11px] text-red-500 font-bold hover:text-red-700 transition-colors flex items-center gap-1 mt-1"

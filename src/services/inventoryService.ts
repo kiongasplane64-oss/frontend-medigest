@@ -1,3 +1,4 @@
+// services/inventoryService.ts
 import api from '@/api/client';
 import type {
   // Transferts
@@ -158,6 +159,7 @@ class InventoryService {
     expiry_status?: string;
     barcode?: string;
     code?: string;
+    location?: string;
     is_active?: boolean;
   }): Promise<ProductListResponse> {
     const response = await api.get(`${this.stockBaseUrl}/`, {
@@ -282,7 +284,7 @@ class InventoryService {
   // STATISTIQUES ET ALERTES
   // =========================================================
 
-  async getStats(): Promise<StockStats> {
+  async getStats(): Promise<StockStats & { low_stock_threshold?: number }> {
     const response = await api.get(`${this.stockBaseUrl}/stats/overview`);
     return response.data;
   }

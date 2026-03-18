@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+// InventoryList.tsx (version finale corrigée)
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Search,
   Plus,
   RefreshCw,
   Download,
@@ -15,33 +15,36 @@ import {
   Edit2,
   Trash2,
   X,
-  ChevronUp,
-  ChevronDown,
   Clock,
   Grid,
   List,
   Filter,
   AlertTriangle,
-  ArrowRightLeft,
   FileBarChart2,
   ClipboardList,
   Boxes,
   ScanLine,
   Warehouse,
   CircleDollarSign,
+  DollarSign
 } from 'lucide-react';
 import Barcode from 'react-barcode';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 
 import { inventoryService } from '@/services/inventoryService';
-import type { Product, StockStats, Category } from '@/types/inventory.types';
-import { formatPrice } from '@/utils/formatters';
+import { locationService } from '@/services/locationService';
+import type { Product, StockStats, Category, Location } from '@/types/inventory.types';
+import { useCurrencyConfig } from '@/hooks/useCurrencyConfig';
+import { SearchInput } from '@/components/SearchInput';
+import { StatCardDetail } from '@/components/StatCardDetail';
 import ProductListView from '@/components/ProductListView';
 import ExportInventory from '@/components/ExportInventory';
 import AchatView from '@/components/AchatView';
 import ApprovisionnerView from '@/components/ApprovisionnerView';
 import CreateProductView from '@/components/CreateProductView';
 import InitialStockView from '@/components/InitialStockView';
+import MouvementsView from '@/components/MouvementsView';
+import RapportStockView from '@/components/RapportStockView';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 
 type SortDirection = 'asc' | 'desc';
@@ -61,22 +64,15 @@ interface ProductListResponse {
 interface StatCardProps {
   title: string;
   value: string | number;
-  icon: ReactNode;
+  icon: React.ReactNode;
   tone: 'blue' | 'green' | 'amber' | 'red' | 'violet';
   subtitle?: string;
-}
-
-interface SortableHeaderProps {
-  label: string;
-  sortKey: keyof Product;
-  currentSort: SortConfig | null;
-  onSort: (field: keyof Product) => void;
-  align?: 'left' | 'center' | 'right';
+  onClick?: () => void;
 }
 
 interface QuickActionButtonProps {
   label: string;
-  icon: ReactNode;
+  icon: React.ReactNode;
   onClick: () => void;
   variant?: 'default' | 'primary' | 'success' | 'warning';
 }
@@ -98,10 +94,8 @@ const serviceWithOptionalCategories = inventoryService as typeof inventoryServic
 function normalizeProductsResponse(data: unknown): Product[] {
   if (!data) return [];
   if (Array.isArray(data)) return data as Product[];
-
   const response = data as ProductListResponse;
   if (Array.isArray(response.products)) return response.products;
-
   return [];
 }
 
@@ -118,7 +112,7 @@ function getProductCode(product: Product): string {
 }
 
 function getBarcodeValue(product: Product): string {
-  return product.barcode || product.code || product.id;
+  return product.barcode || product.code || String(product.id);
 }
 
 function isProductExpired(product: Product): boolean {
@@ -128,13 +122,12 @@ function isProductExpired(product: Product): boolean {
   return d < new Date();
 }
 
-function isProductLowStock(product: Product): boolean {
+function isProductLowStock(product: Product, threshold: number = 10): boolean {
   const qty = Number(product.quantity ?? 0);
-  const threshold = Number(product.alert_threshold ?? 0);
   return qty <= threshold;
 }
 
-function getStockBadge(product: Product): {
+function getStockBadge(product: Product, threshold: number = 10): {
   label: string;
   className: string;
 } {
@@ -154,7 +147,7 @@ function getStockBadge(product: Product): {
     };
   }
 
-  if (isProductLowStock(product)) {
+  if (isProductLowStock(product, threshold)) {
     return {
       label: 'Faible',
       className: 'bg-amber-100 text-amber-700 border border-amber-200',
@@ -167,17 +160,22 @@ function getStockBadge(product: Product): {
   };
 }
 
-function StatCard({ title, value, icon, tone, subtitle }: StatCardProps) {
-  const tones: Record<StatCardProps['tone'], string> = {
-    blue: 'bg-blue-50 text-blue-600 border-blue-100',
-    green: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-    amber: 'bg-amber-50 text-amber-600 border-amber-100',
-    red: 'bg-red-50 text-red-600 border-red-100',
-    violet: 'bg-violet-50 text-violet-600 border-violet-100',
+function StatCard({ title, value, icon, tone, subtitle, onClick }: StatCardProps) {
+  const tones = {
+    blue: 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100',
+    green: 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100',
+    amber: 'bg-amber-50 text-amber-600 border-amber-100 hover:bg-amber-100',
+    red: 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100',
+    violet: 'bg-violet-50 text-violet-600 border-violet-100 hover:bg-violet-100',
   };
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg md:p-5">
+    <div
+      onClick={onClick}
+      className={`rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg md:p-5 ${
+        onClick ? 'cursor-pointer' : ''
+      }`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="mb-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
@@ -195,13 +193,8 @@ function StatCard({ title, value, icon, tone, subtitle }: StatCardProps) {
   );
 }
 
-function QuickActionButton({
-  label,
-  icon,
-  onClick,
-  variant = 'default',
-}: QuickActionButtonProps) {
-  const variants: Record<NonNullable<QuickActionButtonProps['variant']>, string> = {
+function QuickActionButton({ label, icon, onClick, variant = 'default' }: QuickActionButtonProps) {
+  const variants = {
     default: 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
     primary: 'bg-sky-600 text-white hover:bg-sky-700 shadow-lg shadow-sky-100',
     success: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-lg shadow-emerald-100',
@@ -214,54 +207,23 @@ function QuickActionButton({
       className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold transition-all active:scale-[0.98] ${variants[variant]}`}
     >
       {icon}
-      <span>{label}</span>
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
 }
 
-function SortableHeader({
-  label,
-  sortKey,
-  currentSort,
-  onSort,
-  align = 'left',
-}: SortableHeaderProps) {
-  const isActive = currentSort?.field === sortKey;
-
-  const thAlignClass =
-    align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : 'text-left';
-
-  const flexAlignClass =
-    align === 'center' ? 'justify-center' : align === 'right' ? 'justify-end' : 'justify-start';
-
-  return (
-    <th
-      className={`cursor-pointer px-3 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 transition-colors hover:text-sky-600 md:px-4 ${thAlignClass}`}
-      onClick={() => onSort(sortKey)}
-    >
-      <div className={`flex items-center gap-1 ${flexAlignClass}`}>
-        <span className="truncate">{label}</span>
-        <div className="flex flex-col opacity-40">
-          <ChevronUp
-            size={10}
-            className={isActive && currentSort?.direction === 'asc' ? 'text-sky-600 opacity-100' : ''}
-          />
-          <ChevronDown
-            size={10}
-            className={isActive && currentSort?.direction === 'desc' ? 'text-sky-600 opacity-100' : ''}
-          />
-        </div>
-      </div>
-    </th>
-  );
+interface InventoryListProps {
+  pharmacyId?: string;
 }
 
-export default function InventoryList() {
+export default function InventoryList({ pharmacyId }: InventoryListProps) {
   const queryClient = useQueryClient();
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const { formatPrice, primaryCurrency, isLoading: currencyLoading } = useCurrencyConfig(pharmacyId);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -274,6 +236,13 @@ export default function InventoryList() {
   const [showAchatModal, setShowAchatModal] = useState(false);
   const [showApproModal, setShowApproModal] = useState(false);
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
+  const [showMouvementsModal, setShowMouvementsModal] = useState(false);
+  const [showRapportModal, setShowRapportModal] = useState(false);
+  const [showStatDetail, setShowStatDetail] = useState<{
+    type: 'value' | 'margin' | 'lowstock' | 'expired' | 'purchase';
+    title: string;
+    data: any;
+  } | null>(null);
 
   const [barcodeToCreate, setBarcodeToCreate] = useState<string>('');
   const [showBarcodeCreateChoice, setShowBarcodeCreateChoice] = useState(false);
@@ -289,24 +258,25 @@ export default function InventoryList() {
     error: productsError,
     isFetching,
   } = useQuery({
-    queryKey: ['inventory-products', searchTerm, selectedCategory],
+    queryKey: ['inventory-products', searchTerm, selectedCategory, selectedLocation],
     queryFn: () =>
       inventoryService.getProducts({
         search: searchTerm || undefined,
         category: selectedCategory !== 'all' ? selectedCategory : undefined,
+        location: selectedLocation !== 'all' ? selectedLocation : undefined,
         limit: 1000,
       }),
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: stats, isLoading: statsLoading } = useQuery<StockStats>({
-    queryKey: ['inventory-stats'],
+  const { data: stats, isLoading: statsLoading } = useQuery<StockStats & { low_stock_threshold?: number }>({
+    queryKey: ['inventory-stats', pharmacyId],
     queryFn: () => inventoryService.getStats(),
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: alertsData } = useQuery({
-    queryKey: ['inventory-alerts'],
+    queryKey: ['inventory-alerts', pharmacyId],
     queryFn: async () => {
       if (typeof serviceWithOptionalCategories.getAlerts === 'function') {
         return serviceWithOptionalCategories.getAlerts();
@@ -317,7 +287,7 @@ export default function InventoryList() {
   });
 
   const { data: categories = [] } = useQuery<Category[]>({
-    queryKey: ['inventory-categories'],
+    queryKey: ['inventory-categories', pharmacyId],
     queryFn: async () => {
       if (typeof serviceWithOptionalCategories.getCategories === 'function') {
         return serviceWithOptionalCategories.getCategories();
@@ -349,6 +319,12 @@ export default function InventoryList() {
     enabled: true,
   });
 
+  const { data: locations = [] } = useQuery<Location[]>({
+    queryKey: ['inventory-locations', pharmacyId],
+    queryFn: () => locationService.getLocations(),
+    staleTime: 10 * 60 * 1000,
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => inventoryService.deleteProduct(id),
     onSuccess: async () => {
@@ -357,6 +333,7 @@ export default function InventoryList() {
         queryClient.invalidateQueries({ queryKey: ['inventory-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory-categories'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
+        queryClient.invalidateQueries({ queryKey: ['inventory-locations'] }),
       ]);
     },
     onError: (error) => {
@@ -390,7 +367,7 @@ export default function InventoryList() {
           (product) =>
             product.barcode === decodedText ||
             product.code === decodedText ||
-            product.id === decodedText,
+            String(product.id) === decodedText,
         );
 
         if (found) {
@@ -461,7 +438,7 @@ export default function InventoryList() {
 
   const inventoryHighlights = useMemo(() => {
     const total = products.length;
-    const low = products.filter(isProductLowStock).length;
+    const low = products.filter(p => isProductLowStock(p, stats?.low_stock_threshold)).length;
     const expired = products.filter(isProductExpired).length;
     const rupture = products.filter((p) => Number(p.quantity ?? 0) <= 0).length;
 
@@ -471,7 +448,7 @@ export default function InventoryList() {
       expired,
       rupture,
     };
-  }, [products]);
+  }, [products, stats]);
 
   const totalSelling = Number(stats?.total_value_selling ?? 0);
   const totalPurchase = Number(stats?.total_value_purchase ?? 0);
@@ -485,7 +462,6 @@ export default function InventoryList() {
           direction: prev.direction === 'asc' ? 'desc' : 'asc',
         };
       }
-
       return { field, direction: 'asc' };
     });
   };
@@ -583,6 +559,7 @@ export default function InventoryList() {
         queryClient.invalidateQueries({ queryKey: ['inventory-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory-categories'] }),
         queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
+        queryClient.invalidateQueries({ queryKey: ['inventory-locations'] }),
       ]);
     } catch (error) {
       console.error('Erreur import:', error);
@@ -595,12 +572,55 @@ export default function InventoryList() {
     setShowAddModal(true);
   };
 
-  if (productsLoading || statsLoading) {
+  const handleStatCardClick = (type: 'value' | 'margin' | 'lowstock' | 'expired' | 'purchase', title: string) => {
+    let data: any = {};
+
+    switch (type) {
+      case 'value':
+        data = {
+          purchaseValue: totalPurchase,
+          sellingValue: totalSelling,
+          profit: potentialMargin,
+          averageMargin: stats?.average_margin
+        };
+        break;
+      case 'margin':
+        data = {
+          totalMargin: potentialMargin,
+          byCategory: categories.map(cat => ({
+            category: cat.name,
+            profit: (potentialMargin * (cat.product_count || 1)) / (products.length || 1),
+            margin: stats?.average_margin || 0
+          }))
+        };
+        break;
+      case 'lowstock':
+        data = {
+          products: products.filter(p => isProductLowStock(p, stats?.low_stock_threshold)).slice(0, 10)
+        };
+        break;
+      case 'expired':
+        data = {
+          products: products.filter(isProductExpired).slice(0, 10)
+        };
+        break;
+      case 'purchase':
+        data = {
+          totalPurchase,
+          productCount: products.length
+        };
+        break;
+    }
+
+    setShowStatDetail({ type, title, data });
+  };
+
+  if (productsLoading || statsLoading || currencyLoading) {
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-6">
         <div className="mb-6 h-28 animate-pulse rounded-[28px] bg-slate-200" />
-        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
+          {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="h-28 animate-pulse rounded-3xl bg-slate-200" />
           ))}
         </div>
@@ -628,81 +648,57 @@ export default function InventoryList() {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#eef6ff,#f8fafc_45%,#f8fafc)] p-3 md:p-6">
+    <div className="min-h-screen bg-linear-to-br from-slate-50 via-white to-sky-50 p-3 md:p-6">
       <div className="mx-auto max-w-400 space-y-5">
-        <div className="overflow-hidden rounded-[30px] border border-slate-200 bg-linear-to-r from-slate-900 via-slate-800 to-sky-900 p-5 text-white shadow-xl md:p-7">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <div className="mb-2 flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 backdrop-blur">
-                  <Warehouse size={24} />
-                </div>
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.25em] text-sky-200">
-                    Gestion de stock
-                  </p>
-                  <h1 className="text-2xl font-black tracking-tight md:text-4xl">
-                    Tableau de bord inventaire
-                  </h1>
-                </div>
+        {/* Header avec titre simplifié */}
+        <div className="overflow-hidden rounded-[30px] border border-slate-200 bg-white p-5 shadow-md md:p-6">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-linear-to-br from-sky-500 to-blue-600 text-white shadow-lg">
+                <Warehouse size={24} />
               </div>
-
-              <p className="max-w-3xl text-sm text-slate-200 md:text-base">
-                Interface moderne de gestion des produits, mouvements, ruptures, achats,
-                approvisionnements et création rapide par code-barres.
-              </p>
+              <div>
+                <h1 className="text-2xl font-black tracking-tight text-slate-800 md:text-3xl">
+                  Inventaire
+                </h1>
+                <p className="text-sm text-slate-500">
+                  {products.length} produits • {inventoryHighlights.rupture} ruptures
+                </p>
+              </div>
             </div>
-
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:min-w-140">
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-sky-100">
-                  Produits
-                </p>
-                <p className="mt-1 text-2xl font-black">{inventoryHighlights.total}</p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-100">
-                  Faibles
-                </p>
-                <p className="mt-1 text-2xl font-black">{alertsData?.low_stock_count ?? inventoryHighlights.low}</p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-red-100">
-                  Ruptures
-                </p>
-                <p className="mt-1 text-2xl font-black">{inventoryHighlights.rupture}</p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-violet-100">
-                  Périmés
-                </p>
-                <p className="mt-1 text-2xl font-black">{alertsData?.expired_count ?? inventoryHighlights.expired}</p>
-              </div>
+            
+            <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-100 px-4 py-2 rounded-2xl">
+              <DollarSign size={16} className="text-sky-600" />
+              <span>Devise principale: {primaryCurrency}</span>
             </div>
           </div>
         </div>
 
+        {/* Cartes de statistiques cliquables */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
             title="Valeur du stock"
             value={formatPrice(totalSelling)}
             icon={<Package size={20} />}
             tone="blue"
-            subtitle={`${stats?.total_products ?? 0} produits enregistrés`}
+            subtitle={`${stats?.total_products ?? 0} produits`}
+            onClick={() => handleStatCardClick('value', 'Valeur du stock')}
           />
           <StatCard
             title="Marge potentielle"
             value={formatPrice(potentialMargin)}
             icon={<TrendingUp size={20} />}
             tone="green"
-            subtitle="Différence vente / achat"
+            subtitle={`${stats?.average_margin?.toFixed(1) || 0}% de marge`}
+            onClick={() => handleStatCardClick('margin', 'Marge potentielle')}
           />
           <StatCard
             title="Stock faible"
-            value={stats?.low_stock_count ?? inventoryHighlights.low}
+            value={alertsData?.low_stock_count ?? inventoryHighlights.low}
             icon={<AlertCircle size={20} />}
             tone="amber"
-            subtitle={`${stats?.out_of_stock_count ?? inventoryHighlights.rupture} en rupture`}
+            subtitle={`${inventoryHighlights.rupture} en rupture`}
+            onClick={() => handleStatCardClick('lowstock', 'Produits en stock faible')}
           />
           <StatCard
             title="Produits expirés"
@@ -710,276 +706,259 @@ export default function InventoryList() {
             icon={<Clock size={20} />}
             tone="red"
             subtitle={`${stats?.expiring_soon_count ?? 0} bientôt expirés`}
+            onClick={() => handleStatCardClick('expired', 'Produits expirés')}
           />
           <StatCard
             title="Valeur achat"
             value={formatPrice(totalPurchase)}
             icon={<CircleDollarSign size={20} />}
             tone="violet"
-            subtitle="Coût global du stock"
+            subtitle="Coût d'acquisition"
+            onClick={() => handleStatCardClick('purchase', "Valeur d'achat")}
           />
         </div>
 
+        {/* Barre d'actions */}
         <div className="rounded-[30px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div className="relative flex-1 xl:max-w-2xl">
-                <Search
-                  className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"
-                  size={18}
-                />
-                <input
-                  type="text"
-                  placeholder="Rechercher un produit, code, code-barres, fournisseur..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-10 text-sm font-semibold text-slate-700 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                />
-                {searchTerm ? (
-                  <button
-                    onClick={() => setSearchTerm('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
-                  >
-                    <X size={14} />
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:flex xl:flex-wrap xl:justify-end">
-                <QuickActionButton
-                  label="Importer"
-                  icon={<Upload size={16} />}
-                  onClick={() => {
-                    const input = document.getElementById('inventory-import-input') as HTMLInputElement | null;
-                    input?.click();
-                  }}
-                />
-                <QuickActionButton
-                  label="Exporter"
-                  icon={<Download size={16} />}
-                  onClick={() => setShowExportModal(true)}
-                />
-                <QuickActionButton
-                  label="Transfert"
-                  icon={<ArrowRightLeft size={16} />}
-                  onClick={() => window.alert('Vue transfert à connecter.')}
-                />
-                <QuickActionButton
-                  label="Achat"
-                  icon={<ShoppingCart size={16} />}
-                  onClick={() => setShowAchatModal(true)}
-                  variant="primary"
-                />
-                <QuickActionButton
-                  label="Approvisionner"
-                  icon={<RefreshCw size={16} />}
-                  onClick={() => {
-                    if (selectedProduct) {
-                      setShowApproModal(true);
-                    } else {
-                      window.alert('Sélectionnez d’abord un produit à approvisionner.');
-                    }
-                  }}
-                  variant="success"
-                />
-                <QuickActionButton
-                  label="Rapport stock"
-                  icon={<FileBarChart2 size={16} />}
-                  onClick={() => window.alert('Module rapport stock à connecter.')}
-                />
-                <QuickActionButton
-                  label="Mouvements"
-                  icon={<ClipboardList size={16} />}
-                  onClick={() => window.alert('Module mouvements à connecter.')}
-                />
-                <QuickActionButton
-                  label="Ajouter produit"
-                  icon={<Plus size={16} />}
-                  onClick={() => setShowAddModal(true)}
-                  variant="warning"
-                />
-              </div>
-            </div>
-
-            <input
-              id="inventory-import-input"
-              hidden
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void handleImport(file);
-                e.currentTarget.value = '';
-              }}
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Recherche élargie */}
+            <SearchInput
+              value={searchTerm}
+              onChange={setSearchTerm}
+              onSelect={setSelectedProduct}
+              products={products}
+              placeholder="Rechercher par nom, code, fournisseur..."
+              pharmacyId={pharmacyId}
             />
 
+            {/* Boutons d'action */}
             <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setShowFilters((prev) => !prev)}
-                className={`rounded-2xl px-4 py-2.5 text-sm font-bold transition-colors ${
-                  showFilters || selectedCategory !== 'all'
-                    ? 'bg-sky-600 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <span className="inline-flex items-center gap-2">
-                  <Filter size={16} />
-                  Filtres
-                </span>
-              </button>
+              <QuickActionButton
+                label="Achat"
+                icon={<ShoppingCart size={16} />}
+                onClick={() => setShowAchatModal(true)}
+                variant="primary"
+              />
+              <QuickActionButton
+                label="Appro"
+                icon={<RefreshCw size={16} />}
+                onClick={() => {
+                  if (selectedProduct) {
+                    setShowApproModal(true);
+                  } else {
+                    window.alert('Sélectionnez d’abord un produit');
+                  }
+                }}
+                variant="success"
+              />
+              <QuickActionButton
+                label="Ajouter"
+                icon={<Plus size={16} />}
+                onClick={() => setShowAddModal(true)}
+                variant="warning"
+              />
+              <QuickActionButton
+                label="Importer"
+                icon={<Upload size={16} />}
+                onClick={() => {
+                  const input = document.getElementById('inventory-import-input') as HTMLInputElement | null;
+                  input?.click();
+                }}
+              />
+              <QuickActionButton
+                label="Exporter"
+                icon={<Download size={16} />}
+                onClick={() => setShowExportModal(true)}
+              />
+              <QuickActionButton
+                label="Mouvements"
+                icon={<ClipboardList size={16} />}
+                onClick={() => setShowMouvementsModal(true)}
+              />
+              <QuickActionButton
+                label="Rapport"
+                icon={<FileBarChart2 size={16} />}
+                onClick={() => setShowRapportModal(true)}
+              />
+              <QuickActionButton
+                label="Scanner"
+                icon={<ScanLine size={16} />}
+                onClick={() => setIsScanning(true)}
+              />
+            </div>
+          </div>
 
-              <button
-                onClick={() => setViewMode((prev) => (prev === 'list' ? 'grid' : 'list'))}
-                className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
-              >
-                <span className="inline-flex items-center gap-2">
-                  {viewMode === 'list' ? <Grid size={16} /> : <List size={16} />}
-                  {viewMode === 'list' ? 'Vue grille' : 'Vue liste'}
-                </span>
-              </button>
+          <input
+            id="inventory-import-input"
+            hidden
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleImport(file);
+              e.currentTarget.value = '';
+            }}
+          />
 
-              <button
-                onClick={() => setShowProductList(true)}
-                className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <Eye size={16} />
-                  Tous les produits
-                </span>
-              </button>
+          {/* Barre de filtres */}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`rounded-2xl px-4 py-2.5 text-sm font-bold transition-colors ${
+                showFilters || selectedCategory !== 'all' || selectedLocation !== 'all'
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span className="inline-flex items-center gap-2">
+                <Filter size={16} />
+                Filtres
+              </span>
+            </button>
 
-              <button
-                onClick={() => setShowInitialStockModal(true)}
-                className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <Boxes size={16} />
-                  Stock initial
-                </span>
-              </button>
+            <button
+              onClick={() => setViewMode(prev => prev === 'list' ? 'grid' : 'list')}
+              className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
+            >
+              <span className="inline-flex items-center gap-2">
+                {viewMode === 'list' ? <Grid size={16} /> : <List size={16} />}
+                {viewMode === 'list' ? 'Grille' : 'Liste'}
+              </span>
+            </button>
 
-              <button
-                onClick={() => setIsScanning((prev) => !prev)}
-                className={`rounded-2xl px-4 py-2.5 text-sm font-bold transition-colors ${
-                  isScanning
-                    ? 'bg-red-500 text-white hover:bg-red-600'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <span className="inline-flex items-center gap-2">
-                  <ScanLine size={16} />
-                  Capture code-barres
-                </span>
-              </button>
+            <button
+              onClick={() => setShowProductList(true)}
+              className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Eye size={16} />
+                Tout voir
+              </span>
+            </button>
 
-              <button
-                onClick={() => refetch()}
-                className={`rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200 ${
-                  isFetching ? 'animate-pulse' : ''
-                }`}
+            <button
+              onClick={() => setShowInitialStockModal(true)}
+              className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Boxes size={16} />
+                Stock initial
+              </span>
+            </button>
+
+            <button
+              onClick={() => refetch()}
+              className={`rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200 ${
+                isFetching ? 'animate-pulse' : ''
+              }`}
+            >
+              <span className="inline-flex items-center gap-2">
+                <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
+                Rafraîchir
+              </span>
+            </button>
+          </div>
+
+          {/* Panneau de filtres */}
+          {showFilters && (
+            <div className="mt-4 grid gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-3">
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
               >
-                <span className="inline-flex items-center gap-2">
-                  <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
-                  Rafraîchir
-                </span>
+                <option value="all">Toutes les catégories</option>
+                {categories.map((cat) => (
+                  <option key={String(cat.id)} value={cat.name}>
+                    {cat.name} {cat.product_count ? `(${cat.product_count})` : ''}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={selectedLocation}
+                onChange={(e) => setSelectedLocation(e.target.value)}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="all">Tous les emplacements</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name} {loc.product_count ? `(${loc.product_count})` : ''}
+                  </option>
+                ))}
+              </select>
+
+              <select className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100">
+                <option>État du stock : tous</option>
+                <option>En stock</option>
+                <option>Stock faible</option>
+                <option>Rupture</option>
+                <option>Périmé</option>
+              </select>
+            </div>
+          )}
+
+          {/* Scanner */}
+          {isScanning && (
+            <div className="relative mt-4 overflow-hidden rounded-3xl border-4 border-sky-500 bg-black">
+              <div id="reader" className="w-full" />
+              <button
+                onClick={() => setIsScanning(false)}
+                className="absolute right-3 top-3 rounded-xl bg-black/60 p-2 text-white hover:bg-black/80"
+              >
+                <X size={16} />
               </button>
             </div>
-
-            {showFilters ? (
-              <div className="grid gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 md:grid-cols-3">
-                <select
-                  value={selectedCategory}
-                  onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
-                >
-                  <option value="all">Toutes les catégories</option>
-                  {categories.map((cat) => (
-                    <option key={String(cat.id)} value={cat.name}>
-                      {cat.name}
-                      {cat.product_count ? ` (${cat.product_count})` : ''}
-                    </option>
-                  ))}
-                </select>
-
-                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
-                  Fournisseur : tous
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
-                  État du stock : tous
-                </div>
-              </div>
-            ) : null}
-
-            {isScanning ? (
-              <div className="relative overflow-hidden rounded-3xl border-4 border-sky-500 bg-black">
-                <div id="reader" className="w-full" />
-                <button
-                  onClick={() => setIsScanning(false)}
-                  className="absolute right-3 top-3 rounded-xl bg-black/60 p-2 text-white hover:bg-black/80"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            ) : null}
-          </div>
+          )}
         </div>
 
+        {/* Liste/Grille des produits */}
         <div className="overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-3">
             <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-600">
               <span className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-3 py-1 text-blue-700">
                 <Package size={14} />
-                Total produits : {inventoryHighlights.total}
+                {products.length} produits
               </span>
               <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-amber-700">
                 <AlertCircle size={14} />
-                Produits faibles : {alertsData?.low_stock_count ?? inventoryHighlights.low}
+                {alertsData?.low_stock_count ?? inventoryHighlights.low} faibles
               </span>
               <span className="inline-flex items-center gap-2 rounded-full bg-red-100 px-3 py-1 text-red-700">
                 <Clock size={14} />
-                Ruptures : {inventoryHighlights.rupture}
+                {inventoryHighlights.rupture} ruptures
               </span>
+              {primaryCurrency && (
+                <span className="inline-flex items-center gap-2 rounded-full bg-purple-100 px-3 py-1 text-purple-700">
+                  <DollarSign size={14} />
+                  {primaryCurrency}
+                </span>
+              )}
             </div>
           </div>
 
           {viewMode === 'list' ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-275">
+              <table className="w-full min-w-200">
                 <thead className="border-b border-slate-100 bg-white">
                   <tr>
-                    <SortableHeader
-                      label="Code"
-                      sortKey="code"
-                      currentSort={sortConfig}
-                      onSort={handleSort}
-                    />
-                    <SortableHeader
-                      label="Produit"
-                      sortKey="name"
-                      currentSort={sortConfig}
-                      onSort={handleSort}
-                    />
-                    <SortableHeader
-                      label="Catégorie"
-                      sortKey="category"
-                      currentSort={sortConfig}
-                      onSort={handleSort}
-                    />
-                    <SortableHeader
-                      label="Stock"
-                      sortKey="quantity"
-                      currentSort={sortConfig}
-                      onSort={handleSort}
-                      align="center"
-                    />
-                    <SortableHeader
-                      label="Prix détail"
-                      sortKey="selling_price"
-                      currentSort={sortConfig}
-                      onSort={handleSort}
-                      align="right"
-                    />
+                    <th className="px-3 py-3 text-left text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">#</th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 cursor-pointer hover:text-sky-600" onClick={() => handleSort('name')}>
+                      Produit {sortConfig?.field === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="px-3 py-3 text-left text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Catégorie</th>
+                    <th className="px-3 py-3 text-center text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 cursor-pointer hover:text-sky-600" onClick={() => handleSort('quantity')}>
+                      Stock {sortConfig?.field === 'quantity' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="px-3 py-3 text-right text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 cursor-pointer hover:text-sky-600" onClick={() => handleSort('selling_price')}>
+                      Prix vente {sortConfig?.field === 'selling_price' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="px-3 py-3 text-right text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 cursor-pointer hover:text-sky-600" onClick={() => handleSort('purchase_price')}>
+                      Prix achat {sortConfig?.field === 'purchase_price' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="px-3 py-3 text-right text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+                      Profit
+                    </th>
                     <th className="px-3 py-3 text-center text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
                       État
                     </th>
@@ -991,13 +970,14 @@ export default function InventoryList() {
 
                 <tbody className="divide-y divide-slate-100">
                   {displayedProducts.map((product, index) => {
-                    const lowStock = isProductLowStock(product);
+                    const lowStock = isProductLowStock(product, stats?.low_stock_threshold);
                     const expired = isProductExpired(product);
-                    const badge = getStockBadge(product);
+                    const badge = getStockBadge(product, stats?.low_stock_threshold);
+                    const profit = (product.selling_price - product.purchase_price) * product.quantity;
 
                     return (
                       <tr
-                        key={product.id}
+                        key={String(product.id)}
                         className={`transition-colors hover:bg-sky-50/40 ${
                           expired ? 'bg-red-50/50' : lowStock ? 'bg-amber-50/40' : 'bg-white'
                         }`}
@@ -1015,7 +995,7 @@ export default function InventoryList() {
                               </p>
                               <p className="truncate text-xs font-semibold text-slate-400">
                                 {getProductCode(product)}
-                                {product.supplier ? ` • ${product.supplier}` : ''}
+                                {product.location && ` • ${product.location}`}
                               </p>
                             </div>
                           </div>
@@ -1027,7 +1007,7 @@ export default function InventoryList() {
 
                         <td className="px-3 py-3 text-center">
                           <span
-                            className={`inline-flex min-w-16.5 items-center justify-center rounded-full px-3 py-1 text-xs font-black ${
+                            className={`inline-flex min-w-16 items-center justify-center rounded-full px-3 py-1 text-xs font-black ${
                               lowStock
                                 ? 'bg-amber-100 text-amber-700'
                                 : 'bg-emerald-100 text-emerald-700'
@@ -1041,6 +1021,16 @@ export default function InventoryList() {
                           {formatPrice(product.selling_price)}
                         </td>
 
+                        <td className="px-3 py-3 text-right text-sm font-black text-slate-500">
+                          {formatPrice(product.purchase_price)}
+                        </td>
+
+                        <td className="px-3 py-3 text-right">
+                          <span className="text-sm font-black text-emerald-600">
+                            {formatPrice(profit)}
+                          </span>
+                        </td>
+
                         <td className="px-3 py-3 text-center">
                           <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${badge.className}`}>
                             {badge.label}
@@ -1048,63 +1038,51 @@ export default function InventoryList() {
                         </td>
 
                         <td className="px-3 py-3">
-                          <div className="flex flex-wrap justify-center gap-2">
+                          <div className="flex flex-wrap justify-center gap-1">
                             <button
                               onClick={() => {
                                 setSelectedProduct(product);
                                 setShowApproModal(true);
                               }}
-                              className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+                              className="rounded-xl bg-emerald-600 p-2 text-white hover:bg-emerald-700"
                               title="Approvisionner"
                             >
-                              <span className="inline-flex items-center gap-1">
-                                <RefreshCw size={12} />
-                                Appro
-                              </span>
+                              <RefreshCw size={14} />
                             </button>
 
                             <button
-                              onClick={() => window.alert(`Mouvements du produit ${product.name} à connecter.`)}
-                              className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                              onClick={() => {
+                                setSelectedProduct(product);
+                                setShowMouvementsModal(true);
+                              }}
+                              className="rounded-xl bg-blue-600 p-2 text-white hover:bg-blue-700"
                               title="Mouvements"
                             >
-                              <span className="inline-flex items-center gap-1">
-                                <ClipboardList size={12} />
-                                Mouv.
-                              </span>
+                              <ClipboardList size={14} />
                             </button>
 
                             <button
                               onClick={() => handlePrintLabel(product)}
-                              className="rounded-xl bg-amber-500 px-3 py-2 text-xs font-bold text-white hover:bg-amber-600"
-                              title="Imprimer"
+                              className="rounded-xl bg-amber-500 p-2 text-white hover:bg-amber-600"
+                              title="Imprimer étiquette"
                             >
-                              <span className="inline-flex items-center gap-1">
-                                <Printer size={12} />
-                                Étiquette
-                              </span>
+                              <Printer size={14} />
                             </button>
 
                             <button
                               onClick={() => setSelectedProduct(product)}
-                              className="rounded-xl bg-slate-700 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+                              className="rounded-xl bg-slate-700 p-2 text-white hover:bg-slate-800"
                               title="Modifier"
                             >
-                              <span className="inline-flex items-center gap-1">
-                                <Edit2 size={12} />
-                                Modifier
-                              </span>
+                              <Edit2 size={14} />
                             </button>
 
                             <button
-                              onClick={() => handleDelete(product.id)}
-                              className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                              onClick={() => handleDelete(String(product.id))}
+                              className="rounded-xl bg-red-600 p-2 text-white hover:bg-red-700"
                               title="Supprimer"
                             >
-                              <span className="inline-flex items-center gap-1">
-                                <Trash2 size={12} />
-                                Suppr.
-                              </span>
+                              <Trash2 size={14} />
                             </button>
                           </div>
                         </td>
@@ -1117,13 +1095,13 @@ export default function InventoryList() {
           ) : (
             <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-3 xl:grid-cols-5">
               {displayedProducts.map((product) => {
-                const lowStock = isProductLowStock(product);
+                const lowStock = isProductLowStock(product, stats?.low_stock_threshold);
                 const expired = isProductExpired(product);
-                const badge = getStockBadge(product);
+                const badge = getStockBadge(product, stats?.low_stock_threshold);
 
                 return (
                   <div
-                    key={product.id}
+                    key={String(product.id)}
                     className={`rounded-3xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg ${
                       expired
                         ? 'border-red-200 bg-red-50/40'
@@ -1171,9 +1149,15 @@ export default function InventoryList() {
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Prix détail</span>
+                        <span className="text-slate-500">Prix</span>
                         <span className="font-black text-sky-600">
                           {formatPrice(product.selling_price)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Emplacement</span>
+                        <span className="font-bold text-slate-600">
+                          {product.location || 'Principal'}
                         </span>
                       </div>
                     </div>
@@ -1195,16 +1179,19 @@ export default function InventoryList() {
                         Étiquette
                       </button>
                       <button
-                        onClick={() => setSelectedProduct(product)}
-                        className="rounded-xl bg-slate-700 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+                        onClick={() => {
+                          setSelectedProduct(product);
+                          setShowMouvementsModal(true);
+                        }}
+                        className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
                       >
-                        Modifier
+                        Mouv.
                       </button>
                       <button
-                        onClick={() => handleDelete(product.id)}
+                        onClick={() => handleDelete(String(product.id))}
                         className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
                       >
-                        Supprimer
+                        Suppr.
                       </button>
                     </div>
                   </div>
@@ -1213,19 +1200,19 @@ export default function InventoryList() {
             </div>
           )}
 
-          {sortedProducts.length === 0 ? (
+          {sortedProducts.length === 0 && (
             <div className="px-4 py-16 text-center">
               <Package className="mx-auto mb-4 h-12 w-12 text-slate-300" />
               <p className="text-base font-black text-slate-500">Aucun produit trouvé</p>
               <p className="mt-2 text-sm text-slate-400">
-                {searchTerm || selectedCategory !== 'all'
-                  ? 'Essayez de modifier les filtres ou la recherche.'
-                  : 'Ajoutez votre premier produit ou importez votre stock.'}
+                {searchTerm || selectedCategory !== 'all' || selectedLocation !== 'all'
+                  ? 'Essayez de modifier les filtres'
+                  : 'Ajoutez votre premier produit'}
               </p>
             </div>
-          ) : null}
+          )}
 
-          {sortedProducts.length > displayedProducts.length ? (
+          {sortedProducts.length > displayedProducts.length && (
             <div className="border-t border-slate-100 px-4 py-4">
               <button
                 onClick={() => setShowProductList(true)}
@@ -1234,34 +1221,35 @@ export default function InventoryList() {
                 Voir tous les produits ({sortedProducts.length})
               </button>
             </div>
-          ) : null}
+          )}
         </div>
 
-        {isMobile ? (
-          <div className="fixed bottom-4 left-4 right-4 z-40 grid grid-cols-2 gap-3 md:hidden">
+        {/* FAB mobile */}
+        {isMobile && (
+          <div className="fixed bottom-4 left-4 right-4 z-40 grid grid-cols-3 gap-3">
             <button
               onClick={() => setShowAchatModal(true)}
-              className="rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white shadow-lg shadow-sky-100"
+              className="rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white shadow-lg"
             >
-              <span className="inline-flex items-center justify-center gap-2">
-                <ShoppingCart size={16} />
-                Achat
-              </span>
+              Achat
             </button>
-
             <button
               onClick={() => setShowAddModal(true)}
-              className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white shadow-lg shadow-emerald-100"
+              className="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-black text-white shadow-lg"
             >
-              <span className="inline-flex items-center justify-center gap-2">
-                <Plus size={16} />
-                Produit
-              </span>
+              Produit
+            </button>
+            <button
+              onClick={() => setIsScanning(true)}
+              className="rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg"
+            >
+              Scan
             </button>
           </div>
-        ) : null}
+        )}
 
-        {showBarcodeCreateChoice ? (
+        {/* Modals */}
+        {showBarcodeCreateChoice && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
             <div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-2xl">
               <div className="mb-4 flex items-center gap-3">
@@ -1271,7 +1259,7 @@ export default function InventoryList() {
                 <div>
                   <h3 className="text-lg font-black text-slate-900">Code-barres détecté</h3>
                   <p className="text-sm text-slate-500">
-                    Aucun produit n&apos;est lié à ce code.
+                    Aucun produit n'est lié à ce code.
                   </p>
                 </div>
               </div>
@@ -1301,9 +1289,9 @@ export default function InventoryList() {
               </div>
             </div>
           </div>
-        ) : null}
+        )}
 
-        {showAddModal ? (
+        {showAddModal && (
           <CreateProductView
             open={showAddModal}
             onClose={() => {
@@ -1323,10 +1311,11 @@ export default function InventoryList() {
                   }
                 : undefined
             }
+            pharmacyId={pharmacyId}
           />
-        ) : null}
+        )}
 
-        {showProductList ? (
+        {showProductList && (
           <ProductListView
             open={showProductList}
             onClose={() => setShowProductList(false)}
@@ -1337,9 +1326,9 @@ export default function InventoryList() {
             }}
             onPrintLabel={handlePrintLabel}
           />
-        ) : null}
+        )}
 
-        {showExportModal ? (
+        {showExportModal && (
           <ExportInventory
             open={showExportModal}
             onClose={() => setShowExportModal(false)}
@@ -1348,9 +1337,9 @@ export default function InventoryList() {
               category: selectedCategory !== 'all' ? selectedCategory : undefined,
             }}
           />
-        ) : null}
+        )}
 
-        {showAchatModal ? (
+        {showAchatModal && (
           <AchatView
             open={showAchatModal}
             onClose={() => setShowAchatModal(false)}
@@ -1359,9 +1348,9 @@ export default function InventoryList() {
               setShowAchatModal(false);
             }}
           />
-        ) : null}
+        )}
 
-        {showApproModal && selectedProduct ? (
+        {showApproModal && selectedProduct && (
           <ApprovisionnerView
             open={showApproModal}
             onClose={() => {
@@ -1375,9 +1364,9 @@ export default function InventoryList() {
               setSelectedProduct(null);
             }}
           />
-        ) : null}
+        )}
 
-        {showInitialStockModal ? (
+        {showInitialStockModal && (
           <InitialStockView
             open={showInitialStockModal}
             onClose={() => setShowInitialStockModal(false)}
@@ -1386,7 +1375,38 @@ export default function InventoryList() {
               setShowInitialStockModal(false);
             }}
           />
-        ) : null}
+        )}
+
+        {showMouvementsModal && (
+          <MouvementsView
+            open={showMouvementsModal}
+            onClose={() => {
+              setShowMouvementsModal(false);
+              setSelectedProduct(null);
+            }}
+            productId={selectedProduct ? String(selectedProduct.id) : undefined}
+            productName={selectedProduct?.name}
+            pharmacyId={pharmacyId}
+          />
+        )}
+
+        {showRapportModal && (
+          <RapportStockView
+            open={showRapportModal}
+            onClose={() => setShowRapportModal(false)}
+            pharmacyId={pharmacyId}
+          />
+        )}
+
+        {showStatDetail && (
+          <StatCardDetail
+            title={showStatDetail.title}
+            type={showStatDetail.type}
+            data={showStatDetail.data}
+            onClose={() => setShowStatDetail(null)}
+            pharmacyId={pharmacyId}
+          />
+        )}
       </div>
     </div>
   );

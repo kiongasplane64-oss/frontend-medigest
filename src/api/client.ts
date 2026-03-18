@@ -32,211 +32,165 @@ const api: AxiosInstance = axios.create({
   },
 });
 
-function logInfo(message: string, extra?: unknown): void {
+// Fonctions de logging simplifiées
+const logInfo = (message: string, extra?: unknown) => 
   console.log(`ℹ️ ${message}`, extra ?? '');
-}
-
-function logSuccess(message: string, extra?: unknown): void {
+const logSuccess = (message: string, extra?: unknown) => 
   console.log(`✅ ${message}`, extra ?? '');
-}
-
-function logWarning(message: string, extra?: unknown): void {
+const logWarning = (message: string, extra?: unknown) => 
   console.warn(`⚠️ ${message}`, extra ?? '');
-}
-
-function logError(message: string, extra?: unknown): void {
+const logError = (message: string, extra?: unknown) => 
   console.error(`❌ ${message}`, extra ?? '');
-}
 
-function safeLocalStorageGet(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch (error) {
-    logError(`Impossible de lire localStorage[${key}]`, error);
-    return null;
+// Gestion sécurisée du localStorage
+const safeLocalStorage = {
+  get: (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logError(`Impossible de lire localStorage[${key}]`, error);
+      return null;
+    }
+  },
+  set: (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      logError(`Impossible d'écrire localStorage[${key}]`, error);
+    }
+  },
+  remove: (key: string): void => {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      logError(`Impossible de supprimer localStorage[${key}]`, error);
+    }
   }
-}
+};
 
-function safeLocalStorageSet(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch (error) {
-    logError(`Impossible d'écrire localStorage[${key}]`, error);
-  }
-}
-
-function safeLocalStorageRemove(key: string): void {
-  try {
-    window.localStorage.removeItem(key);
-  } catch (error) {
-    logError(`Impossible de supprimer localStorage[${key}]`, error);
-  }
-}
-
-function getStoredAccessToken(): string | null {
+// Récupération des tokens depuis le store ou localStorage
+const getStoredAccessToken = (): string | null => {
   try {
     const state = useAuthStore.getState();
-    return state.token ?? safeLocalStorageGet(ACCESS_TOKEN_KEY);
+    return state.token || safeLocalStorage.get(ACCESS_TOKEN_KEY);
   } catch (error) {
-    logError("Impossible de lire le token d'accès", error);
-    return safeLocalStorageGet(ACCESS_TOKEN_KEY);
+    logError("Erreur lecture token", error);
+    return safeLocalStorage.get(ACCESS_TOKEN_KEY);
   }
-}
+};
 
-function getStoredRefreshToken(): string | null {
+const getStoredRefreshToken = (): string | null => {
   try {
-    const state = useAuthStore.getState() as {
-      refreshToken?: string | null;
-    };
-    return state.refreshToken ?? safeLocalStorageGet(REFRESH_TOKEN_KEY);
+    const state = useAuthStore.getState();
+    return state.refreshToken || safeLocalStorage.get(REFRESH_TOKEN_KEY);
   } catch (error) {
-    logError('Impossible de lire le refresh token', error);
-    return safeLocalStorageGet(REFRESH_TOKEN_KEY);
+    logError("Erreur lecture refresh token", error);
+    return safeLocalStorage.get(REFRESH_TOKEN_KEY);
   }
-}
+};
 
-function getCurrentPharmacyId(): string | null {
+// Récupération des IDs de contexte
+const getCurrentPharmacyId = (): string | null => {
   try {
-    const state = useAuthStore.getState() as {
-      currentPharmacyId?: string | null;
-    };
-    return state.currentPharmacyId ?? null;
+    const state = useAuthStore.getState();
+    return state.user?.pharmacy_id || null;
   } catch (error) {
-    logError("Impossible de lire la pharmacie courante", error);
+    logError("Erreur lecture pharmacie", error);
     return null;
   }
-}
+};
 
-function getCurrentTenantId(): string | null {
+const getCurrentTenantId = (): string | null => {
   try {
-    const state = useAuthStore.getState() as {
-      tenantId?: string | null;
-      currentTenantId?: string | null;
-      user?: { tenant_id?: string | null } | null;
-    };
-
-    return (
-      state.currentTenantId ??
-      state.tenantId ??
-      state.user?.tenant_id ??
-      null
-    );
+    const state = useAuthStore.getState();
+    return state.user?.tenant_id || null;
   } catch (error) {
-    logError("Impossible de lire le tenant courant", error);
+    logError("Erreur lecture tenant", error);
     return null;
   }
-}
+};
 
-function clearStoredTokens(): void {
-  safeLocalStorageRemove(ACCESS_TOKEN_KEY);
-  safeLocalStorageRemove(REFRESH_TOKEN_KEY);
-}
+// Gestion des tokens
+const clearStoredTokens = (): void => {
+  safeLocalStorage.remove(ACCESS_TOKEN_KEY);
+  safeLocalStorage.remove(REFRESH_TOKEN_KEY);
+};
 
-function setStoredTokens(accessToken?: string, refreshToken?: string): void {
+const setStoredTokens = (accessToken?: string, refreshToken?: string): void => {
   if (accessToken) {
-    safeLocalStorageSet(ACCESS_TOKEN_KEY, accessToken);
+    safeLocalStorage.set(ACCESS_TOKEN_KEY, accessToken);
   }
-
   if (refreshToken) {
-    safeLocalStorageSet(REFRESH_TOKEN_KEY, refreshToken);
+    safeLocalStorage.set(REFRESH_TOKEN_KEY, refreshToken);
   }
 
+  // Mise à jour du store si les méthodes existent
   try {
-    const state = useAuthStore.getState() as {
-      setToken?: (token: string) => void;
-      setAccessToken?: (token: string) => void;
-      setRefreshToken?: (token: string) => void;
-      setTokens?: (accessToken: string, refreshToken?: string) => void;
-    };
-
-    if (accessToken && typeof state.setTokens === 'function') {
-      state.setTokens(accessToken, refreshToken);
-      return;
-    }
-
-    if (accessToken && typeof state.setAccessToken === 'function') {
-      state.setAccessToken(accessToken);
-    } else if (accessToken && typeof state.setToken === 'function') {
-      state.setToken(accessToken);
-    }
-
-    if (refreshToken && typeof state.setRefreshToken === 'function') {
-      state.setRefreshToken(refreshToken);
-    }
+    const state = useAuthStore.getState() as any;
+    if (accessToken && state.setToken) state.setToken(accessToken);
+    if (refreshToken && state.setRefreshToken) state.setRefreshToken(refreshToken);
   } catch (error) {
-    logError("Impossible de synchroniser les tokens avec le store", error);
+    logError("Erreur synchronisation store", error);
   }
-}
+};
 
-function forceLogout(): void {
+// Déconnexion forcée
+const forceLogout = (): void => {
   try {
-    const state = useAuthStore.getState() as {
-      logout?: () => void;
-      clearAuth?: () => void;
-    };
-
-    if (typeof state.logout === 'function') {
+    const state = useAuthStore.getState() as any;
+    if (state.logout) {
       state.logout();
-    } else if (typeof state.clearAuth === 'function') {
+    } else if (state.clearAuth) {
       state.clearAuth();
     }
   } catch (error) {
-    logError('Erreur pendant la déconnexion', error);
+    logError('Erreur déconnexion', error);
   } finally {
     clearStoredTokens();
+    if (!window.location.pathname.includes('/login')) {
+      window.location.replace('/login');
+    }
   }
-}
+};
 
-function isAuthRoute(url?: string): boolean {
+// Vérification des routes
+const isAuthRoute = (url?: string): boolean => {
   if (!url) return false;
+  const authPaths = [
+    '/auth/login', '/auth/register', '/auth/refresh',
+    '/auth/password/reset/request', '/auth/password/reset/confirm',
+    '/auth/verify-sms', '/auth/resend-sms', '/auth/login-with-code'
+  ];
+  return authPaths.some(path => url.includes(path));
+};
 
-  return [
-    '/auth/login',
-    '/auth/register',
-    '/auth/password/reset/request',
-    '/auth/password/reset/confirm',
-    '/auth/verify-sms',
-    '/auth/resend-sms',
-    '/auth/login-with-code',
-    '/auth/refresh',
-  ].some((path) => url.includes(path));
-}
-
-function isPublicRoute(url?: string): boolean {
+const isPublicRoute = (url?: string): boolean => {
   if (!url) return false;
+  const publicPaths = ['/health', '/subscriptions/plans', '/openapi.json'];
+  return publicPaths.some(path => url.includes(path));
+};
 
-  return [
-    '/health',
-    '/subscriptions/plans',
-    '/openapi.json',
-  ].some((path) => url.includes(path));
-}
-
-function shouldAttachJsonContentType(config: InternalAxiosRequestConfig): boolean {
+// Vérification du content-type
+const shouldAttachJsonContentType = (config: InternalAxiosRequestConfig): boolean => {
   const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
+  const isFileUpload = config.data instanceof Blob || config.data instanceof File;
   const responseType = config.responseType;
+  
+  return !isFormData && !isFileUpload && responseType !== 'blob' && responseType !== 'arraybuffer';
+};
 
-  if (isFormData) return false;
-  if (responseType === 'blob' || responseType === 'arraybuffer') return false;
+// Normalisation des headers
+const normalizeHeaders = (config: InternalAxiosRequestConfig): AxiosHeaders => {
+  return config.headers instanceof AxiosHeaders
+    ? config.headers
+    : new AxiosHeaders(config.headers || {});
+};
 
-  return true;
-}
-
-function normalizeHeaders(
-  config: InternalAxiosRequestConfig,
-): AxiosHeaders {
-  const headers =
-    config.headers instanceof AxiosHeaders
-      ? config.headers
-      : new AxiosHeaders(config.headers ?? {});
-
-  config.headers = headers;
-  return headers;
-}
-
+// Gestion du refresh token
 let refreshPromise: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
+const refreshAccessToken = async (): Promise<string | null> => {
+  // Si un refresh est déjà en cours, on retourne la même promesse
   if (refreshPromise) {
     return refreshPromise;
   }
@@ -259,25 +213,24 @@ async function refreshAccessToken(): Promise<string | null> {
             Accept: 'application/json',
           },
           timeout: 20000,
-        },
+        }
       );
 
-      const accessToken =
-        response.data?.access_token ?? response.data?.token ?? null;
-      const nextRefreshToken =
-        response.data?.refresh_token ?? refreshToken;
+      const accessToken = response.data?.access_token || response.data?.token || null;
+      const newRefreshToken = response.data?.refresh_token || refreshToken;
 
       if (!accessToken) {
-        logWarning("Réponse refresh reçue sans nouveau token d'accès");
+        logWarning("Pas de nouveau token dans la réponse");
         return null;
       }
 
-      setStoredTokens(accessToken, nextRefreshToken);
-      logSuccess("Token d'accès rafraîchi");
+      setStoredTokens(accessToken, newRefreshToken);
+      logSuccess("Token rafraîchi avec succès");
 
       return accessToken;
     } catch (error) {
       logError('Échec du refresh token', error);
+      forceLogout(); // Déconnexion en cas d'échec du refresh
       return null;
     } finally {
       refreshPromise = null;
@@ -285,8 +238,9 @@ async function refreshAccessToken(): Promise<string | null> {
   })();
 
   return refreshPromise;
-}
+};
 
+// Intercepteur de requête
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = getStoredAccessToken();
@@ -294,6 +248,7 @@ api.interceptors.request.use(
     const tenantId = getCurrentTenantId();
     const headers = normalizeHeaders(config);
 
+    // Gestion du Content-Type
     if (shouldAttachJsonContentType(config)) {
       headers.set('Content-Type', 'application/json');
     } else {
@@ -302,86 +257,90 @@ api.interceptors.request.use(
 
     headers.set('Accept', 'application/json');
 
-    if (!isPublicRoute(config.url)) {
+    // Ajout du token pour les routes non-publiques
+    if (!isPublicRoute(config.url) && !isAuthRoute(config.url)) {
       if (token) {
         headers.set('Authorization', `Bearer ${token}`);
-      } else {
-        headers.delete('Authorization');
       }
+    } else {
+      headers.delete('Authorization');
     }
 
+    // Headers contextuels
     if (pharmacyId) {
       headers.set('X-Pharmacy-ID', pharmacyId);
-    } else {
-      headers.delete('X-Pharmacy-ID');
     }
-
     if (tenantId) {
       headers.set('X-Tenant-ID', tenantId);
-    } else {
-      headers.delete('X-Tenant-ID');
     }
 
-    logInfo(`Requête ${String(config.method).toUpperCase()} ${config.url}`, {
-      hasToken: Boolean(token),
-      pharmacyId,
-      tenantId,
-    });
+    if (process.env.NODE_ENV === 'development') {
+      logInfo(`➡️ ${config.method?.toUpperCase()} ${config.url}`, {
+        hasToken: !!token,
+        pharmacyId,
+        tenantId
+      });
+    }
 
     return config;
   },
   (error) => {
-    logError("Erreur intercepteur de requête", error);
+    logError("Erreur intercepteur requête", error);
     return Promise.reject(error);
-  },
+  }
 );
 
+// Intercepteur de réponse
 api.interceptors.response.use(
   (response: AxiosResponse) => {
-    logSuccess(`Réponse ${response.status} ${response.config.url}`);
+    if (process.env.NODE_ENV === 'development') {
+      logSuccess(`⬅️ ${response.status} ${response.config.url}`);
+    }
     return response;
   },
   async (error: AxiosError) => {
     const status = error.response?.status;
     const url = error.config?.url || '';
-    const originalRequest = error.config as RetryableRequestConfig | undefined;
+    const originalRequest = error.config as RetryableRequestConfig;
 
+    // Log de l'erreur
     if (error.response) {
-      logError(`Erreur ${status} sur ${url}`, error.response.data);
-
-      if (status === 401 && originalRequest && !originalRequest._retry && !isAuthRoute(url)) {
-        originalRequest._retry = true;
-
-        const newAccessToken = await refreshAccessToken();
-
-        if (newAccessToken) {
-          const headers = normalizeHeaders(originalRequest);
-          headers.set('Authorization', `Bearer ${newAccessToken}`);
-
-          logInfo(`Nouvelle tentative après refresh pour ${url}`);
-          return api(originalRequest);
-        }
-
-        const state = useAuthStore.getState() as {
-          isAuthenticated?: boolean;
-        };
-
-        if (state.isAuthenticated) {
-          forceLogout();
-        }
-
-        if (!window.location.pathname.includes('/login')) {
-          window.location.replace('/login');
-        }
-      }
+      logError(`Erreur ${status} ${url}`, error.response.data);
     } else if (error.request) {
-      logError("Aucune réponse du serveur", error.request);
+      logError("Pas de réponse serveur", url);
     } else {
-      logError("Erreur de configuration Axios", error.message);
+      logError("Erreur configuration", error.message);
+    }
+
+    // Gestion spécifique des 401
+    if (status === 401 && originalRequest && !originalRequest._retry && !isAuthRoute(url)) {
+      originalRequest._retry = true;
+
+      const newToken = await refreshAccessToken();
+      
+      if (newToken) {
+        // Mise à jour du header et nouvelle tentative
+        originalRequest.headers.set('Authorization', `Bearer ${newToken}`);
+        logInfo(`🔄 Nouvelle tentative ${url}`);
+        return api(originalRequest);
+      }
+      
+      // Si le refresh échoue, on force la déconnexion
+      forceLogout();
+      return Promise.reject(error);
+    }
+
+    // Gestion des 403 (accès interdit)
+    if (status === 403) {
+      logWarning(`Accès interdit ${url}`);
+      // Redirection vers une page d'erreur ou dashboard
+      if (!window.location.pathname.includes('/unauthorized')) {
+        // window.location.replace('/unauthorized');
+      }
     }
 
     return Promise.reject(error);
-  },
+  }
 );
 
 export default api;

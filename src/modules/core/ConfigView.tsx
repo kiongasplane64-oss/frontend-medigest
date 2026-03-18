@@ -24,6 +24,8 @@ import {
   XCircle
 } from 'lucide-react';
 import api from '@/api/client';
+import OutOfService from './endehors';
+import { useTimezone } from '@/hooks/useTimezone';
 
 // Types pour les réponses API
 interface PharmacyResponse {
@@ -59,9 +61,10 @@ interface PharmacyInfo {
 
 interface WorkingHours {
   enabled: boolean;
-  startTime: string;
-  endTime: string;
-  overtimeEndTime?: string;
+  startTime: string; // Stocké en heure locale (Africa/Kinshasa)
+  endTime: string;   // Stocké en heure locale
+  overtimeEndTime?: string; // Stocké en heure locale
+  timezone?: string; // Fuseau horaire de la pharmacie (par défaut: Africa/Kinshasa)
   daysOff: {
     monday: boolean;
     tuesday: boolean;
@@ -128,6 +131,8 @@ interface ServiceStatus {
   in_service: boolean;
   restrictions_enabled: boolean;
   current_time_utc: string;
+  current_time_local: string;
+  timezone: string;
   current_day: string;
   is_working_day: boolean;
   is_within_hours: boolean;
@@ -143,9 +148,10 @@ interface ServiceStatus {
 // Valeurs par défaut complètes
 const DEFAULT_WORKING_HOURS: WorkingHours = {
   enabled: true,
-  startTime: '05:00',
-  endTime: '20:00',
-  overtimeEndTime: '22:00',
+  startTime: '08:00', // Heure locale (Africa/Kinshasa)
+  endTime: '20:00',   // Heure locale
+  overtimeEndTime: '22:00', // Heure locale
+  timezone: 'Africa/Kinshasa',
   daysOff: {
     monday: true,
     tuesday: true,
@@ -197,6 +203,12 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   const [outOfService, setOutOfService] = useState(false);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [pharmacyData, setPharmacyData] = useState<PharmacyResponse | null>(null);
+  const [showLocalTimes, setShowLocalTimes] = useState(false);
+  
+  const { timezone: browserTimezone, offset: browserOffset } = useTimezone();
+  useEffect(() => {
+    console.log('Fuseau navigateur:', browserTimezone, 'Offset:', browserOffset);
+  }, [browserTimezone, browserOffset]);
   
   const [config, setConfig] = useState<PharmacyConfig>({
     pharmacyId: pharmacyId,
@@ -267,6 +279,24 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
       updatedAt: loadedConfig?.updatedAt || new Date().toISOString(),
       createdAt: loadedConfig?.createdAt || new Date().toISOString(),
     };
+  };
+
+  // Afficher une heure locale à partir de l'heure stockée (locale pharmacie)
+  const displayLocalTime = (timeStr: string): string => {
+    if (!timeStr || !showLocalTimes) return timeStr;
+    // Convertir l'heure stockée (locale pharmacie) vers l'heure du navigateur
+    // Note: On suppose que l'heure stockée est en Africa/Kinshasa (UTC+1)
+    // Pour une conversion précise, il faudrait connaître le fuseau exact de la pharmacie
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    const pharmacyOffset = 1; // Africa/Kinshasa est UTC+1
+    const browserHour = hours - pharmacyOffset + browserOffset;
+    
+    // Gérer les jours
+    let adjustedHour = browserHour;
+    if (adjustedHour < 0) adjustedHour += 24;
+    if (adjustedHour >= 24) adjustedHour -= 24;
+    
+    return `${adjustedHour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
   };
 
   // Charger les données de la pharmacie et la configuration
@@ -352,7 +382,10 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         lowStockThreshold: config.lowStockThreshold,
         expiryWarningDays: config.expiryWarningDays,
         allowNegativeStock: config.allowNegativeStock,
-        workingHours: config.workingHours,
+        workingHours: {
+          ...config.workingHours,
+          timezone: config.workingHours.timezone || 'Africa/Kinshasa'
+        },
         productReturnDays: config.productReturnDays,
         marginConfig: config.marginConfig,
         automaticPricing: config.automaticPricing,
@@ -469,6 +502,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   };
 
+  // Affichage du chargement
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
@@ -478,6 +512,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     );
   }
 
+  // Affichage des erreurs critiques
   if (error && !pharmacyData) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
@@ -487,7 +522,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
           <p className="text-slate-600 mb-4">{error}</p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
           >
             Réessayer
           </button>
@@ -496,7 +531,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     );
   }
 
-  // Guard clause pour s'assurer que workingHours existe avant le rendu
+  // Vérification de l'intégrité des données
   if (!config.workingHours) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
@@ -506,7 +541,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
           <p className="text-slate-600 mb-4">Les données de configuration sont incomplètes. Veuillez rafraîchir la page.</p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
           >
             Rafraîchir
           </button>
@@ -515,39 +550,18 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     );
   }
 
+  // Affichage du mode hors service avec le composant dédié
   if (outOfService) {
     return (
-      <div className="min-h-screen bg-linear-to-br from-red-50 to-orange-50 flex items-center justify-center p-6">
-        <div className="bg-white rounded-3xl shadow-2xl p-12 max-w-lg text-center border border-red-100">
-          <div className="bg-red-100 rounded-full w-24 h-24 flex items-center justify-center mx-auto mb-6">
-            <Clock className="w-12 h-12 text-red-600" />
-          </div>
-          <h1 className="text-3xl font-bold text-red-600 mb-4">Hors Service</h1>
-          <p className="text-slate-600 mb-6">
-            {serviceStatus?.message || "L'application n'est pas disponible en dehors des heures de service."}
-          </p>
-          <div className="bg-slate-50 p-4 rounded-xl text-left">
-            <p className="font-semibold text-slate-700 mb-2">Heures de service :</p>
-            <p className="text-slate-600">
-              {config.workingHours.startTime} - {config.workingHours.endTime} UTC
-            </p>
-            <p className="text-slate-600 mt-2">
-              Jours ouverts : {Object.entries(config.workingHours.daysOff)
-                .filter(([, value]) => value)
-                .map(([day]) => day.slice(0, 3))
-                .join(', ')}
-            </p>
-            {serviceStatus?.next_service_time && (
-              <p className="text-sm text-blue-600 mt-3">
-                Prochain service : {serviceStatus.next_service_time} UTC
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
+      <OutOfService 
+        workingHours={config.workingHours}
+        message={serviceStatus?.message || "L'application n'est pas disponible en dehors des heures de service."}
+        nextServiceTime={serviceStatus?.next_service_time}
+      />
     );
   }
 
+  // Rendu principal de la configuration
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       {/* En-tête avec indicateur de pharmacie */}
@@ -576,11 +590,28 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               </div>
             )}
           </div>
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-xs text-slate-400">Fuseau pharmacie: {config.workingHours.timezone || 'Africa/Kinshasa'}</span>
+            <span className="text-xs text-slate-300">|</span>
+            <span className="text-xs text-slate-400">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</span>
+          </div>
         </div>
         
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowLocalTimes(!showLocalTimes)}
+            className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+              showLocalTimes 
+                ? 'bg-blue-100 text-blue-700 border border-blue-300' 
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            <Clock className="w-4 h-4 inline mr-1" />
+            {showLocalTimes ? 'Heures locales' : 'Heures pharmacie'}
+          </button>
+          
           {success && (
-            <div className="flex items-center gap-2 text-green-600 bg-green-50 px-4 py-2 rounded-xl">
+            <div className="flex items-center gap-2 text-green-600 bg-green-50 px-4 py-2 rounded-xl animate-fadeIn">
               <CheckCircle className="w-4 h-4" />
               <span className="text-sm">{success}</span>
             </div>
@@ -597,7 +628,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 animate-slideIn">
           <XCircle className="w-5 h-5 text-red-600 shrink-0" />
           <p className="text-sm text-red-700">{error}</p>
           <button onClick={() => setError(null)} className="ml-auto text-red-600 hover:text-red-800">
@@ -622,7 +653,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 ...config,
                 pharmacyInfo: { ...config.pharmacyInfo, name: e.target.value }
               })}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="Nom de la pharmacie"
             />
             <input
@@ -632,7 +663,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 ...config,
                 pharmacyInfo: { ...config.pharmacyInfo, phone: e.target.value }
               })}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="Téléphone"
             />
             <input
@@ -642,7 +673,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 ...config,
                 pharmacyInfo: { ...config.pharmacyInfo, email: e.target.value }
               })}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="Email"
             />
             <input
@@ -652,7 +683,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 ...config,
                 pharmacyInfo: { ...config.pharmacyInfo, licenseNumber: e.target.value }
               })}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="Numéro de licence"
             />
             <textarea
@@ -661,7 +692,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 ...config,
                 pharmacyInfo: { ...config.pharmacyInfo, address: e.target.value }
               })}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl md:col-span-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl md:col-span-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="Adresse"
               rows={2}
             />
@@ -679,7 +710,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
             <select
               value={config.primaryCurrency}
               onChange={(e) => setConfig({...config, primaryCurrency: e.target.value})}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
             >
               {config.currencies.filter(c => c.isActive).map(c => (
                 <option key={c.code} value={c.code}>{c.code}</option>
@@ -691,7 +722,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 <div key={currency.code} className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl">
                   <button
                     onClick={() => toggleCurrencyActive(index)}
-                    className="text-slate-500 hover:text-blue-600"
+                    className="text-slate-500 hover:text-blue-600 transition-colors"
                   >
                     {currency.isActive ? <ToggleRight className="w-6 h-6 text-green-600" /> : <ToggleLeft className="w-6 h-6" />}
                   </button>
@@ -700,7 +731,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                     type="number"
                     value={currency.exchangeRate}
                     onChange={(e) => updateExchangeRate(index, Number(e.target.value))}
-                    className="flex-1 p-1.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="flex-1 p-1.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     placeholder="Taux"
                     disabled={currency.code === 'USD'}
                     step="0.01"
@@ -708,7 +739,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                   {config.currencies.length > 2 && (
                     <button
                       onClick={() => removeCurrency(index)}
-                      className="text-red-500 hover:text-red-700"
+                      className="text-red-500 hover:text-red-700 transition-colors"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -722,7 +753,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="text"
                 value={newCurrency.code}
                 onChange={(e) => setNewCurrency({...newCurrency, code: e.target.value.toUpperCase()})}
-                className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="Code (ex: EUR)"
                 maxLength={3}
               />
@@ -730,20 +761,20 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="text"
                 value={newCurrency.symbol}
                 onChange={(e) => setNewCurrency({...newCurrency, symbol: e.target.value})}
-                className="w-20 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-20 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="Symb."
               />
               <input
                 type="number"
                 value={newCurrency.exchangeRate}
                 onChange={(e) => setNewCurrency({...newCurrency, exchangeRate: Number(e.target.value)})}
-                className="w-24 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-24 p-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="Taux"
                 step="0.01"
               />
               <button
                 onClick={addCurrency}
-                className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50"
+                className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all"
                 disabled={!newCurrency.code || !newCurrency.symbol}
               >
                 <Plus className="w-5 h-5" />
@@ -783,7 +814,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="number"
                 value={config.taxRate}
                 onChange={(e) => setConfig({...config, taxRate: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 step="0.1"
                 min="0"
                 max="100"
@@ -809,7 +840,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="number"
                 value={config.initialCapital}
                 onChange={(e) => setConfig({...config, initialCapital: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 placeholder="0.00"
                 step="0.01"
                 min="0"
@@ -850,7 +881,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                     ...config,
                     automaticPricing: { ...config.automaticPricing, method: e.target.value as any }
                   })}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 >
                   <option value="percentage">Pourcentage (%)</option>
                   <option value="coefficient">Coefficient multiplicateur</option>
@@ -864,7 +895,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                     ...config,
                     automaticPricing: { ...config.automaticPricing, value: Number(e.target.value) }
                   })}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   placeholder={
                     config.automaticPricing.method === 'percentage' ? 'Pourcentage (%)' :
                     config.automaticPricing.method === 'coefficient' ? 'Coefficient (ex: 1.3)' : 'Marge (%)'
@@ -885,7 +916,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                     ...config,
                     marginConfig: { ...config.marginConfig, defaultMargin: Number(e.target.value) }
                   })}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   step="0.1"
                   min="0"
                   max="100"
@@ -901,7 +932,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                       ...config,
                       marginConfig: { ...config.marginConfig, minMargin: Number(e.target.value) }
                     })}
-                    className="w-1/2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-1/2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     placeholder="Min"
                     step="0.1"
                     min="0"
@@ -913,7 +944,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                       ...config,
                       marginConfig: { ...config.marginConfig, maxMargin: Number(e.target.value) }
                     })}
-                    className="w-1/2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-1/2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     placeholder="Max"
                     step="0.1"
                     max="100"
@@ -938,7 +969,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="number"
                 value={config.lowStockThreshold}
                 onChange={(e) => setConfig({...config, lowStockThreshold: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 min="0"
               />
             </div>
@@ -948,7 +979,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 type="number"
                 value={config.expiryWarningDays}
                 onChange={(e) => setConfig({...config, expiryWarningDays: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 min="0"
               />
             </div>
@@ -960,7 +991,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               type="number"
               value={config.productReturnDays}
               onChange={(e) => setConfig({...config, productReturnDays: Number(e.target.value)})}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               min="0"
               max="365"
             />
@@ -971,7 +1002,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
           <div className="flex items-center gap-2 mb-2">
             <Clock className="w-5 h-5 text-emerald-600" />
-            <h2 className="font-bold text-slate-700">Heures de service (UTC)</h2>
+            <h2 className="font-bold text-slate-700">Heures de service</h2>
           </div>
 
           <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
@@ -992,43 +1023,94 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
 
           {config.workingHours.enabled && (
             <>
+              <div className="flex items-center gap-2 bg-blue-50 p-2 rounded-lg">
+                <span className="text-xs text-blue-700">
+                  {showLocalTimes ? (
+                    <>Heures affichées dans votre fuseau ({browserTimezone})</>
+                  ) : (
+                    <>Heures stockées en {config.workingHours.timezone || 'Africa/Kinshasa'}</>
+                  )}
+                </span>
+                <button
+                  onClick={() => setShowLocalTimes(!showLocalTimes)}
+                  className="text-xs text-blue-600 underline ml-auto"
+                >
+                  {showLocalTimes ? 'Voir heures pharmacie' : 'Voir mes heures locales'}
+                </button>
+              </div>
+              
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm text-slate-600">Heure début (UTC)</label>
+                  <label className="text-sm text-slate-600">
+                    Heure début {showLocalTimes && <span className="text-xs text-blue-600">(locale)</span>}
+                  </label>
                   <input
                     type="time"
-                    value={config.workingHours.startTime}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      workingHours: { ...config.workingHours, startTime: e.target.value }
-                    })}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    value={showLocalTimes ? displayLocalTime(config.workingHours.startTime) : config.workingHours.startTime}
+                    onChange={(e) => {
+                      if (showLocalTimes) {
+                        // Si on modifie en mode local, on veut convertir vers l'heure pharmacie
+                        // Mais c'est complexe - on désactive la modification en mode local
+                        return;
+                      }
+                      setConfig({
+                        ...config,
+                        workingHours: { ...config.workingHours, startTime: e.target.value }
+                      });
+                    }}
+                    className={`w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                      showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                    disabled={showLocalTimes}
                   />
+                  {showLocalTimes && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      Déverrouiller pour modifier
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="text-sm text-slate-600">Heure fin (UTC)</label>
+                  <label className="text-sm text-slate-600">
+                    Heure fin {showLocalTimes && <span className="text-xs text-blue-600">(locale)</span>}
+                  </label>
                   <input
                     type="time"
-                    value={config.workingHours.endTime}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      workingHours: { ...config.workingHours, endTime: e.target.value }
-                    })}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    value={showLocalTimes ? displayLocalTime(config.workingHours.endTime) : config.workingHours.endTime}
+                    onChange={(e) => {
+                      if (showLocalTimes) return;
+                      setConfig({
+                        ...config,
+                        workingHours: { ...config.workingHours, endTime: e.target.value }
+                      });
+                    }}
+                    className={`w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                      showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                    disabled={showLocalTimes}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-sm text-slate-600">Heure supplémentaire (max, UTC)</label>
+                <label className="text-sm text-slate-600">
+                  Heure supplémentaire (max) {showLocalTimes && <span className="text-xs text-blue-600">(locale)</span>}
+                </label>
                 <input
                   type="time"
-                  value={config.workingHours.overtimeEndTime}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    workingHours: { ...config.workingHours, overtimeEndTime: e.target.value }
-                  })}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  value={showLocalTimes && config.workingHours.overtimeEndTime 
+                    ? displayLocalTime(config.workingHours.overtimeEndTime) 
+                    : config.workingHours.overtimeEndTime || ''}
+                  onChange={(e) => {
+                    if (showLocalTimes) return;
+                    setConfig({
+                      ...config,
+                      workingHours: { ...config.workingHours, overtimeEndTime: e.target.value }
+                    });
+                  }}
+                  className={`w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                    showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                  disabled={showLocalTimes}
                 />
               </div>
 
@@ -1038,23 +1120,45 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                   {Object.entries(config.workingHours.daysOff).map(([day, value]) => (
                     <button
                       key={day}
-                      onClick={() => setConfig({
-                        ...config,
-                        workingHours: {
-                          ...config.workingHours,
-                          daysOff: { ...config.workingHours.daysOff, [day]: !value }
-                        }
-                      })}
+                      onClick={() => {
+                        if (showLocalTimes) return;
+                        setConfig({
+                          ...config,
+                          workingHours: {
+                            ...config.workingHours,
+                            daysOff: { ...config.workingHours.daysOff, [day]: !value }
+                          }
+                        });
+                      }}
+                      disabled={showLocalTimes}
                       className={`p-2 rounded-lg text-xs font-medium transition-all ${
                         value 
-                          ? 'bg-emerald-100 text-emerald-700' 
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
+                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' 
+                          : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                      } ${showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {day.slice(0, 3)}
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="flex items-center gap-2 p-2 bg-slate-100 rounded-lg">
+                <span className="text-xs text-slate-600">Fuseau horaire:</span>
+                <select
+                  value={config.workingHours.timezone || 'Africa/Kinshasa'}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    workingHours: { ...config.workingHours, timezone: e.target.value }
+                  })}
+                  className="flex-1 p-1 text-xs bg-white border border-slate-200 rounded-lg"
+                  disabled={showLocalTimes}
+                >
+                  <option value="Africa/Kinshasa">Africa/Kinshasa (UTC+1)</option>
+                  <option value="Africa/Lubumbashi">Africa/Lubumbashi (UTC+2)</option>
+                  <option value="Europe/Paris">Europe/Paris (UTC+1/UTC+2)</option>
+                  <option value="UTC">UTC</option>
+                </select>
               </div>
             </>
           )}
@@ -1077,7 +1181,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               </div>
               <div className="w-20 h-2 bg-slate-200 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-orange-600 rounded-full"
+                  className="h-full bg-orange-600 rounded-full transition-all"
                   style={{ width: `${(config.branchConfig.currentBranches / config.branchConfig.maxBranches) * 100}%` }}
                 />
               </div>
@@ -1086,7 +1190,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
             {config.branchConfig.branches && config.branchConfig.branches.length > 0 && (
               <div className="space-y-2">
                 {config.branchConfig.branches.map((branch) => (
-                  <div key={branch.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div key={branch.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 hover:shadow-md transition-all">
                     <div className="flex justify-between items-start">
                       <div>
                         <p className="font-medium">{branch.name}</p>
@@ -1180,7 +1284,8 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               </div>
             </div>
             <div className="mt-3 text-xs text-slate-500">
-              Dernière synchronisation: {new Date().toLocaleString()}
+              Dernière synchronisation: {new Date().toLocaleString()} • 
+              Fuseau pharmacie: {config.workingHours.timezone || 'Africa/Kinshasa'}
             </div>
           </div>
         </div>

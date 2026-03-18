@@ -1,8 +1,10 @@
+// types/inventory.types.ts
+
 // =========================================================
 // TYPES DE BASE
 // =========================================================
 
-export type ID = string;
+export type ID = string | number;
 
 export type StockStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'over_stock';
 export type ExpiryStatus = 'valid' | 'warning' | 'critical' | 'expired';
@@ -17,7 +19,7 @@ export type MovementType =
   | 'loss'
   | 'manual_adjustment';
 
-export type TransferStatus = 'pending' | 'shipped' | 'received' | 'cancelled';
+export type TransferStatus = 'pending' | 'shipped' | 'received' | 'cancelled' | 'in_transit' | 'completed';
 
 export type BillingCurrency = 'CDF' | 'USD' | 'EUR';
 export type InventoryViewMode = 'grid' | 'list';
@@ -35,71 +37,31 @@ export const ExportFormat = {
 } as const;
 
 // =========================================================
-// TRANSFERTS
+// UTILITAIRES
 // =========================================================
 
-export interface Transfers {
+export interface OptionItem {
+  label: string;
+  value: string;
+}
+
+export interface InventoryDashboardCard {
+  title: string;
+  value: string | number;
+  subtitle?: string;
+  tone?: 'blue' | 'green' | 'amber' | 'red' | 'violet';
+}
+
+// =========================================================
+// EMPLACEMENTS
+// =========================================================
+
+export interface Location {
   id: string;
-  reference: string;
-  source_depot: string;
-  destination_depot: string;
-  date_transfert: string;
-  status: TransferStatus;
-  items_count: number;
-  notes?: string;
-  created_by?: string;
+  name: string;
+  description?: string;
+  product_count?: number;
   created_at?: string;
-  updated_at?: string;
-}
-
-export interface TransfersResponse {
-  data: Transfers[];
-  total: number;
-  page: number;
-  limit: number;
-}
-
-export interface PricingUpdate {
-  product_id: string;
-  received_qty: number;
-  sale_price: string;
-}
-
-// =========================================================
-// STOCK TRANSFER (pour compatibilité avec l'existant)
-// =========================================================
-
-export interface StockTransfer {
-  id: ID;
-  product_id: ID;
-  product_name?: string;
-  product_code?: string;
-  quantity: number;
-  from_location: string;
-  to_location: string;
-  status: 'pending' | 'in_transit' | 'completed' | 'cancelled';
-  notes?: string;
-  created_by?: ID;
-  approved_by?: ID;
-  created_at: string;
-  updated_at?: string;
-  completed_at?: string | null;
-}
-
-export interface StockTransferCreate {
-  product_id: ID;
-  quantity: number;
-  from_location: string;
-  to_location: string;
-  notes?: string;
-}
-
-export interface StockTransferUpdate {
-  quantity?: number;
-  from_location?: string;
-  to_location?: string;
-  status?: 'pending' | 'in_transit' | 'completed' | 'cancelled';
-  notes?: string;
 }
 
 // =========================================================
@@ -107,10 +69,10 @@ export interface StockTransferUpdate {
 // =========================================================
 
 export interface Category {
-  id: ID | number;
+  id: ID;
   name: string;
-  product_count?: number;
   description?: string;
+  product_count?: number;
   is_active?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -123,6 +85,7 @@ export interface CategoryStats {
   total_purchase_value: number;
   total_selling_value: number;
   total_margin: number;
+  average_margin: number;
 }
 
 // =========================================================
@@ -174,6 +137,7 @@ export interface Product {
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
+  unit?: string;
 
   has_tva: boolean;
   tva_rate: number;
@@ -227,6 +191,7 @@ export interface ProductCreate {
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
+  unit?: string;
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
@@ -260,6 +225,7 @@ export interface ProductUpdate {
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
+  unit?: string;
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
@@ -314,7 +280,15 @@ export interface ProductListResponse {
   page: number;
   limit: number;
   products: Product[];
-  summary?: StockSummary;
+  summary?: {
+    total_value_purchase: number;
+    total_value_selling: number;
+    total_profit: number;
+    total_products?: number;
+    out_of_stock?: number;
+    low_stock?: number;
+    expired_soon?: number;
+  };
 }
 
 export interface StockSummary {
@@ -324,6 +298,14 @@ export interface StockSummary {
   out_of_stock: number;
   low_stock: number;
   expired_soon: number;
+}
+
+export interface ProductMergeRequest {
+  target_product_id: string;
+  source_product_ids: string[];
+  keep_attributes?: string[];
+  merge_strategy?: 'sum' | 'average' | 'max' | 'min' | 'keep_main';
+  expiry_strategy?: 'earliest' | 'latest' | 'keep_main';
 }
 
 // =========================================================
@@ -336,14 +318,17 @@ export interface StockStats {
   total_value_purchase: number;
   total_value_selling: number;
   total_margin: number;
-  average_margin_rate: number;
-  out_of_stock_count: number;
+  total_profit_potential?: number;
+  average_margin: number;
+  average_margin_rate?: number;
   low_stock_count: number;
-  over_stock_count: number;
+  out_of_stock_count: number;
+  over_stock_count?: number;
   expired_count: number;
   expiring_soon_count: number;
-  category_breakdown: CategoryStats[];
-  top_products: TopProduct[];
+  low_stock_threshold?: number;
+  category_breakdown?: CategoryStats[];
+  top_products?: TopProduct[];
 }
 
 export interface InventoryAlertItem {
@@ -375,6 +360,9 @@ export interface InventoryAlertsResponse {
     expiring_soon: InventoryAlertItem[];
     expired: InventoryAlertItem[];
   };
+  low_stock?: StockAlert[];
+  expiring_soon?: ExpiryAlert[];
+  expired?: ExpiryAlert[];
   restrictions?: {
     can_view: boolean;
     can_create: boolean;
@@ -386,28 +374,81 @@ export interface InventoryAlertsResponse {
 }
 
 export interface StockAlert {
-  out_of_stock: Product[];
-  low_stock: Product[];
-  over_stock: Product[];
-  counts: {
-    out_of_stock: number;
-    low_stock: number;
-    over_stock: number;
-  };
+  product_id: string;
+  product_name: string;
+  current_stock: number;
+  threshold: number;
+  type: 'low_stock' | 'out_of_stock';
+  created_at: string;
 }
 
 export interface ExpiryAlert {
-  expired: Product[];
-  expiring_soon: Product[];
-  counts: {
-    expired: number;
-    expiring_soon: number;
-  };
-  days_threshold: number;
+  product_id: string;
+  product_name: string;
+  expiry_date: string;
+  days_remaining: number;
+  type: 'expiring_soon' | 'expired';
+  created_at: string;
 }
 
 // =========================================================
 // MOUVEMENTS DE STOCK
+// =========================================================
+
+export interface StockMovement {
+  id: ID;
+  product_id: ID;
+  product_name?: string;
+  product_code?: string;
+  movement_type: MovementType;
+  type?: 'in' | 'out' | 'adjustment' | 'return' | 'transfer';
+  reason?: string;
+  reference_number?: string;
+  reference?: string;
+  quantity_before: number;
+  quantity_after: number;
+  quantity_change: number;
+  previous_quantity?: number;
+  new_quantity?: number;
+  quantity?: number;
+  unit_cost?: number;
+  total_value?: number;
+  notes?: string;
+  source_location?: string;
+  destination_location?: string;
+  created_by?: ID;
+  created_by_name?: string;
+  user_id?: string;
+  user_name?: string;
+  tenant_id?: ID;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface StockMovementCreate {
+  product_id: ID;
+  movement_type?: MovementType;
+  type?: 'in' | 'out' | 'adjustment' | 'return';
+  quantity_change: number;
+  quantity?: number;
+  reason?: string;
+  reference_number?: string;
+  reference?: string;
+  notes?: string;
+  source_location?: string;
+  destination_location?: string;
+  unit_cost?: number;
+}
+
+export interface StockMovementListResponse {
+  total: number;
+  page: number;
+  limit: number;
+  movements: StockMovement[];
+}
+
+// =========================================================
+// AJUSTEMENTS ET INVENTAIRES
 // =========================================================
 
 export interface StockAdjustment {
@@ -423,50 +464,8 @@ export interface InventoryCount {
   notes?: string;
 }
 
-export interface StockMovement {
-  id: ID;
-  product_id: ID;
-  product_name?: string;
-  product_code?: string;
-  movement_type: MovementType;
-  reason?: string;
-  reference_number?: string;
-  quantity_before: number;
-  quantity_after: number;
-  quantity_change: number;
-  unit_cost?: number;
-  total_value?: number;
-  notes?: string;
-  source_location?: string;
-  destination_location?: string;
-  created_by?: ID;
-  created_by_name?: string;
-  tenant_id?: ID;
-  created_at: string;
-  updated_at?: string;
-}
-
-export interface StockMovementCreate {
-  product_id: ID;
-  movement_type: MovementType;
-  quantity_change: number;
-  reason?: string;
-  reference_number?: string;
-  notes?: string;
-  source_location?: string;
-  destination_location?: string;
-  unit_cost?: number;
-}
-
-export interface StockMovementListResponse {
-  total: number;
-  page: number;
-  limit: number;
-  movements: StockMovement[];
-}
-
 // =========================================================
-// ACHATS
+// ACHATS ET APPROVISIONNEMENTS
 // =========================================================
 
 export interface PurchaseItem {
@@ -475,7 +474,9 @@ export interface PurchaseItem {
   barcode?: string;
   name: string;
   quantity: number;
-  purchase_price: number;
+  unit_price: number;
+  total_price: number;
+  purchase_price?: number;
   selling_price?: number;
   expiry_date?: string;
   batch_number?: string;
@@ -493,8 +494,10 @@ export interface Purchase {
   currency?: BillingCurrency;
   notes?: string;
   items: PurchaseItem[];
+  status: 'pending' | 'approved' | 'completed' | 'cancelled';
   created_at: string;
   updated_at?: string;
+  user_id?: string;
 }
 
 export interface PurchaseCreate {
@@ -504,7 +507,11 @@ export interface PurchaseCreate {
   total_amount?: number;
   currency?: BillingCurrency;
   notes?: string;
-  items: PurchaseItem[];
+  items: {
+    product_id: string;
+    quantity: number;
+    unit_price: number;
+  }[];
 }
 
 export interface RestockRequest {
@@ -521,15 +528,81 @@ export interface RestockRequest {
 }
 
 // =========================================================
-// FUSION / DÉDUPLICATION
+// TRANSFERTS DE STOCK
 // =========================================================
 
-export interface ProductMergeRequest {
-  product_ids: ID[];
-  keep_product_id: ID;
-  merge_strategy: 'sum' | 'average' | 'max' | 'min' | 'keep_main';
-  expiry_strategy: 'earliest' | 'latest' | 'keep_main';
+export interface StockTransfer {
+  id: ID;
+  product_id: ID;
+  product_name?: string;
+  product_code?: string;
+  quantity: number;
+  from_location: string;
+  to_location: string;
+  status: 'pending' | 'in_transit' | 'completed' | 'cancelled';
+  notes?: string;
+  created_by?: ID;
+  approved_by?: ID;
+  user_id?: string;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string | null;
 }
+
+export interface StockTransferCreate {
+  product_id: ID;
+  quantity: number;
+  from_location: string;
+  to_location: string;
+  notes?: string;
+}
+
+export interface StockTransferUpdate {
+  quantity?: number;
+  from_location?: string;
+  to_location?: string;
+  status?: 'pending' | 'in_transit' | 'completed' | 'cancelled';
+  notes?: string;
+}
+
+export interface Transfers {
+  id: ID;
+  reference?: string;
+  product_id?: string;
+  product_name?: string;
+  product_code?: string;
+  quantity: number;
+  source_depot?: string;
+  destination_depot?: string;
+  from_location?: string;
+  to_location?: string;
+  date_transfert?: string;
+  status: TransferStatus;
+  items_count?: number;
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TransfersResponse {
+  data: Transfers[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface PricingUpdate {
+  product_id: string;
+  purchase_price?: number;
+  selling_price?: number;
+  received_qty?: number;
+  sale_price?: string;
+}
+
+// =========================================================
+// FUSION / DÉDUPLICATION
+// =========================================================
 
 export interface DuplicateGroup {
   products: Product[];
@@ -537,9 +610,13 @@ export interface DuplicateGroup {
 }
 
 export interface DuplicatesResponse {
-  duplicates: DuplicateGroup[];
+  groups: Array<{
+    similarity: number;
+    products: Product[];
+  }>;
   total_groups: number;
-  similarity_threshold: number;
+  total_duplicates: number;
+  similarity_threshold?: number;
 }
 
 // =========================================================
@@ -548,10 +625,13 @@ export interface DuplicatesResponse {
 
 export interface BulkImportResult {
   success: boolean;
-  message: string;
+  message?: string;
+  imported_count: number;
+  updated_count: number;
+  skipped?: number;
   created?: number;
   updated?: number;
-  skipped?: number;
+  failed_count: number;
   errors?: Array<{
     row?: number;
     field?: string;
@@ -580,40 +660,30 @@ export interface ExportResponse {
 // =========================================================
 
 export interface ApiResponse<T> {
+  status?: string;
   success?: boolean;
   message: string;
   data?: T;
   product?: T;
   products?: T[];
+  total?: number;
+  page?: number;
+  limit?: number;
   errors?: string[];
 }
 
 export interface PaginatedApiResponse<T> {
+  data: T[];
   total: number;
   page: number;
   limit: number;
-  items: T[];
+  items?: T[];
 }
 
 export interface DeleteResponse {
   success: boolean;
   message: string;
-}
-
-// =========================================================
-// UTILITAIRES
-// =========================================================
-
-export interface OptionItem {
-  label: string;
-  value: string;
-}
-
-export interface InventoryDashboardCard {
-  title: string;
-  value: string | number;
-  subtitle?: string;
-  tone?: 'blue' | 'green' | 'amber' | 'red' | 'violet';
+  deleted_id?: string;
 }
 
 // =========================================================
