@@ -1,5 +1,6 @@
+// components/CreateProductView.tsx
 import { useEffect, useMemo, useState } from 'react';
-import type { Product, ProductCreate } from '@/types/inventory.types';
+import type { Product, ProductCreate, ID } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
@@ -24,7 +25,6 @@ import {
 } from 'lucide-react';
 
 // Extension du type Product pour inclure pharmacy_id (si nécessaire)
-// Ou bien mettez à jour votre fichier inventory.types.ts
 interface ExtendedProduct extends Partial<Product> {
   pharmacy_id?: string | null;
 }
@@ -70,6 +70,11 @@ interface FormState {
 }
 
 const DEFAULT_MARGIN_PERCENT = 20;
+
+// Fonction utilitaire pour convertir ID en string
+const idToString = (id: ID): string => {
+  return String(id);
+};
 
 function toInputString(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -132,7 +137,9 @@ export default function CreateProductView({
   const [marginPercent, setMarginPercent] = useState<number>(DEFAULT_MARGIN_PERCENT);
 
   // Déterminer le pharmacy_id par défaut (prop > user > undefined)
-  const defaultPharmacyId = propPharmacyId || user?.pharmacy_id || undefined;
+  // Conversion de user?.pharmacy_id en string si nécessaire
+  const userPharmacyId = user?.pharmacy_id ? idToString(user.pharmacy_id) : undefined;
+  const defaultPharmacyId = propPharmacyId || userPharmacyId || undefined;
 
   const [form, setForm] = useState<FormState>(() =>
     buildInitialFormState(product, initialValues, defaultPharmacyId),
@@ -309,7 +316,9 @@ export default function CreateProductView({
       const payload = buildPayload();
 
       if (product?.id) {
-        await inventoryService.updateProduct(product.id, payload);
+        // Conversion de product.id en string si nécessaire
+        const productId = idToString(product.id);
+        await inventoryService.updateProduct(productId, payload);
       } else {
         await inventoryService.createProduct(payload);
       }

@@ -1,11 +1,22 @@
+// src/modules/auth/views/UserManagement.tsx
 import { useQuery } from '@tanstack/react-query';
 import { getPharmacyUsers } from '@/services/userService';
 import { UserPlus, ShieldCheck, UserMinus, Loader2 } from 'lucide-react';
 
+// Définir le type User (à adapter selon votre service)
+interface User {
+  id: string;
+  name: string;
+  email?: string;
+  role: string;
+  pharmacy_id?: string;
+  is_active?: boolean;
+}
+
 export default function UserManagement() {
-  const { data: users, isLoading } = useQuery({
+  const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ['pharmacy-users'],
-    queryFn: getPharmacyUsers
+    queryFn: () => getPharmacyUsers()
   });
 
   const planLimit = 5; 
@@ -45,25 +56,31 @@ export default function UserManagement() {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {users?.map((user) => (
-          <div key={user.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 font-bold uppercase">
-                {user.name.charAt(0)}
-              </div>
-              <div>
-                <p className="font-bold text-slate-700">{user.name}</p>
-                <div className="flex items-center gap-1.5">
-                  <ShieldCheck size={12} className="text-blue-500" />
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{user.role}</span>
+        {users && users.length > 0 ? (
+          users.map((user: User) => (
+            <div key={user.id} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-slate-600 font-bold uppercase">
+                  {user.name ? user.name.charAt(0).toUpperCase() : '?'}
+                </div>
+                <div>
+                  <p className="font-bold text-slate-700">{user.name || 'Sans nom'}</p>
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck size={12} className="text-blue-500" />
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{user.role || 'Aucun rôle'}</span>
+                  </div>
                 </div>
               </div>
+              <button className="text-slate-300 hover:text-red-500 transition-colors">
+                <UserMinus size={20} />
+              </button>
             </div>
-            <button className="text-slate-300 hover:text-red-500 transition-colors">
-              <UserMinus size={20} />
-            </button>
+          ))
+        ) : (
+          <div className="col-span-full text-center py-12 text-slate-400">
+            Aucun utilisateur trouvé
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

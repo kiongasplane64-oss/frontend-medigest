@@ -1,6 +1,6 @@
 // components/AchatView.tsx
 import { useState, useEffect, useMemo } from 'react';
-import { Product, Category } from '@/types/inventory.types';
+import { Product, Category, ID } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
 import { formatPrice } from '@/utils/formatters';
 import BarcodeScanner from './BarcodeScanner';
@@ -27,6 +27,11 @@ const getCategoryName = (category: string | Category | undefined): string => {
   if (!category) return '';
   if (typeof category === 'string') return category;
   return category.name || '';
+};
+
+// Fonction utilitaire pour convertir ID en string
+const idToString = (id: ID): string => {
+  return String(id);
 };
 
 export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) {
@@ -101,10 +106,10 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
     }
 
     setCart(prev => {
-      const existing = prev.find(item => item.product.id === selectedProduct.id);
+      const existing = prev.find(item => idToString(item.product.id) === idToString(selectedProduct.id));
       if (existing) {
         return prev.map(item =>
-          item.product.id === selectedProduct.id
+          idToString(item.product.id) === idToString(selectedProduct.id)
             ? {
                 ...item,
                 quantity: item.quantity + quantity,
@@ -129,13 +134,15 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
     setSearchTerm('');
   };
 
-  const handleUpdateQuantity = (productId: string, newQuantity: number) => {
+  const handleUpdateQuantity = (productId: ID, newQuantity: number) => {
+    const productIdStr = idToString(productId);
+    
     if (newQuantity <= 0) {
-      setCart(prev => prev.filter(item => item.product.id !== productId));
+      setCart(prev => prev.filter(item => idToString(item.product.id) !== productIdStr));
     } else {
       setCart(prev =>
         prev.map(item =>
-          item.product.id === productId
+          idToString(item.product.id) === productIdStr
             ? { ...item, quantity: newQuantity, total: newQuantity * item.unit_price }
             : item
         )
@@ -167,7 +174,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
     try {
       for (const item of cart) {
         await inventoryService.adjustStock({
-          product_id: item.product.id,
+          product_id: idToString(item.product.id),
           new_quantity: item.product.quantity + item.quantity,
           reason: 'Achat fournisseur',
           notes: `Fournisseur: ${supplier || 'Non spécifié'} - Réf: ${reference || 'N/A'} - ${notes}`
@@ -469,7 +476,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                 ) : (
                   filteredProducts.map(product => (
                     <div
-                      key={product.id}
+                      key={idToString(product.id)}
                       onClick={() => setSelectedProduct(product)}
                       className={`p-3 rounded-lg cursor-pointer transition-colors mb-1
                         ${selectedProduct?.id === product.id
@@ -537,7 +544,7 @@ export default function AchatView({ open, onClose, onSuccess }: AchatViewProps) 
                   <p className="text-center text-slate-400 py-8">Panier vide</p>
                 ) : (
                   cart.map(item => (
-                    <div key={item.product.id} className="bg-white p-3 rounded-lg mb-2">
+                    <div key={idToString(item.product.id)} className="bg-white p-3 rounded-lg mb-2">
                       <div className="flex justify-between items-start mb-2">
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-sm truncate">{item.product.name}</p>
