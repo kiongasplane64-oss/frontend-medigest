@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getPharmacyUsers } from '@/services/userService';
 import { UserPlus, ShieldCheck, UserMinus, Loader2 } from 'lucide-react';
 
-// Définir le type User (à adapter selon votre service)
+// Définir le type User (à adapter selon votre service)fv
 interface User {
   id: string;
   name: string;
