@@ -105,7 +105,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
   const startNewSession = async () => {
     setLoading(true);
     try {
-      const response = await api.post('/api/v1/inventory/start', {
+      const response = await api.post('/inventory/start', {
         pharmacyId,
         date: new Date().toISOString()
       });
@@ -207,7 +207,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
     
     setSaving(true);
     try {
-      await api.post(`/api/v1/inventory/${session.id}/complete`, {
+      await api.post(`/inventory/${session.id}/complete`, {
         items: session.items
       });
       

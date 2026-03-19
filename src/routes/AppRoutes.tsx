@@ -1,15 +1,18 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { PrivateRoute, PublicRoute, RoleBasedRoute } from '@/components/auth/AuthGuards';
+import { useAuthStore } from '@/store/useAuthStore';
 
 // SuperAdmins
 import SuperAdminDashboard from '@/pages/superadmin/SuperAdminDashboard';
 import SuperAdminRegister from '@/pages/superadmin/SuperAdminRegister';
+import AdminGenerateCodePage from '@/pages/superadmin/AdminGenerateCodePage';
+
 
 // Pages - Auth
 import Login from '@/modules/auth/views/Login';
 import Register from '@/pages/Register';
 import VerifyOtp from '@/pages/VerifyOtp';
-
+import ActivationCodePage from '@/pages/ActivationCodePage';
 // Layouts
 import Sidebar from '@/layouts/Sidebar';
 
@@ -32,6 +35,38 @@ import Facture from '@/modules/sales/views/Facture';
 import Rapports from '@/modules/sales/views/Rapports';
 import Historique from '@/modules/sales/views/Historique';
 import OutOfService from '@/modules/core/endehors';
+import Monitoring from '@/modules/inventory/views/monitoring';
+import Inventory from '@/modules/inventory/views/inventory';
+
+// Composant wrapper pour Inventory avec useAuthStore
+const InventoryWrapper = () => {
+  const { user } = useAuthStore();
+  
+  if (!user?.pharmacy_id) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <p className="text-slate-500">Aucune pharmacie sélectionnée</p>
+      </div>
+    );
+  }
+  
+  return <Inventory pharmacyId={user.pharmacy_id} />;
+};
+
+// Composant wrapper pour Monitoring avec useAuthStore
+const MonitoringWrapper = () => {
+  const { user } = useAuthStore();
+  
+  if (!user?.tenant_id) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <p className="text-slate-500">Aucun tenant trouvé</p>
+      </div>
+    );
+  }
+  
+  return <Monitoring tenantId={user.tenant_id} />;
+};
 
 /**
  * Composant pour les modules en cours de développement
@@ -94,9 +129,15 @@ export default function AppRoutes() {
           <Route path="/factures" element={<Facture />} />
           <Route path="/historique" element={<Historique />} />
           <Route path="/rapports" element={<Rapports />} />
-          <Route path="/inventory" element={<InventoryList />} />
+          
+          {/* === Gestion des stocks === */}
+          <Route path="/stock" element={<InventoryList />} />
+          <Route path="/inventaire" element={<InventoryWrapper />} /> {/* Utilisation du wrapper */}
           <Route path="/transfers" element={<TransferList />} />
           <Route path="/returns" element={<ReturnsManager />} />
+          
+          {/* === Monitoring === */}
+          <Route path="/monitoring" element={<MonitoringWrapper />} /> {/* Utilisation du wrapper */}
           
           {/* === Finance & Comptabilité === */}
           <Route path="/finance" element={<FinanceAnalysis />} />
@@ -115,6 +156,9 @@ export default function AppRoutes() {
           <Route path="/payment-success" element={<PaymentSuccessPage />} />
           <Route path="/settings" element={<ConfigViewWrapper />} />
           <Route path="/settings/:pharmacyId" element={<ConfigViewWrapper />} />
+          <Route path="/activate-code" element={<ActivationCodePage />} />
+          <Route path="/generate-code" element={<AdminGenerateCodePage />} />
+
           
           {/* === Redirection par défaut === */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -150,6 +194,9 @@ export default function AppRoutes() {
           </RoleBasedRoute>
         }
       />
+
+      {/* Redirection pour compatibilité avec anciennes routes */}
+      <Route path="/inventory" element={<Navigate to="/stock" replace />} />
 
       {/* ========== GESTION DES ERREURS 404 ========== */}
       <Route path="*" element={<NotFoundPage />} />

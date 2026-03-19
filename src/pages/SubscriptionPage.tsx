@@ -9,15 +9,19 @@ import {
   updateSubscription, 
   type Subscription, 
   type SubscriptionUsage, 
-  type Plan 
+  type Plan
 } from '@/services/subscriptionService';
 import { toast } from 'react-hot-toast';
 import { 
   Calendar, CheckCircle2, Loader2, Package, ShieldCheck, Users, 
-  Star, Zap, Crown, Building2, Check, Download, X
+  Star, Zap, Crown, Building2, Check, Download, X, AlertCircle, RefreshCw,
+  Wallet, CreditCard, Smartphone
 } from 'lucide-react';
 
-// 1. Interfaces étendues avec typage précis
+// ============================================================================
+// INTERFACES
+// ============================================================================
+
 interface ExtendedSubscription extends Omit<Subscription, 'id'> {
   id?: string;
 }
@@ -28,15 +32,11 @@ interface PlanFeature {
   description?: string;
 }
 
-// Type pour les plans avec features qui peuvent être string[] ou PlanFeature[]
 interface ExtendedPlan extends Omit<Plan, 'features'> {
   features?: string[] | PlanFeature[];
   is_popular?: boolean;
-}
-
-// Type pour les plans compatibles avec le service (conversion vers Plan)
-interface ServicePlan extends Plan {
-  features: string[];
+  price_monthly?: number;
+  price_yearly?: number;
 }
 
 interface CurrentPlanData {
@@ -49,7 +49,6 @@ interface CurrentPlanData {
   billing_cycle: string;
 }
 
-// 2. Props interfaces pour les composants
 interface PlanComparisonCardProps {
   plan: ExtendedPlan;
   isCurrentPlan: boolean;
@@ -73,7 +72,10 @@ interface SuccessModalProps {
   getPlanColor: (type: string) => string;
 }
 
-// 3. Constantes et valeurs par défaut
+// ============================================================================
+// CONSTANTES
+// ============================================================================
+
 const DEFAULT_USAGE: SubscriptionUsage = {
   current_products: 0,
   max_products: 100,
@@ -107,80 +109,84 @@ const PLAN_TYPE_BG_COLORS: Record<string, string> = {
 };
 
 const STATUS_CONFIG: Record<string, { text: string; className: string }> = {
-  active: { text: 'Actif', className: 'bg-success/10 text-success' },
-  cancelled: { text: 'Annulé', className: 'bg-danger/10 text-danger' },
-  pending: { text: 'En attente', className: 'bg-warning/10 text-warning' }
+  active: { text: 'Actif', className: 'bg-green-100 text-green-600' },
+  cancelled: { text: 'Annulé', className: 'bg-red-100 text-red-600' },
+  pending: { text: 'En attente', className: 'bg-amber-100 text-amber-600' }
 };
 
-// Fonction utilitaire pour convertir ExtendedPlan en Plan pour le service
-const convertToServicePlan = (plan: ExtendedPlan): ServicePlan => {
-  // Convertir les features en string[] si nécessaire
-  let features: string[] = [];
-  
-  if (plan.features) {
-    if (Array.isArray(plan.features)) {
-      features = plan.features.map(feature => 
-        typeof feature === 'string' ? feature : feature.name
-      );
-    }
-  }
-  
-  return {
-    ...plan,
-    features // Assure que features est toujours un string[]
-  } as ServicePlan;
-};
+// ============================================================================
+// COMPOSANT PRINCIPAL
+// ============================================================================
 
 export default function SubscriptionPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<ExtendedPlan | null>(null);
+  const [showPaymentOptions, setShowPaymentOptions] = useState(false);
+  const [pendingPlan, setPendingPlan] = useState<ExtendedPlan | null>(null);
 
-  // 1. Data fetching avec typage approprié
+  // HOOKS DE REQUÊTE
   const { 
     data: subscriptionData, 
-    isLoading: loadingSubscription 
+    isLoading: loadingSubscription,
+    error: subscriptionError,
+    refetch: refetchSubscription
   } = useQuery<ExtendedSubscription>({
     queryKey: ['subscription'],
-    queryFn: getSubscription
+    queryFn: getSubscription,
+    retry: 2
   });
   
   const { 
     data: usageData, 
-    isLoading: loadingUsage 
+    isLoading: loadingUsage,
+    error: usageError,
+    refetch: refetchUsage
   } = useQuery<SubscriptionUsage>({
     queryKey: ['subscription-usage'],
-    queryFn: getSubscriptionUsage
+    queryFn: getSubscriptionUsage,
+    retry: 2
   });
   
   const { 
     data: plansData, 
-    isLoading: loadingPlans 
+    isLoading: loadingPlans,
+    error: plansError,
+    refetch: refetchPlans
   } = useQuery<ExtendedPlan[]>({
     queryKey: ['subscription-plans'],
-    queryFn: getAvailablePlans
+    queryFn: getAvailablePlans,
+    retry: 2
   });
 
-  // 2. Mutation avec conversion du plan pour le service
+  // MUTATION - CORRIGÉE : envoie seulement les données nécessaires
   const mutation = useMutation({
     mutationFn: (plan: ExtendedPlan) => {
-      const servicePlan = convertToServicePlan(plan);
-      return updateSubscription(servicePlan);
+      // Extraire uniquement les données nécessaires pour l'API
+      // Le backend attend { plan: string, billing_cycle: string }
+      const payload = {
+        plan: plan.type || plan.id || '',  // Le type du plan (ex: 'pro', 'starter')
+        billing_cycle: plan.billing_cycle || 'monthly'
+      };
+      
+      console.log('🔄 Envoi de la mise à jour:', payload);
+      return updateSubscription(payload);
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('✅ Mise à jour réussie:', data);
       queryClient.invalidateQueries({ queryKey: ['subscription'] });
       queryClient.invalidateQueries({ queryKey: ['subscription-usage'] });
       setIsSuccessModalOpen(true);
       toast.success("Votre abonnement a été mis à jour avec succès !");
     },
     onError: (error: Error) => {
+      console.error('❌ Erreur de mutation:', error);
       toast.error(error.message || "Erreur lors du changement de plan. Veuillez réessayer.");
-      console.error("Erreur de mutation:", error);
     }
   });
 
-  // 3. Mémoïsation des valeurs calculées
+  // MÉMOÏSATION
   const currentPlanName = useMemo(() => 
     subscriptionData?.plan_name || 'Gratuit', 
     [subscriptionData]
@@ -191,7 +197,7 @@ export default function SubscriptionPage() {
     const name = planName.toLowerCase();
     
     const planTypeMapping = [
-      { keywords: ['gratuit', 'starter'], type: 'free' },
+      { keywords: ['gratuit', 'starter', 'free'], type: 'free' },
       { keywords: ['standard'], type: 'standard' },
       { keywords: ['professional', 'pro'], type: 'pro' },
       { keywords: ['enterprise'], type: 'enterprise' }
@@ -222,20 +228,19 @@ export default function SubscriptionPage() {
     [usageData]
   );
 
-  // 4. Fonctions utilitaires memoïsées
+  // FONCTIONS UTILITAIRES
   const getPlanIcon = useCallback((type: string): ReactElement => {
     return PLAN_TYPE_ICONS[type] || <ShieldCheck size={24} />;
   }, []);
 
   const getPlanColor = useCallback((type: string): string => {
-    return PLAN_TYPE_COLORS[type] || 'text-medical';
+    return PLAN_TYPE_COLORS[type] || 'text-blue-500';
   }, []);
 
   const getPlanBgColor = useCallback((type: string): string => {
-    return PLAN_TYPE_BG_COLORS[type] || 'bg-medical-light text-medical';
+    return PLAN_TYPE_BG_COLORS[type] || 'bg-blue-100 text-blue-500';
   }, []);
 
-  // 5. Gestion des valeurs "Illimité"
   const getDisplayValue = useCallback((value: string | number): string | number => {
     if (value === "Illimité" || value === 0) {
       return "∞";
@@ -264,8 +269,8 @@ export default function SubscriptionPage() {
     return Math.min(100, Math.max(0, numericPercentage));
   }, []);
 
-  // 6. Gestion du changement de plan
-  const handlePlanChange = useCallback((plan: ExtendedPlan) => {
+  // GESTIONNAIRES D'ÉVÉNEMENTS
+  const handlePlanSelect = useCallback((plan: ExtendedPlan) => {
     setSelectedPlan(plan);
     
     if (subscriptionData?.plan_name === plan.name) {
@@ -273,39 +278,91 @@ export default function SubscriptionPage() {
       return;
     }
 
-    const confirmMessage = plan.price === 0 
+    const price = plan.price_monthly || plan.price || 0;
+    const confirmMessage = price === 0 
       ? `Confirmez-vous le passage au plan GRATUIT "${plan.name}" ?`
-      : `Confirmez-vous le passage au plan "${plan.name}" pour ${plan.price} €/mois ?`;
+      : `Confirmez-vous le passage au plan "${plan.name}" pour ${price} €/mois ?`;
 
     if (window.confirm(confirmMessage)) {
-      if (plan.price > 0) {
-        const currentPlanData: CurrentPlanData = {
-          id: subscriptionData?.id,
-          name: subscriptionData?.plan_name || 'Gratuit',
-          price: subscriptionData?.price || 0,
-          type: currentPlanType,
-          max_users: usage.max_users || 1,
-          max_products: usage.max_products || 100,
-          billing_cycle: subscriptionData?.billing_cycle || 'monthly'
-        };
-
-        navigate('/payment', {
-          state: {
-            plan,
-            currentPlan: currentPlanData
-          }
-        });
+      if (price > 0) {
+        setPendingPlan(plan);
+        setShowPaymentOptions(true);
       } else {
         mutation.mutate(plan);
       }
     }
-  }, [subscriptionData, currentPlanType, usage, navigate, mutation]);
+  }, [subscriptionData, mutation]);
 
-  // 7. État de chargement
-  if (loadingSubscription || loadingUsage || loadingPlans) {
+  const handlePaymentMethodSelect = (method: 'cash' | 'mobile' | 'international') => {
+    if (!pendingPlan) return;
+
+    const currentPlanData: CurrentPlanData = {
+      id: subscriptionData?.id,
+      name: subscriptionData?.plan_name || 'Gratuit',
+      price: subscriptionData?.price || 0,
+      type: currentPlanType,
+      max_users: usage.max_users || 1,
+      max_products: usage.max_products || 100,
+      billing_cycle: subscriptionData?.billing_cycle || 'monthly'
+    };
+
+    if (method === 'cash') {
+      navigate('/activate-code', {
+        state: {
+          plan: pendingPlan,
+          currentPlan: currentPlanData
+        }
+      });
+    } else {
+      navigate('/payment', {
+        state: {
+          plan: pendingPlan,
+          currentPlan: currentPlanData,
+          paymentType: method
+        }
+      });
+    }
+
+    setShowPaymentOptions(false);
+    setPendingPlan(null);
+  };
+
+  // VÉRIFICATIONS
+  const safePlansData = useMemo(() => {
+    if (!plansData) return [];
+    return Array.isArray(plansData) ? plansData : [];
+  }, [plansData]);
+
+  const isLoading = loadingSubscription || loadingUsage || loadingPlans;
+  const hasError = subscriptionError || usageError || plansError;
+
+  // RENDU CONDITIONNEL
+  if (isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center">
-        <Loader2 className="animate-spin text-medical" size={40} />
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <Loader2 className="animate-spin text-blue-500 mx-auto" size={48} />
+          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+            Chargement de vos informations...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (hasError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <ErrorState 
+          subscriptionError={subscriptionError}
+          usageError={usageError}
+          plansError={plansError}
+          onRetry={() => {
+            refetchSubscription();
+            refetchUsage();
+            refetchPlans();
+          }}
+        />
       </div>
     );
   }
@@ -314,9 +371,7 @@ export default function SubscriptionPage() {
     <div className="p-8 max-w-7xl mx-auto space-y-12 animate-in fade-in duration-500">
       {/* SECTION 1 : STATUTS ET USAGE */}
       <div className="space-y-6">
-        <PageHeader 
-          status={subscriptionData?.status}
-        />
+        <PageHeader status={subscriptionData?.status} />
         
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <CurrentPlanSection 
@@ -346,14 +401,30 @@ export default function SubscriptionPage() {
       </div>
 
       {/* SECTION 2 : COMPARATIF DES PLANS */}
-      <PlanComparisonSection 
-        plans={plansData || []}
-        currentPlanName={currentPlanName}
-        getPlanIcon={getPlanIcon}
-        getPlanColor={getPlanColor}
-        onPlanSelect={handlePlanChange}
-        isLoading={mutation.isPending}
-      />
+      {safePlansData.length === 0 ? (
+        <EmptyPlansState onRetry={refetchPlans} />
+      ) : (
+        <PlanComparisonSection 
+          plans={safePlansData}
+          currentPlanName={currentPlanName}
+          getPlanIcon={getPlanIcon}
+          getPlanColor={getPlanColor}
+          onPlanSelect={handlePlanSelect}
+          isLoading={mutation.isPending}
+        />
+      )}
+
+      {/* MODALE DE CHOIX DE PAIEMENT */}
+      {showPaymentOptions && pendingPlan && (
+        <PaymentOptionsModal
+          plan={pendingPlan}
+          onClose={() => {
+            setShowPaymentOptions(false);
+            setPendingPlan(null);
+          }}
+          onSelectMethod={handlePaymentMethodSelect}
+        />
+      )}
 
       {/* MODALE DE SUCCÈS */}
       <SuccessModal 
@@ -366,6 +437,72 @@ export default function SubscriptionPage() {
   );
 }
 
+// ============================================================================
+// COMPOSANTS SECONDAIRES
+// ============================================================================
+
+// Composant : État d'erreur
+function ErrorState({ subscriptionError, usageError, plansError, onRetry }: any) {
+  const getErrorMessage = (error: any) => {
+    if (!error) return null;
+    return error.message || "Une erreur est survenue";
+  };
+
+  return (
+    <div className="bg-white rounded-4xl border border-red-100 shadow-xl max-w-md w-full p-10 text-center">
+      <div className="w-20 h-20 bg-red-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
+        <AlertCircle size={40} className="text-red-500" />
+      </div>
+      
+      <h2 className="text-2xl font-black text-slate-900 uppercase italic mb-4">
+        Oups !
+      </h2>
+      
+      <div className="space-y-2 mb-8">
+        {subscriptionError && (
+          <p className="text-sm text-red-600">Abonnement : {getErrorMessage(subscriptionError)}</p>
+        )}
+        {usageError && (
+          <p className="text-sm text-red-600">Utilisation : {getErrorMessage(usageError)}</p>
+        )}
+        {plansError && (
+          <p className="text-sm text-red-600">Plans : {getErrorMessage(plansError)}</p>
+        )}
+      </div>
+
+      <button
+        onClick={onRetry}
+        className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all flex items-center justify-center gap-3"
+      >
+        <RefreshCw size={16} />
+        Réessayer
+      </button>
+    </div>
+  );
+}
+
+// Composant : État vide pour les plans
+function EmptyPlansState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="bg-slate-50 rounded-4xl border border-slate-200 p-12 text-center">
+      <Package size={48} className="text-slate-300 mx-auto mb-4" />
+      <h3 className="text-xl font-black text-slate-900 uppercase italic mb-2">
+        Aucun plan disponible
+      </h3>
+      <p className="text-sm text-slate-500 mb-6">
+        Les plans d'abonnement ne sont pas disponibles pour le moment.
+      </p>
+      <button
+        onClick={onRetry}
+        className="px-6 py-3 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-800 transition-all inline-flex items-center gap-3"
+      >
+        <RefreshCw size={14} />
+        Rafraîchir
+      </button>
+    </div>
+  );
+}
+
 // Composant : En-tête de page
 function PageHeader({ status }: { status?: string }) {
   const statusInfo = STATUS_CONFIG[status || 'pending'] || STATUS_CONFIG.pending;
@@ -374,7 +511,7 @@ function PageHeader({ status }: { status?: string }) {
     <div className="flex justify-between items-end">
       <div>
         <h1 className="text-3xl font-black text-slate-900 tracking-tighter italic uppercase">
-          MON <span className="text-medical">ABONNEMENT</span>
+          MON <span className="text-blue-500">ABONNEMENT</span>
         </h1>
         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic">
           Gestion de votre forfait et utilisation
@@ -463,7 +600,7 @@ function UsageStats({
         </div>
         <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
           <div 
-            className="h-full bg-medical transition-all duration-1000"
+            className="h-full bg-blue-500 transition-all duration-1000"
             style={{ width: `${usersUsagePercentage}%` }}
           />
         </div>
@@ -523,7 +660,7 @@ function StorageCapacity({
     <div className="bg-slate-900 rounded-4xl p-8 text-white flex flex-col justify-between shadow-2xl hover:shadow-3xl transition-shadow">
       <div>
         <div className="flex items-center gap-2 mb-8">
-          <Package size={20} className="text-medical" />
+          <Package size={20} className="text-blue-400" />
           <h3 className="font-black text-xs uppercase tracking-widest">Capacité Stock</h3>
         </div>
         <p className="text-5xl font-black italic tracking-tighter mb-2">
@@ -540,7 +677,7 @@ function StorageCapacity({
         <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden">
           <div 
             className={`h-full transition-all duration-1000 ${
-              usagePercentage > 90 ? 'bg-danger' : 'bg-medical'
+              usagePercentage > 90 ? 'bg-red-500' : 'bg-blue-500'
             }`}
             style={{ width: `${usagePercentage}%` }}
           />
@@ -548,7 +685,7 @@ function StorageCapacity({
         <div className="flex justify-between text-xs">
           <span className="text-slate-400">0%</span>
           <span className={`font-bold ${
-            usagePercentage > 90 ? 'text-danger' : 'text-medical'
+            usagePercentage > 90 ? 'text-red-500' : 'text-blue-400'
           }`}>
             {usagePercentage.toFixed(1)}%
           </span>
@@ -580,6 +717,11 @@ function PlanComparisonSection({
   onPlanSelect,
   isLoading
 }: PlanComparisonSectionProps) {
+  if (!plans || !Array.isArray(plans)) {
+    console.error('PlanComparisonSection: plans doit être un tableau', plans);
+    return null;
+  }
+
   return (
     <div className="space-y-8">
       <div className="text-center space-y-2">
@@ -625,10 +767,12 @@ function PlanComparisonCard({
   getPlanIcon,
   getPlanColor
 }: PlanComparisonCardProps) {
+  const price = plan.price_monthly || plan.price || 0;
+  
   const getButtonText = () => {
     if (isLoading) return 'Chargement...';
     if (isCurrentPlan) return 'Plan Actif';
-    if (plan.price === 0) return 'Sélectionner Gratuit';
+    if (price === 0) return 'Sélectionner Gratuit';
     return 'Choisir ce plan';
   };
 
@@ -640,31 +784,26 @@ function PlanComparisonCard({
       return 'bg-slate-400 animate-pulse text-white cursor-wait';
     }
     if (plan.type === 'pro' || plan.type === 'enterprise') {
-      return 'bg-slate-900 text-white hover:bg-medical hover:scale-105 shadow-lg shadow-slate-200 active:scale-95';
+      return 'bg-slate-900 text-white hover:bg-blue-600 hover:scale-105 shadow-lg shadow-slate-200 active:scale-95';
     }
-    return 'bg-medical text-white hover:bg-medical-dark hover:scale-105 shadow-lg shadow-medical/20 active:scale-95';
+    return 'bg-blue-500 text-white hover:bg-blue-600 hover:scale-105 shadow-lg shadow-blue-200 active:scale-95';
   };
 
   return (
     <div 
       className={`relative bg-white border-2 rounded-4xl p-8 transition-all hover:shadow-2xl flex flex-col ${
         isCurrentPlan 
-          ? 'border-medical shadow-xl shadow-medical/5 scale-105 z-10' 
-          : 'border-slate-100 hover:border-medical/30 hover:shadow-lg'
+          ? 'border-blue-500 shadow-xl shadow-blue-100 scale-105 z-10' 
+          : 'border-slate-100 hover:border-blue-200 hover:shadow-lg'
       } ${isPopular ? 'ring-2 ring-amber-500/20' : ''}`}
     >
-      {isCurrentPlan && (
-        <CurrentPlanBadge />
-      )}
-
-      {isPopular && !isCurrentPlan && (
-        <RecommendedBadge />
-      )}
+      {isCurrentPlan && <CurrentPlanBadge />}
+      {isPopular && !isCurrentPlan && <RecommendedBadge />}
 
       <div className="mb-6">
         <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 ${
           isCurrentPlan 
-            ? 'bg-medical text-white' 
+            ? 'bg-blue-500 text-white' 
             : plan.type === 'pro' || plan.type === 'enterprise'
             ? 'bg-slate-900 text-white'
             : 'bg-slate-100 text-slate-400'
@@ -679,7 +818,7 @@ function PlanComparisonCard({
       <div className="mb-8">
         <div className="flex items-baseline">
           <span className="text-3xl font-black text-slate-900 leading-none">
-            {plan.price}
+            {price}
           </span>
           <span className="text-sm font-bold text-slate-400 ml-1">
             €/{plan.billing_cycle === 'yearly' ? 'an' : 'mois'}
@@ -703,7 +842,7 @@ function PlanComparisonCard({
 // Composant : Badge Plan Actuel
 function CurrentPlanBadge() {
   return (
-    <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-medical text-white px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">
+    <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-blue-500 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg">
       Actuel
     </div>
   );
@@ -724,14 +863,14 @@ function PlanFeaturesList({ plan }: { plan: ExtendedPlan }) {
     if (plan.max_users === "Illimité" || plan.max_users === 0) {
       return "Utilisateurs illimités";
     }
-    return `${plan.max_users} utilisateurs`;
+    return `${plan.max_users} utilisateur${plan.max_users > 1 ? 's' : ''}`;
   };
 
   const getMaxProductsText = () => {
     if (plan.max_products === "Illimité" || plan.max_products === 0) {
       return "Produits illimités";
     }
-    return `${plan.max_products} produits maximum`;
+    return `${plan.max_products} produit${plan.max_products > 1 ? 's' : ''} maximum`;
   };
 
   const getFeatureText = (feature: string | PlanFeature): string => {
@@ -744,20 +883,20 @@ function PlanFeaturesList({ plan }: { plan: ExtendedPlan }) {
   return (
     <ul className="space-y-4 mb-10 flex-1">
       <li className="flex items-start gap-3">
-        <CheckCircle2 size={16} className="shrink-0 text-medical" />
+        <CheckCircle2 size={16} className="shrink-0 text-blue-500" />
         <span className="text-xs font-bold leading-tight text-slate-600">
           {getMaxUsersText()}
         </span>
       </li>
       <li className="flex items-start gap-3">
-        <CheckCircle2 size={16} className="shrink-0 text-medical" />
+        <CheckCircle2 size={16} className="shrink-0 text-blue-500" />
         <span className="text-xs font-bold leading-tight text-slate-600">
           {getMaxProductsText()}
         </span>
       </li>
       {plan.features?.map((feature, idx) => (
         <li key={idx} className="flex items-start gap-3">
-          <CheckCircle2 size={16} className="shrink-0 text-medical" />
+          <CheckCircle2 size={16} className="shrink-0 text-blue-500" />
           <span className="text-xs font-bold leading-tight text-slate-600">
             {getFeatureText(feature)}
           </span>
@@ -779,24 +918,15 @@ function SuccessModal({ isOpen, selectedPlan, onClose, getPlanColor }: SuccessMo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
       <div className="bg-white rounded-[3rem] max-w-md w-full p-10 shadow-2xl relative overflow-hidden animate-in slide-in-from-bottom-10 duration-300">
-        <div className="absolute -top-24 -right-24 w-48 h-48 bg-medical/10 rounded-full blur-3xl" />
+        <div className="absolute -top-24 -right-24 w-48 h-48 bg-blue-100 rounded-full blur-3xl" />
         
         <CloseButton onClose={onClose} />
 
         <div className="text-center space-y-6 relative">
           <SuccessIcon />
-          
           <ModalHeader />
-          
-          <PlanDetails 
-            selectedPlan={selectedPlan} 
-            getPlanColor={getPlanColor} 
-          />
-
-          <ModalActions 
-            onConfirm={handleConfirm}
-            onClose={onClose}
-          />
+          <PlanDetails selectedPlan={selectedPlan} getPlanColor={getPlanColor} />
+          <ModalActions onConfirm={handleConfirm} onClose={onClose} />
         </div>
       </div>
     </div>
@@ -818,7 +948,7 @@ function CloseButton({ onClose }: { onClose: () => void }) {
 // Composant : Icône de succès
 function SuccessIcon() {
   return (
-    <div className="w-20 h-20 bg-success rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-success/30 rotate-12">
+    <div className="w-20 h-20 bg-green-500 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-green-200 rotate-12">
       <Check size={40} className="text-white -rotate-12" />
     </div>
   );
@@ -843,27 +973,37 @@ function PlanDetails({ selectedPlan, getPlanColor }: {
   selectedPlan: ExtendedPlan | null; 
   getPlanColor: (type: string) => string;
 }) {
+  const planName = selectedPlan?.name ?? 'Plan sélectionné';
+  const planType = selectedPlan?.type ?? 'free';
+  const maxProducts = selectedPlan?.max_products;
+  const maxUsers = selectedPlan?.max_users;
+  const planPrice = selectedPlan?.price_monthly || selectedPlan?.price || 0;
+
   const details = [
     {
       label: 'Nouveau Plan',
-      value: selectedPlan?.name,
-      className: `font-black uppercase italic ${getPlanColor(selectedPlan?.type || 'free')}`
+      value: planName,
+      className: `font-black uppercase italic ${getPlanColor(planType)}`
     },
     {
       label: 'Limite Stock',
-      value: selectedPlan?.max_products === "Illimité" || selectedPlan?.max_products === 0 
+      value: maxProducts === "Illimité" || maxProducts === 0 
         ? "Illimité" 
-        : `${selectedPlan?.max_products} Produits`
+        : maxProducts 
+          ? `${maxProducts} Produit${maxProducts > 1 ? 's' : ''}`
+          : "Non spécifié"
     },
     {
       label: 'Utilisateurs',
-      value: selectedPlan?.max_users === "Illimité" || selectedPlan?.max_users === 0 
+      value: maxUsers === "Illimité" || maxUsers === 0 
         ? "Illimité" 
-        : `${selectedPlan?.max_users} Utilisateurs`
+        : maxUsers
+          ? `${maxUsers} Utilisateur${maxUsers > 1 ? 's' : ''}`
+          : "Non spécifié"
     },
     {
       label: 'Prix payé',
-      value: `${selectedPlan?.price || 0} €`,
+      value: `${planPrice} €`,
       className: 'font-black text-slate-900'
     }
   ];
@@ -906,6 +1046,113 @@ function ModalActions({ onConfirm, onClose }: {
       >
         <Download size={14} /> Télécharger la facture (PDF)
       </button>
+    </div>
+  );
+}
+
+// Composant : Modale de choix du mode de paiement
+function PaymentOptionsModal({ plan, onClose, onSelectMethod }: { 
+  plan: ExtendedPlan; 
+  onClose: () => void;
+  onSelectMethod: (method: 'cash' | 'mobile' | 'international') => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-300">
+      <div className="bg-white rounded-4xl max-w-md w-full p-8 shadow-2xl relative animate-in slide-in-from-bottom-10 duration-300">
+        <button 
+          onClick={onClose}
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-2"
+        >
+          <X size={20} />
+        </button>
+
+        <div className="text-center mb-8">
+          <h2 className="text-2xl font-black text-slate-900 uppercase italic mb-2">
+            Mode de paiement
+          </h2>
+          <p className="text-sm text-slate-500">
+            Choisissez comment vous souhaitez payer pour le plan {plan.name}
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {/* Paiement Cash */}
+          <button
+            onClick={() => onSelectMethod('cash')}
+            className="w-full p-6 border-2 border-slate-100 rounded-3xl hover:border-blue-500 transition-all group text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-green-100 rounded-2xl flex items-center justify-center group-hover:bg-green-500 group-hover:text-white transition-colors">
+                <Wallet size={24} className="text-green-600 group-hover:text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-black text-slate-900 mb-1">Paiement Cash</h3>
+                <p className="text-xs text-slate-500">
+                  Payez en espèces dans nos agences partenaires et recevez un code d'activation
+                </p>
+                <div className="mt-3 text-xs font-bold text-blue-600">
+                  Vous recevrez un code à activer
+                </div>
+              </div>
+            </div>
+          </button>
+
+          {/* Paiement Mobile Money */}
+          <button
+            onClick={() => onSelectMethod('mobile')}
+            className="w-full p-6 border-2 border-slate-100 rounded-3xl hover:border-blue-500 transition-all group text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center group-hover:bg-orange-500 group-hover:text-white transition-colors">
+                <Smartphone size={24} className="text-orange-600 group-hover:text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-black text-slate-900 mb-1">Mobile Money</h3>
+                <p className="text-xs text-slate-500">
+                  M-Pesa, Orange Money, Airtel Money, AfriMoney
+                </p>
+                <div className="flex flex-wrap gap-2 mt-3">
+                  <span className="px-3 py-1 bg-orange-50 text-orange-600 rounded-full text-[10px] font-bold">M-Pesa</span>
+                  <span className="px-3 py-1 bg-orange-50 text-orange-600 rounded-full text-[10px] font-bold">Orange Money</span>
+                  <span className="px-3 py-1 bg-orange-50 text-orange-600 rounded-full text-[10px] font-bold">Airtel</span>
+                  <span className="px-3 py-1 bg-orange-50 text-orange-600 rounded-full text-[10px] font-bold">AfriMoney</span>
+                </div>
+              </div>
+            </div>
+          </button>
+
+          {/* Paiement International */}
+          <button
+            onClick={() => onSelectMethod('international')}
+            className="w-full p-6 border-2 border-slate-100 rounded-3xl hover:border-blue-500 transition-all group text-left"
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                <CreditCard size={24} className="text-blue-600 group-hover:text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-black text-slate-900 mb-1">Paiement International</h3>
+                <p className="text-xs text-slate-500">
+                  Carte bancaire (Visa, Mastercard) - Paiement sécurisé
+                </p>
+                <div className="flex gap-3 mt-3">
+                  <span className="text-xs font-bold text-blue-600">VISA</span>
+                  <span className="text-xs font-bold text-red-600">Mastercard</span>
+                </div>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <div className="mt-6 text-center">
+          <button
+            onClick={onClose}
+            className="text-xs text-slate-400 hover:text-slate-600 font-bold uppercase"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

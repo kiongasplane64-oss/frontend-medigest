@@ -12,8 +12,10 @@ import {
   LayoutDashboard, Menu, X, LogOut, ChevronDown,
   DollarSign, HelpCircle, History, ShoppingBag,
   LineChart, CreditCard, UsersRound, TruckIcon,
-  Clock, Calculator, Crown, Info
-} from 'lucide-react'; // Retiré 'Shield' qui n'est pas utilisé
+  Clock, Calculator, Crown, Info, ClipboardList,
+  BarChart3, Receipt,
+  ChartBar, ChartPie, ChartLine, FileBarChart
+} from 'lucide-react';
 import NotificationDrawer from './NotificationDrawer';
 import OutOfService from '@/modules/core/endehors';
 import { useTimezone } from '@/hooks/useTimezone';
@@ -69,14 +71,12 @@ interface WorkingHours {
   };
 }
 
-// Supprimé l'interface PharmacyConfig qui n'est pas utilisée
-
 // Fonction utilitaire pour formater le rôle
 const formatRole = (role: string): string => {
   return role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 };
 
-// Configuration des menus mise à jour
+// Configuration des menus avec Facture et Statistiques
 const menuGroups: MenuGroup[] = [
   {
     title: "Général",
@@ -94,16 +94,35 @@ const menuGroups: MenuGroup[] = [
     items: [
       { 
         icon: <ShoppingCart size={20}/>, 
-        label: 'Ventes', 
+        label: 'Ventes (POS)', 
         href: '/sales', 
         roles: ["super_admin", "admin", "pharmacien", "caissier", "vendeur"] 
       },
       { 
+        icon: <Receipt size={20}/>,
+        label: 'Factures', 
+        href: '/factures', 
+        roles: ["super_admin", "admin", "pharmacien", "caissier", "vendeur", "comptable"] 
+      },
+      { 
         icon: <Package size={20}/>, 
-        label: 'Inventaire', 
-        href: '/inventory', 
+        label: 'Stock', 
+        href: '/stock', 
         roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "stockiste", "preparateur"],
-        badge: (alerts) => alerts?.length || null
+        badge: (alerts: any) => {
+          // Vérifier que alerts est un tableau avant d'utiliser filter
+          if (Array.isArray(alerts)) {
+            return alerts.filter((a: any) => a?.type === 'low_stock').length || null;
+          }
+          return null;
+        }
+      },
+      { 
+        icon: <ClipboardList size={20}/>, 
+        label: 'Inventaire physique', 
+        href: '/inventaire', 
+        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "stockiste"],
+        badge: () => null
       },
       { 
         icon: <ShoppingBag size={20}/>, 
@@ -132,18 +151,36 @@ const menuGroups: MenuGroup[] = [
     ]
   },
   {
-    title: "Gestion",
+    title: "Statistiques & Rapports",
     items: [
       { 
-        icon: <History size={20}/>, 
-        label: 'Historique', 
-        href: '/history', 
+        icon: <BarChart3 size={20}/>,
+        label: 'Statistiques', 
+        href: '/rapports', 
+        roles: ["super_admin", "admin", "gestionnaire", "comptable"] 
+      },
+      { 
+        icon: <ChartBar size={20}/>, 
+        label: 'Chiffre d\'affaires', 
+        href: '/finance', 
+        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+      },
+      { 
+        icon: <ChartPie size={20}/>, 
+        label: 'Bénéfices', 
+        href: '/profits', 
+        roles: ["super_admin", "admin", "comptable"] 
+      },
+      { 
+        icon: <ChartLine size={20}/>, 
+        label: 'Historique ventes', 
+        href: '/historique', 
         roles: ["super_admin", "admin", "gestionnaire", "comptable", "pharmacien"] 
       },
       { 
-        icon: <CreditCard size={20}/>, 
-        label: 'Dettes', 
-        href: '/debts', 
+        icon: <FileBarChart size={20}/>, 
+        label: 'Rapports détaillés', 
+        href: '/rapports', 
         roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
       },
       { 
@@ -151,6 +188,23 @@ const menuGroups: MenuGroup[] = [
         label: 'Monitoring', 
         href: '/monitoring', 
         roles: ["super_admin", "admin", "gestionnaire"] 
+      }
+    ]
+  },
+  {
+    title: "Gestion",
+    items: [
+      { 
+        icon: <History size={20}/>, 
+        label: 'Historique', 
+        href: '/historique', 
+        roles: ["super_admin", "admin", "gestionnaire", "comptable", "pharmacien"] 
+      },
+      { 
+        icon: <CreditCard size={20}/>, 
+        label: 'Dettes', 
+        href: '/debts', 
+        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <Calculator size={20}/>, 
@@ -282,6 +336,9 @@ const Sidebar: React.FC = () => {
   const [loadingService, setLoadingService] = useState<boolean>(true);
   const [showOutOfService, setShowOutOfService] = useState<boolean>(false);
   const [timeRemaining, setTimeRemaining] = useState<string | null>(null);
+  
+  // État pour gérer les timeouts
+  const [serviceError, setServiceError] = useState<boolean>(false);
 
   // Détecter si on est sur mobile
   useEffect(() => {
@@ -306,7 +363,6 @@ const Sidebar: React.FC = () => {
     endTime.setHours(endHours, endMinutes, 0);
     
     if (now > endTime) {
-      // Déjà après l'heure de fermeture
       return null;
     }
     
@@ -331,25 +387,38 @@ const Sidebar: React.FC = () => {
       }
 
       try {
-        // Charger la configuration pour les heures de service
-        const configResponse = await api.get<{ config: { workingHours: WorkingHours } }>(
-          `/pharmacies/${user.pharmacy_id}/config`
-        );
+        // Utiliser un timeout plus court pour éviter les longues attentes
+        const configPromise = api.get<{ config: { workingHours: WorkingHours } }>(
+          `/pharmacies/${user.pharmacy_id}/config`,
+          { timeout: 5000 } // 5 secondes de timeout
+        ).catch(() => null); // Ignorer les erreurs
         
-        if (configResponse.data?.config?.workingHours) {
+        const statusPromise = api.get<ServiceStatus>(
+          `/pharmacies/${user.pharmacy_id}/service-status`,
+          { timeout: 5000 } // 5 secondes de timeout
+        ).catch(() => null); // Ignorer les erreurs
+
+        // Attendre les deux promesses
+        const [configResponse, statusResponse] = await Promise.all([configPromise, statusPromise]);
+        
+        if (configResponse?.data?.config?.workingHours) {
           setWorkingHours(configResponse.data.config.workingHours);
         }
 
-        // Vérifier le statut du service
-        const statusResponse = await api.get<ServiceStatus>(
-          `/pharmacies/${user.pharmacy_id}/service-status`
-        );
-        
-        setServiceStatus(statusResponse.data);
-        setShowOutOfService(!statusResponse.data.in_service);
+        if (statusResponse?.data) {
+          setServiceStatus(statusResponse.data);
+          setShowOutOfService(!statusResponse.data.in_service);
+          setServiceError(false);
+        } else {
+          // Si pas de réponse, on considère que le service est disponible par défaut
+          setServiceError(true);
+          setShowOutOfService(false);
+        }
         
       } catch (err) {
         console.error('Erreur lors du chargement du service:', err);
+        setServiceError(true);
+        setShowOutOfService(false);
       } finally {
         setLoadingService(false);
       }
@@ -357,17 +426,19 @@ const Sidebar: React.FC = () => {
 
     loadServiceStatus();
 
-    // Vérifier le statut toutes les minutes
     const interval = setInterval(async () => {
       if (user?.pharmacy_id) {
         try {
           const response = await api.get<ServiceStatus>(
-            `/pharmacies/${user.pharmacy_id}/service-status`
+            `/pharmacies/${user.pharmacy_id}/service-status`,
+            { timeout: 5000 }
           );
           setServiceStatus(response.data);
           setShowOutOfService(!response.data.in_service);
+          setServiceError(false);
         } catch (err) {
           console.error('Erreur lors de la vérification du service:', err);
+          setServiceError(true);
         }
       }
     }, 60000);
@@ -392,7 +463,7 @@ const Sidebar: React.FC = () => {
   useEffect(() => {
     const checkNavigation = async () => {
       if (location.pathname === '/login' || location.pathname === '/logout' || 
-          location.pathname === '/out-of-service' || showOutOfService) {
+          location.pathname === '/out-of-service' || showOutOfService || serviceError) {
         return;
       }
 
@@ -400,7 +471,8 @@ const Sidebar: React.FC = () => {
 
       try {
         const response = await api.get<ServiceStatus>(
-          `/pharmacies/${user.pharmacy_id}/service-status`
+          `/pharmacies/${user.pharmacy_id}/service-status`,
+          { timeout: 5000 }
         );
         
         if (!response.data.in_service) {
@@ -408,11 +480,13 @@ const Sidebar: React.FC = () => {
         }
       } catch (err) {
         console.error('Erreur lors de la vérification du service:', err);
+        // En cas d'erreur, on continue à utiliser l'application
+        setServiceError(true);
       }
     };
 
     checkNavigation();
-  }, [location.pathname, user, showOutOfService]);
+  }, [location.pathname, user, showOutOfService, serviceError]);
 
   // Fermer la sidebar quand on change de page sur mobile
   useEffect(() => {
@@ -435,7 +509,7 @@ const Sidebar: React.FC = () => {
 
   // Vérifier si un élément est actif
   const isActive = useCallback((href: string): boolean => {
-    return location.pathname.startsWith(href);
+    return location.pathname === href || location.pathname.startsWith(href + '/');
   }, [location.pathname]);
 
   // Gérer l'expansion des groupes
@@ -459,7 +533,7 @@ const Sidebar: React.FC = () => {
 
   // Nombre total d'alertes non lues
   const unreadAlertsCount = useMemo(() => {
-    return alerts?.length || 0;
+    return Array.isArray(alerts) ? alerts.length : 0;
   }, [alerts]);
 
   // Si en chargement
@@ -468,14 +542,14 @@ const Sidebar: React.FC = () => {
       <div className="h-screen flex items-center justify-center">
         <div className="text-center">
           <Clock className="w-12 h-12 text-blue-600 animate-pulse mx-auto mb-4" />
-          <p className="text-slate-600">Vérification des heures de service...</p>
+          <p className="text-slate-600">Chargement de l'application...</p>
         </div>
       </div>
     );
   }
 
-  // Afficher la page hors service
-  if (showOutOfService) {
+  // Afficher la page hors service seulement si on a une vraie indication
+  if (showOutOfService && serviceStatus && !serviceError) {
     const workingHoursForDisplay = workingHours ? {
       enabled: workingHours.enabled,
       startTime: workingHours.startTime,
@@ -528,9 +602,14 @@ const Sidebar: React.FC = () => {
               <span className="text-[8px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-widest">
                 {formatRole(userRole)}
               </span>
-              {serviceStatus?.in_service && (
+              {serviceStatus?.in_service && !serviceError && (
                 <div className="flex items-center gap-1 px-1.5 py-0.5 bg-green-100 rounded-full">
                   <span className="text-[6px] sm:text-[8px] text-green-700 font-bold">EN SERVICE</span>
+                </div>
+              )}
+              {serviceError && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-yellow-100 rounded-full">
+                  <span className="text-[6px] sm:text-[8px] text-yellow-700 font-bold">MODE HORS LIGNE</span>
                 </div>
               )}
             </div>
@@ -538,59 +617,61 @@ const Sidebar: React.FC = () => {
           
           <div className="flex items-center gap-2">
             {/* Bouton d'information sur le service */}
-            <div className="relative">
-              <button
-                onClick={() => setShowServiceInfo(!showServiceInfo)}
-                onBlur={() => setTimeout(() => setShowServiceInfo(false), 200)}
-                className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all relative"
-                aria-label="Informations service"
-                title="Temps de service restant"
-              >
-                <Info size={18} className="sm:w-5 sm:h-5" />
-                {timeRemaining && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                )}
-              </button>
-              
-              {/* Tooltip d'information */}
-              {showServiceInfo && (
-                <div className="absolute right-0 top-10 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-50 text-xs">
-                  <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-1">
-                    <Clock size={14} className="text-blue-500" />
-                    Horaires de service
-                  </h4>
-                  
-                  {workingHours && (
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-slate-600">
-                        <span>Heures:</span>
-                        <span className="font-medium">{workingHours.startTime} - {workingHours.endTime}</span>
-                      </div>
-                      
-                      {timeRemaining && (
-                        <div className="bg-green-50 p-2 rounded-lg">
-                          <p className="text-green-700 font-medium text-center">
-                            ⏳ Fermeture dans {timeRemaining}
-                          </p>
-                        </div>
-                      )}
-                      
-                      {workingHours.overtimeEndTime && (
-                        <div className="flex justify-between text-amber-600 text-[10px]">
-                          <span>Supplément:</span>
-                          <span>jusqu'à {workingHours.overtimeEndTime}</span>
-                        </div>
-                      )}
-                      
-                      <div className="border-t border-slate-100 pt-2 mt-1">
-                        <p className="text-[10px] text-slate-400 mb-1">Fuseau: {workingHours.timezone || 'Africa/Kinshasa'}</p>
-                        <p className="text-[10px] text-slate-400">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</p>
-                      </div>
-                    </div>
+            {!serviceError && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowServiceInfo(!showServiceInfo)}
+                  onBlur={() => setTimeout(() => setShowServiceInfo(false), 200)}
+                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all relative"
+                  aria-label="Informations service"
+                  title="Temps de service restant"
+                >
+                  <Info size={18} className="sm:w-5 sm:h-5" />
+                  {timeRemaining && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                   )}
-                </div>
-              )}
-            </div>
+                </button>
+                
+                {/* Tooltip d'information */}
+                {showServiceInfo && (
+                  <div className="absolute right-0 top-10 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-50 text-xs">
+                    <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-1">
+                      <Clock size={14} className="text-blue-500" />
+                      Horaires de service
+                    </h4>
+                    
+                    {workingHours && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-slate-600">
+                          <span>Heures:</span>
+                          <span className="font-medium">{workingHours.startTime} - {workingHours.endTime}</span>
+                        </div>
+                        
+                        {timeRemaining && (
+                          <div className="bg-green-50 p-2 rounded-lg">
+                            <p className="text-green-700 font-medium text-center">
+                              ⏳ Fermeture dans {timeRemaining}
+                            </p>
+                          </div>
+                        )}
+                        
+                        {workingHours.overtimeEndTime && (
+                          <div className="flex justify-between text-amber-600 text-[10px]">
+                            <span>Supplément:</span>
+                            <span>jusqu'à {workingHours.overtimeEndTime}</span>
+                          </div>
+                        )}
+                        
+                        <div className="border-t border-slate-100 pt-2 mt-1">
+                          <p className="text-[10px] text-slate-400 mb-1">Fuseau: {workingHours.timezone || 'Africa/Kinshasa'}</p>
+                          <p className="text-[10px] text-slate-400">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             
             <button 
               onClick={() => setIsNotifOpen(true)}

@@ -257,10 +257,10 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
     setError(null);
     
     try {
-      const pharmaciesRes = await api.get(`/api/v1/tenants/${tenantId}/pharmacies`);
+      const pharmaciesRes = await api.get(`/tenants/${tenantId}/pharmacies`);
       setPharmacies(pharmaciesRes.data);
       
-      const statsRes = await api.get(`/api/v1/tenants/${tenantId}/dashboard/stats`, {
+      const statsRes = await api.get(`/tenants/${tenantId}/dashboard/stats`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           dateRange: filters.dateRange
@@ -268,7 +268,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       });
       setDashboardStats(statsRes.data);
       
-      const salesRes = await api.get(`/api/v1/tenants/${tenantId}/sales/recent`, {
+      const salesRes = await api.get(`/tenants/${tenantId}/sales/recent`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           limit: 50
@@ -277,7 +277,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       setRecentSales(salesRes.data);
       setTotalItems(salesRes.data.length);
       
-      const productsRes = await api.get(`/api/v1/tenants/${tenantId}/products`, {
+      const productsRes = await api.get(`/tenants/${tenantId}/products`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           lowStock: true
@@ -285,7 +285,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       });
       setProducts(productsRes.data);
       
-      const expensesRes = await api.get(`/api/v1/tenants/${tenantId}/expenses`, {
+      const expensesRes = await api.get(`/tenants/${tenantId}/expenses`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           dateRange: filters.dateRange
@@ -293,7 +293,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       });
       setExpenses(expensesRes.data);
       
-      const profitRes = await api.get(`/api/v1/tenants/${tenantId}/profit-loss`, {
+      const profitRes = await api.get(`/tenants/${tenantId}/profit-loss`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           dateRange: filters.dateRange
@@ -301,7 +301,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       });
       setProfitLoss(profitRes.data);
       
-      const logsRes = await api.get(`/api/v1/tenants/${tenantId}/activity-logs`, {
+      const logsRes = await api.get(`/tenants/${tenantId}/activity-logs`, {
         params: {
           pharmacyId: selectedPharmacy !== 'all' ? selectedPharmacy : undefined,
           limit: 100
@@ -309,7 +309,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
       });
       setActivityLogs(logsRes.data);
       
-      const alertsRes = await api.get(`/api/v1/tenants/${tenantId}/alerts`);
+      const alertsRes = await api.get(`/tenants/${tenantId}/alerts`);
       setAlerts(alertsRes.data);
       
     } catch {
@@ -327,7 +327,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
 
   const startInventory = async (pharmacyId: string) => {
     try {
-      const response = await api.post(`/api/v1/inventory/start`, {
+      const response = await api.post(`/inventory/start`, {
         pharmacyId,
         date: new Date().toISOString()
       });
@@ -357,7 +357,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
 
   const saveInventory = async () => {
     try {
-      await api.post(`/api/v1/inventory/save`, {
+      await api.post(`/inventory/save`, {
         inventoryId: currentInventory?.id,
         items: inventoryItems
       });
@@ -370,7 +370,7 @@ const Monitoring = ({ tenantId }: MonitoringProps) => {
   };
 
   const exportData = (format: 'csv' | 'excel' | 'pdf') => {
-    window.open(`/api/v1/tenants/${tenantId}/export?format=${format}&pharmacyId=${selectedPharmacy}&dateRange=${filters.dateRange}`);
+    window.open(`/tenants/${tenantId}/export?format=${format}&pharmacyId=${selectedPharmacy}&dateRange=${filters.dateRange}`);
   };
 
   const getFilteredData = () => {
