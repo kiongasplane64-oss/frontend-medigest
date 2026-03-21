@@ -1,4 +1,4 @@
-// components/Sidebar.tsx
+// layouts/Sidebar.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAlerts } from '@/hooks/useAlerts';
@@ -20,8 +20,8 @@ import NotificationDrawer from './NotificationDrawer';
 import OutOfService from '@/modules/core/endehors';
 import { useTimezone } from '@/hooks/useTimezone';
 
-// Types
-type Role = "super_admin" | "admin" | "gestionnaire" | "pharmacien" | "caissier" | "vendeur" | "comptable" | "stockiste" | "preparateur";
+// Types - Supprimé super_admin des rôles
+type Role = "admin" | "gestionnaire" | "pharmacien" | "caissier" | "vendeur" | "comptable" | "stockiste" | "preparateur";
 
 interface MenuItem {
   icon: React.ReactNode;
@@ -76,7 +76,7 @@ const formatRole = (role: string): string => {
   return role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 };
 
-// Configuration des menus avec Facture et Statistiques
+// Configuration des menus - EXCLUT COMPLÈTEMENT super_admin
 const menuGroups: MenuGroup[] = [
   {
     title: "Général",
@@ -85,7 +85,7 @@ const menuGroups: MenuGroup[] = [
         icon: <LayoutDashboard size={20}/>, 
         label: 'Tableau de bord', 
         href: '/dashboard', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
+        roles: ["admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
       }
     ]
   },
@@ -96,21 +96,20 @@ const menuGroups: MenuGroup[] = [
         icon: <ShoppingCart size={20}/>, 
         label: 'Ventes (POS)', 
         href: '/sales', 
-        roles: ["super_admin", "admin", "pharmacien", "caissier", "vendeur"] 
+        roles: ["admin", "pharmacien", "caissier", "vendeur"] 
       },
       { 
         icon: <Receipt size={20}/>,
         label: 'Factures', 
         href: '/factures', 
-        roles: ["super_admin", "admin", "pharmacien", "caissier", "vendeur", "comptable"] 
+        roles: ["admin", "pharmacien", "caissier", "vendeur", "comptable"] 
       },
       { 
         icon: <Package size={20}/>, 
         label: 'Stock', 
         href: '/stock', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "stockiste", "preparateur"],
+        roles: ["admin", "gestionnaire", "pharmacien", "stockiste", "preparateur"],
         badge: (alerts: any) => {
-          // Vérifier que alerts est un tableau avant d'utiliser filter
           if (Array.isArray(alerts)) {
             return alerts.filter((a: any) => a?.type === 'low_stock').length || null;
           }
@@ -121,32 +120,32 @@ const menuGroups: MenuGroup[] = [
         icon: <ClipboardList size={20}/>, 
         label: 'Inventaire physique', 
         href: '/inventaire', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "stockiste"],
+        roles: ["admin", "gestionnaire", "pharmacien", "stockiste"],
         badge: () => null
       },
       { 
         icon: <ShoppingBag size={20}/>, 
         label: 'Achats', 
         href: '/purchases', 
-        roles: ["super_admin", "admin", "gestionnaire", "stockiste"] 
+        roles: ["admin", "gestionnaire", "stockiste"] 
       },
       { 
         icon: <ArrowLeftRight size={20}/>, 
         label: 'Transferts', 
         href: '/transfers', 
-        roles: ["super_admin", "admin", "gestionnaire", "stockiste"] 
+        roles: ["admin", "gestionnaire", "stockiste"] 
       },
       { 
         icon: <RotateCcw size={20}/>, 
         label: 'Retours', 
         href: '/returns', 
-        roles: ["super_admin", "admin", "pharmacien", "gestionnaire"] 
+        roles: ["admin", "pharmacien", "gestionnaire"] 
       },
       { 
         icon: <TruckIcon size={20}/>, 
         label: 'Livraisons', 
         href: '/deliveries', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien"] 
+        roles: ["admin", "gestionnaire", "pharmacien"] 
       }
     ]
   },
@@ -157,37 +156,37 @@ const menuGroups: MenuGroup[] = [
         icon: <BarChart3 size={20}/>,
         label: 'Statistiques', 
         href: '/rapports', 
-        roles: ["super_admin", "admin", "gestionnaire", "comptable"] 
+        roles: ["admin", "gestionnaire", "comptable"] 
       },
       { 
         icon: <ChartBar size={20}/>, 
         label: 'Chiffre d\'affaires', 
         href: '/finance', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <ChartPie size={20}/>, 
         label: 'Bénéfices', 
         href: '/profits', 
-        roles: ["super_admin", "admin", "comptable"] 
+        roles: ["admin", "comptable"] 
       },
       { 
         icon: <ChartLine size={20}/>, 
         label: 'Historique ventes', 
         href: '/historique', 
-        roles: ["super_admin", "admin", "gestionnaire", "comptable", "pharmacien"] 
+        roles: ["admin", "gestionnaire", "comptable", "pharmacien"] 
       },
       { 
         icon: <FileBarChart size={20}/>, 
         label: 'Rapports détaillés', 
         href: '/rapports', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <LineChart size={20}/>, 
         label: 'Monitoring', 
         href: '/monitoring', 
-        roles: ["super_admin", "admin", "gestionnaire"] 
+        roles: ["admin", "gestionnaire"] 
       }
     ]
   },
@@ -198,19 +197,19 @@ const menuGroups: MenuGroup[] = [
         icon: <History size={20}/>, 
         label: 'Historique', 
         href: '/historique', 
-        roles: ["super_admin", "admin", "gestionnaire", "comptable", "pharmacien"] 
+        roles: ["admin", "gestionnaire", "comptable", "pharmacien"] 
       },
       { 
         icon: <CreditCard size={20}/>, 
         label: 'Dettes', 
         href: '/debts', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <Calculator size={20}/>, 
         label: 'Capital', 
         href: '/capital', 
-        roles: ["super_admin", "admin", "comptable"] 
+        roles: ["admin", "comptable"] 
       }
     ]
   },
@@ -221,25 +220,25 @@ const menuGroups: MenuGroup[] = [
         icon: <BadgeEuro size={20}/>, 
         label: "Chiffre d'Affaires", 
         href: '/finance', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <DollarSign size={20}/>, 
         label: 'Dépenses', 
         href: '/expenses', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <TrendingUp size={20}/>, 
         label: 'Bénéfices', 
         href: '/profits', 
-        roles: ["super_admin", "admin", "comptable"] 
+        roles: ["admin", "comptable"] 
       },
       { 
         icon: <Wallet size={20}/>, 
         label: 'Caisse', 
         href: '/cash-register', 
-        roles: ["super_admin", "admin", "comptable", "caissier"] 
+        roles: ["admin", "comptable", "caissier"] 
       }
     ]
   },
@@ -250,7 +249,7 @@ const menuGroups: MenuGroup[] = [
         icon: <UsersRound size={20}/>, 
         label: 'Employés', 
         href: '/employees', 
-        roles: ["super_admin", "admin", "gestionnaire"] 
+        roles: ["admin", "gestionnaire"] 
       }
     ]
   },
@@ -261,13 +260,13 @@ const menuGroups: MenuGroup[] = [
         icon: <Truck size={20}/>, 
         label: 'Fournisseurs', 
         href: '/suppliers', 
-        roles: ["super_admin", "admin", "gestionnaire", "stockiste"] 
+        roles: ["admin", "gestionnaire", "stockiste"] 
       },
       { 
         icon: <UserCircle size={20}/>, 
         label: 'Clients', 
         href: '/clients', 
-        roles: ["super_admin", "admin", "vendeur", "caissier", "pharmacien"] 
+        roles: ["admin", "vendeur", "caissier", "pharmacien"] 
       }
     ]
   },
@@ -278,25 +277,25 @@ const menuGroups: MenuGroup[] = [
         icon: <Crown size={20}/>, 
         label: 'Abonnement', 
         href: '/subscription', 
-        roles: ["super_admin", "admin"] 
+        roles: ["admin"] 
       },
       { 
         icon: <Users size={20}/>, 
         label: 'Utilisateurs', 
         href: '/users', 
-        roles: ["super_admin", "admin"] 
+        roles: ["admin"] 
       },
       { 
         icon: <FileText size={20}/>, 
         label: 'Rapports', 
         href: '/reports', 
-        roles: ["super_admin", "admin", "comptable", "gestionnaire"] 
+        roles: ["admin", "comptable", "gestionnaire"] 
       },
       { 
         icon: <Settings size={20}/>, 
         label: 'Paramètres', 
         href: '/settings', 
-        roles: ["super_admin", "admin"] 
+        roles: ["admin"] 
       }
     ]
   },
@@ -307,7 +306,7 @@ const menuGroups: MenuGroup[] = [
         icon: <HelpCircle size={20}/>, 
         label: 'Aide', 
         href: '/help', 
-        roles: ["super_admin", "admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
+        roles: ["admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
       }
     ]
   }
@@ -319,6 +318,8 @@ const Sidebar: React.FC = () => {
   const { user, logout } = useAuthStore();
   const { alerts } = useAlerts();
   const { isExpired, daysRemaining, plan_name, subscription } = useSubscription();
+  
+  // ❌ SUPPRESSION DE useAuthRedirect - La redirection est maintenant gérée dans AppRoutes
   
   const timezoneHook = useTimezone();
   const browserTimezone = timezoneHook.timezone;
@@ -387,18 +388,16 @@ const Sidebar: React.FC = () => {
       }
 
       try {
-        // Utiliser un timeout plus court pour éviter les longues attentes
         const configPromise = api.get<{ config: { workingHours: WorkingHours } }>(
           `/pharmacies/${user.pharmacy_id}/config`,
-          { timeout: 5000 } // 5 secondes de timeout
-        ).catch(() => null); // Ignorer les erreurs
+          { timeout: 5000 }
+        ).catch(() => null);
         
         const statusPromise = api.get<ServiceStatus>(
           `/pharmacies/${user.pharmacy_id}/service-status`,
-          { timeout: 5000 } // 5 secondes de timeout
-        ).catch(() => null); // Ignorer les erreurs
+          { timeout: 5000 }
+        ).catch(() => null);
 
-        // Attendre les deux promesses
         const [configResponse, statusResponse] = await Promise.all([configPromise, statusPromise]);
         
         if (configResponse?.data?.config?.workingHours) {
@@ -410,7 +409,6 @@ const Sidebar: React.FC = () => {
           setShowOutOfService(!statusResponse.data.in_service);
           setServiceError(false);
         } else {
-          // Si pas de réponse, on considère que le service est disponible par défaut
           setServiceError(true);
           setShowOutOfService(false);
         }
@@ -480,7 +478,6 @@ const Sidebar: React.FC = () => {
         }
       } catch (err) {
         console.error('Erreur lors de la vérification du service:', err);
-        // En cas d'erreur, on continue à utiliser l'application
         setServiceError(true);
       }
     };
@@ -495,9 +492,14 @@ const Sidebar: React.FC = () => {
     }
   }, [location.pathname, isMobile, showOutOfService]);
 
-  // Rôle de l'utilisateur avec fallback
+  // Rôle de l'utilisateur avec fallback - Ne peut pas être super_admin
   const userRole = useMemo((): Role => {
-    return (user?.role as Role) || "vendeur";
+    const role = (user?.role as string) || "vendeur";
+    // Si le rôle est super_admin, ne pas l'afficher dans le Sidebar (redirigé ailleurs)
+    if (role === 'super_admin') {
+      return "admin"; // Fallback pour éviter les erreurs, mais normalement ne devrait pas arriver
+    }
+    return role as Role;
   }, [user]);
 
   // Filtrer les groupes visibles

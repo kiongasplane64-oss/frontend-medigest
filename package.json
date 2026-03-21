@@ -1,5 +1,5 @@
 {
-  "name": "pharma-frontend",
+  "name": "medigest-pro",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -23,6 +23,7 @@
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.563.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-barcode": "^1.6.1",
     "react-dom": "^19.2.0",
@@ -37,6 +38,7 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@types/file-saver": "^2.0.7",
     "@types/node": "^24.11.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

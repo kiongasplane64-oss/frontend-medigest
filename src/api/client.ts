@@ -1,6 +1,5 @@
 import axios, {
   AxiosError,
-  AxiosHeaders,
   type AxiosInstance,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
@@ -32,7 +31,7 @@ const api: AxiosInstance = axios.create({
   },
 });
 
-// Fonctions de logging simplifiées
+// Fonctions de logging
 const logInfo = (message: string, extra?: unknown) => 
   console.log(`ℹ️ ${message}`, extra ?? '');
 const logSuccess = (message: string, extra?: unknown) => 
@@ -68,11 +67,24 @@ const safeLocalStorage = {
   }
 };
 
-// Récupération des tokens depuis le store ou localStorage
+// Récupération des tokens - Priorité au localStorage
 const getStoredAccessToken = (): string | null => {
   try {
+    // 🔥 D'abord essayer localStorage
+    const localToken = safeLocalStorage.get(ACCESS_TOKEN_KEY);
+    if (localToken) {
+      return localToken;
+    }
+    
+    // Ensuite essayer le store
     const state = useAuthStore.getState();
-    return state.token || safeLocalStorage.get(ACCESS_TOKEN_KEY);
+    if (state.token) {
+      // Synchroniser avec localStorage si besoin
+      safeLocalStorage.set(ACCESS_TOKEN_KEY, state.token);
+      return state.token;
+    }
+    
+    return null;
   } catch (error) {
     logError("Erreur lecture token", error);
     return safeLocalStorage.get(ACCESS_TOKEN_KEY);
@@ -81,8 +93,20 @@ const getStoredAccessToken = (): string | null => {
 
 const getStoredRefreshToken = (): string | null => {
   try {
+    // 🔥 D'abord essayer localStorage
+    const localToken = safeLocalStorage.get(REFRESH_TOKEN_KEY);
+    if (localToken) {
+      return localToken;
+    }
+    
+    // Ensuite essayer le store
     const state = useAuthStore.getState();
-    return state.refreshToken || safeLocalStorage.get(REFRESH_TOKEN_KEY);
+    if (state.refreshToken) {
+      safeLocalStorage.set(REFRESH_TOKEN_KEY, state.refreshToken);
+      return state.refreshToken;
+    }
+    
+    return null;
   } catch (error) {
     logError("Erreur lecture refresh token", error);
     return safeLocalStorage.get(REFRESH_TOKEN_KEY);
@@ -124,11 +148,15 @@ const setStoredTokens = (accessToken?: string, refreshToken?: string): void => {
     safeLocalStorage.set(REFRESH_TOKEN_KEY, refreshToken);
   }
 
-  // Mise à jour du store si les méthodes existent
+  // Mise à jour du store
   try {
     const state = useAuthStore.getState() as any;
-    if (accessToken && state.setToken) state.setToken(accessToken);
-    if (refreshToken && state.setRefreshToken) state.setRefreshToken(refreshToken);
+    if (accessToken && state.setToken) {
+      state.setToken(accessToken);
+    }
+    if (refreshToken && state.setRefreshToken) {
+      state.setRefreshToken(refreshToken);
+    }
   } catch (error) {
     logError("Erreur synchronisation store", error);
   }
@@ -170,27 +198,10 @@ const isPublicRoute = (url?: string): boolean => {
   return publicPaths.some(path => url.includes(path));
 };
 
-// Vérification du content-type
-const shouldAttachJsonContentType = (config: InternalAxiosRequestConfig): boolean => {
-  const isFormData = typeof FormData !== 'undefined' && config.data instanceof FormData;
-  const isFileUpload = config.data instanceof Blob || config.data instanceof File;
-  const responseType = config.responseType;
-  
-  return !isFormData && !isFileUpload && responseType !== 'blob' && responseType !== 'arraybuffer';
-};
-
-// Normalisation des headers
-const normalizeHeaders = (config: InternalAxiosRequestConfig): AxiosHeaders => {
-  return config.headers instanceof AxiosHeaders
-    ? config.headers
-    : new AxiosHeaders(config.headers || {});
-};
-
 // Gestion du refresh token
 let refreshPromise: Promise<string | null> | null = null;
 
 const refreshAccessToken = async (): Promise<string | null> => {
-  // Si un refresh est déjà en cours, on retourne la même promesse
   if (refreshPromise) {
     return refreshPromise;
   }
@@ -230,7 +241,7 @@ const refreshAccessToken = async (): Promise<string | null> => {
       return accessToken;
     } catch (error) {
       logError('Échec du refresh token', error);
-      forceLogout(); // Déconnexion en cas d'échec du refresh
+      forceLogout();
       return null;
     } finally {
       refreshPromise = null;
@@ -240,46 +251,39 @@ const refreshAccessToken = async (): Promise<string | null> => {
   return refreshPromise;
 };
 
-// Intercepteur de requête
+// 🔥 INTERCEPTEUR REQUÊTE - Version simple et fiable
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = getStoredAccessToken();
     const pharmacyId = getCurrentPharmacyId();
     const tenantId = getCurrentTenantId();
-    const headers = normalizeHeaders(config);
 
-    // Gestion du Content-Type
-    if (shouldAttachJsonContentType(config)) {
-      headers.set('Content-Type', 'application/json');
-    } else {
-      headers.delete('Content-Type');
+    // 🔥 LOG DÉTAILLÉ
+    console.log(`🔍 [${config.method?.toUpperCase()}] ${config.url}`);
+    console.log(`   Token présent: ${!!token}`);
+    if (token) {
+      console.log(`   Token: ${token.substring(0, 30)}...`);
     }
 
-    headers.set('Accept', 'application/json');
-
-    // Ajout du token pour les routes non-publiques
-    if (!isPublicRoute(config.url) && !isAuthRoute(config.url)) {
-      if (token) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
+    // Ajout du token pour toutes les routes sauf auth et public
+    const shouldAddToken = !isPublicRoute(config.url) && !isAuthRoute(config.url);
+    
+    if (shouldAddToken && token) {
+      // 🔥 CORRECTION: Utilisation simple des headers comme dans ton code original
+      config.headers.Authorization = `Bearer ${token}`;
+      console.log(`   ✅ Token AJOUTÉ à ${config.url}`);
+    } else if (shouldAddToken && !token) {
+      console.warn(`   ⚠️ PAS de token pour ${config.url}`);
     } else {
-      headers.delete('Authorization');
+      console.log(`   ℹ️ Route publique/auth - pas de token`);
     }
 
     // Headers contextuels
     if (pharmacyId) {
-      headers.set('X-Pharmacy-ID', pharmacyId);
+      config.headers['X-Pharmacy-ID'] = pharmacyId;
     }
     if (tenantId) {
-      headers.set('X-Tenant-ID', tenantId);
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      logInfo(`➡️ ${config.method?.toUpperCase()} ${config.url}`, {
-        hasToken: !!token,
-        pharmacyId,
-        tenantId
-      });
+      config.headers['X-Tenant-ID'] = tenantId;
     }
 
     return config;
@@ -290,12 +294,10 @@ api.interceptors.request.use(
   }
 );
 
-// Intercepteur de réponse
+// 🔥 INTERCEPTEUR RÉPONSE - Version simple et fiable
 api.interceptors.response.use(
   (response: AxiosResponse) => {
-    if (process.env.NODE_ENV === 'development') {
-      logSuccess(`⬅️ ${response.status} ${response.config.url}`);
-    }
+    logSuccess(`⬅️ ${response.status} ${response.config.url}`);
     return response;
   },
   async (error: AxiosError) => {
@@ -312,31 +314,32 @@ api.interceptors.response.use(
       logError("Erreur configuration", error.message);
     }
 
-    // Gestion spécifique des 401
+    // Gestion des 401
     if (status === 401 && originalRequest && !originalRequest._retry && !isAuthRoute(url)) {
       originalRequest._retry = true;
 
+      logInfo(`🔄 Tentative de refresh pour ${url}`);
       const newToken = await refreshAccessToken();
       
       if (newToken) {
-        // Mise à jour du header et nouvelle tentative
-        originalRequest.headers.set('Authorization', `Bearer ${newToken}`);
+        // 🔥 CORRECTION: Mise à jour simple du header
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        
+        logInfo(`🔄 Nouvelle tentative avec nouveau token`);
         logInfo(`🔄 Nouvelle tentative ${url}`);
+        
+        // Retenter la requête
         return api(originalRequest);
       }
       
-      // Si le refresh échoue, on force la déconnexion
+      logWarning(`Refresh échoué pour ${url}, déconnexion`);
       forceLogout();
       return Promise.reject(error);
     }
 
-    // Gestion des 403 (accès interdit)
+    // Gestion des 403
     if (status === 403) {
       logWarning(`Accès interdit ${url}`);
-      // Redirection vers une page d'erreur ou dashboard
-      if (!window.location.pathname.includes('/unauthorized')) {
-        // window.location.replace('/unauthorized');
-      }
     }
 
     return Promise.reject(error);
