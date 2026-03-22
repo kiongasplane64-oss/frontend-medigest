@@ -19,7 +19,7 @@ import {
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
-import { ActiveMenu } from './superAdminLayout'
+import { ActiveMenu } from './SuperAdminLayout'
 
 // ============================================================================
 // TYPES ET INTERFACES
