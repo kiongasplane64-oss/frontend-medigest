@@ -1,5 +1,5 @@
 // SuperAdminDashboard.tsx
-import SuperAdminLayout from './superAdminLayout'
+import SuperAdminLayout from "./SuperAdminLayout";
 
 /**
  * Composant principal du tableau de bord Super Admin
