@@ -43,6 +43,13 @@ import { OfflineSale } from '@/db/offlineDb';
 // Re-export des types depuis le service
 export type { CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig };
 
+// Mapping des méthodes de paiement pour l'affichage
+const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: 'Espèces',
+  mobile_money: 'Mobile Money',
+  account: 'Compte',
+};
+
 // ============================================
 // COMPOSANTS MEMOÏSÉS
 // ============================================
@@ -850,7 +857,7 @@ export default function POS() {
             )}
           </section>
 
-          {/* Cart Section - Inchangé */}
+          {/* Cart Section */}
           <aside>
             <div className="sticky top-4 space-y-4">
               {/* Cart */}
@@ -927,9 +934,9 @@ export default function POS() {
                     </span>
                   </div>
 
-                  {/* Payment Methods */}
+                  {/* Payment Methods - CORRIGÉ avec les bonnes valeurs API */}
                   <div className="grid grid-cols-3 gap-2">
-                    {(['cash', 'mobile', 'account'] as PaymentMethod[]).map((method) => (
+                    {(['cash', 'mobile_money', 'account'] as PaymentMethod[]).map((method) => (
                       <button
                         key={method}
                         onClick={() => handlePaymentMethodChange(method)}
@@ -943,10 +950,10 @@ export default function POS() {
                       >
                         <div className="flex flex-col items-center gap-1">
                           {method === 'cash' && <Banknote size={20} />}
-                          {method === 'mobile' && <Phone size={20} />}
+                          {method === 'mobile_money' && <Phone size={20} />}
                           {method === 'account' && <Users size={20} />}
                           <span className="text-[10px] font-bold">
-                            {method === 'cash' ? 'Espèces' : method === 'mobile' ? 'Mobile' : 'Compte'}
+                            {PAYMENT_METHOD_LABELS[method]}
                           </span>
                         </div>
                       </button>

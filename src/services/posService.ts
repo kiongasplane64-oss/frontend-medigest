@@ -106,7 +106,7 @@ export interface PharmacyConfig {
   theme: 'light' | 'dark' | 'system';
 }
 
-export type PaymentMethod = 'cash' | 'mobile' | 'account';
+export type PaymentMethod = 'cash' | 'mobile_money' | 'account';
 export type ScanMode = 'auto' | 'manual';
 export type SaleStatus = 'synced' | 'pending' | 'failed';
 
