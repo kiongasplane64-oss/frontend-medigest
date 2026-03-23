@@ -1,6 +1,7 @@
 // components/InitialStockView.tsx
 import { useState } from 'react';
 import { inventoryService } from '@/services/inventoryService';
+import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 import type { ProductCreate } from '@/types/inventory.types';
 import {
   X, Save, Loader2, Upload, Plus, Trash2,
@@ -22,17 +23,27 @@ interface InitialStockViewProps {
   open: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  pharmacyId?: string; // Ajout pour la configuration
 }
 
 export default function InitialStockView({
   open,
   onClose,
-  onSuccess
+  onSuccess,
+  pharmacyId
 }: InitialStockViewProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<InitialProduct[]>([]);
   const [importMode, setImportMode] = useState<'manual' | 'file'>('manual');
+
+  // Récupération de la configuration de la pharmacie
+  const { 
+    formatPrice, 
+    defaultMargin, 
+    isAutomaticPricing,
+    primaryCurrency 
+  } = usePharmacyConfig(pharmacyId);
 
   if (!open) return null;
 
@@ -61,6 +72,13 @@ export default function InitialStockView({
   const updateProduct = (index: number, field: keyof InitialProduct, value: string | number): void => {
     const updated = [...products];
     updated[index] = { ...updated[index], [field]: value };
+    
+    // Si le prix d'achat change et que le calcul automatique est activé, mettre à jour le prix de vente
+    if (field === 'purchase_price' && isAutomaticPricing && typeof value === 'number') {
+      const calculatedSellingPrice = Math.round(value * (1 + defaultMargin / 100) * 100) / 100;
+      updated[index].selling_price = calculatedSellingPrice;
+    }
+    
     setProducts(updated);
   };
 
@@ -81,18 +99,30 @@ export default function InitialStockView({
 
     try {
       for (const product of products) {
+        // Calcul du prix de vente selon la configuration
+        let sellingPrice = product.selling_price;
+        
+        if (!sellingPrice || sellingPrice === 0) {
+          if (isAutomaticPricing) {
+            sellingPrice = Math.round(product.purchase_price * (1 + defaultMargin / 100) * 100) / 100;
+          } else {
+            sellingPrice = Math.round(product.purchase_price * 1.3 * 100) / 100; // Fallback à 30%
+          }
+        }
+        
         // Préparation des données au format ProductCreate
         const productData: ProductCreate = {
-          code: product.code || generateCode(), // Code obligatoire, on génère si absent
+          code: product.code || generateCode(),
           name: product.name,
           quantity: product.quantity,
           purchase_price: product.purchase_price,
-          selling_price: product.selling_price || Math.round(product.purchase_price * 1.3 * 100) / 100,
+          selling_price: sellingPrice,
           alert_threshold: 10,
           description: 'Stock initial',
           expiry_date: product.expiry_date || undefined,
           category: product.category || undefined,
-          supplier: product.supplier || undefined
+          supplier: product.supplier || undefined,
+          pharmacy_id: pharmacyId
         };
 
         await inventoryService.createProduct(productData);
@@ -127,15 +157,21 @@ export default function InitialStockView({
 
   const downloadTemplate = async (): Promise<void> => {
     try {
-      const blob = await inventoryService.getImportTemplate();
+      const templateData = await inventoryService.getImportTemplate();
+      // Correction: templateData est un objet { template: string[] }, pas un Blob
+      // Convertir en Blob pour le téléchargement
+      const blob = new Blob([JSON.stringify(templateData, null, 2)], { 
+        type: 'application/json' 
+      });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'modele_import_produits.xlsx';
+      a.download = 'modele_import_produits.json';
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
       setError("Erreur lors du téléchargement du modèle");
+      console.error(err);
     }
   };
 
@@ -156,6 +192,11 @@ export default function InitialStockView({
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                   PREMIER INVENTAIRE
                 </p>
+                {pharmacyId && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    Pharmacie: {pharmacyId}
+                  </p>
+                )}
               </div>
             </div>
             <button
@@ -206,9 +247,9 @@ export default function InitialStockView({
             <div className="space-y-6">
               <div className="bg-slate-50 p-6 rounded-xl text-center">
                 <Upload className="mx-auto text-blue-500 mb-3" size={32} />
-                <h3 className="font-bold text-lg mb-2">Importer un fichier Excel</h3>
+                <h3 className="font-bold text-lg mb-2">Importer un fichier</h3>
                 <p className="text-sm text-slate-500 mb-4">
-                  Format accepté: .xlsx, .xls (max 5Mo)
+                  Format accepté: .xlsx, .xls, .csv (max 5Mo)
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3 justify-center">
                   <button
@@ -222,7 +263,7 @@ export default function InitialStockView({
                     <input
                       type="file"
                       hidden
-                      accept=".xlsx,.xls"
+                      accept=".xlsx,.xls,.csv"
                       onChange={handleFileImport}
                       disabled={loading}
                     />
@@ -233,9 +274,9 @@ export default function InitialStockView({
               <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-700">
                 <p className="font-bold mb-1">📋 Instructions :</p>
                 <ul className="list-disc list-inside space-y-1">
-                  <li>Téléchargez le modèle Excel</li>
-                  <li>Remplissez vos produits (lignes 2 à 1000)</li>
-                  <li>Les champs obligatoires : nom, quantité, prix achat</li>
+                  <li>Téléchargez le modèle au format JSON</li>
+                  <li>Structure: tableau de produits avec les champs requis</li>
+                  <li>Les champs obligatoires : name, quantity, purchase_price</li>
                   <li>Importez le fichier complété</li>
                 </ul>
               </div>
@@ -309,24 +350,34 @@ export default function InitialStockView({
                           onChange={(e) => updateProduct(index, 'quantity', parseInt(e.target.value) || 0)}
                           className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
-                        <input
-                          type="number"
-                          placeholder="Prix achat *"
-                          min="0"
-                          step="0.01"
-                          value={product.purchase_price}
-                          onChange={(e) => updateProduct(index, 'purchase_price', parseFloat(e.target.value) || 0)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
-                        />
-                        <input
-                          type="number"
-                          placeholder="Prix vente"
-                          min="0"
-                          step="0.01"
-                          value={product.selling_price || ''}
-                          onChange={(e) => updateProduct(index, 'selling_price', parseFloat(e.target.value) || 0)}
-                          className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
-                        />
+                        <div className="relative">
+                          <input
+                            type="number"
+                            placeholder="Prix achat *"
+                            min="0"
+                            step="0.01"
+                            value={product.purchase_price}
+                            onChange={(e) => updateProduct(index, 'purchase_price', parseFloat(e.target.value) || 0)}
+                            className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                            {primaryCurrency}
+                          </span>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            placeholder="Prix vente"
+                            min="0"
+                            step="0.01"
+                            value={product.selling_price || ''}
+                            onChange={(e) => updateProduct(index, 'selling_price', parseFloat(e.target.value) || 0)}
+                            className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                            {primaryCurrency}
+                          </span>
+                        </div>
                         <input
                           type="text"
                           placeholder="Fournisseur"
@@ -342,6 +393,14 @@ export default function InitialStockView({
                           className="w-full p-3 bg-white rounded-lg font-bold text-sm outline-none ring-1 ring-slate-200 focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
+                      
+                      {/* Afficher les informations de configuration */}
+                      {isAutomaticPricing && product.purchase_price > 0 && (
+                        <div className="mt-2 text-xs text-blue-600 bg-blue-50 p-2 rounded-lg">
+                          💡 Prix de vente automatique calculé: {formatPrice(Math.round(product.purchase_price * (1 + defaultMargin / 100) * 100) / 100)}
+                          (marge {defaultMargin}%)
+                        </div>
+                      )}
                     </div>
                   ))}
 
