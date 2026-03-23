@@ -10,6 +10,6 @@ export interface Supplier {
 }
 
 export const getSuppliers = async (): Promise<Supplier[]> => {
-  const { data } = await api.get('/v1/suppliers'); // Adaptez selon votre route exacte
+  const { data } = await api.get('/suppliers'); // Adaptez selon votre route exacte
   return data;
 };

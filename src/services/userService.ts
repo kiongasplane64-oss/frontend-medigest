@@ -246,7 +246,7 @@ export const getPharmacyUsers = async (filters?: UserFilters): Promise<User[]> =
   if (filters?.page) params.append('page', filters.page.toString());
   if (filters?.limit) params.append('limit', filters.limit.toString());
 
-  const { data } = await api.get('/v1/users', { params });
+  const { data } = await api.get('/users', { params });
   return data;
 };
 
@@ -263,7 +263,7 @@ export const createPharmacyUser = async (userData: UserCreate): Promise<User> =>
     email: userData.email.toLowerCase().trim()
   };
 
-  const { data } = await api.post('/v1/users', payload);
+  const { data } = await api.post('/users', payload);
   return data;
 };
 
@@ -271,7 +271,7 @@ export const createPharmacyUser = async (userData: UserCreate): Promise<User> =>
  * Supprimer un utilisateur
  */
 export const deletePharmacyUser = async (id: string): Promise<void> => {
-  await api.delete(`/v1/users/${id}`);
+  await api.delete(`/users/${id}`);
 };
 
 /**
@@ -283,7 +283,7 @@ export const updatePharmacyUser = async (id: string, userData: UpdateUserData): 
     ...(userData.email && { email: userData.email.toLowerCase().trim() })
   };
 
-  const { data } = await api.put(`/v1/users/${id}`, payload);
+  const { data } = await api.put(`/users/${id}`, payload);
   return data;
 };
 
@@ -291,7 +291,7 @@ export const updatePharmacyUser = async (id: string, userData: UpdateUserData): 
  * Récupérer un utilisateur par son ID
  */
 export const getPharmacyUserById = async (id: string): Promise<User> => {
-  const { data } = await api.get(`/v1/users/${id}`);
+  const { data } = await api.get(`/users/${id}`);
   return data;
 };
 
@@ -303,7 +303,7 @@ export const getPharmacyUserById = async (id: string): Promise<User> => {
  * Mettre à jour les permissions d'un utilisateur
  */
 export const updateUserPermissions = async (userId: string, permissions: UserPermissions): Promise<User> => {
-  const { data } = await api.patch(`/v1/users/${userId}/permissions`, permissions);
+  const { data } = await api.patch(`/users/${userId}/permissions`, permissions);
   return data;
 };
 
@@ -311,7 +311,7 @@ export const updateUserPermissions = async (userId: string, permissions: UserPer
  * Récupérer les permissions d'un utilisateur
  */
 export const getUserPermissions = async (userId: string): Promise<UserPermissions> => {
-  const { data } = await api.get(`/v1/users/${userId}/permissions`);
+  const { data } = await api.get(`/users/${userId}/permissions`);
   return data;
 };
 
@@ -320,7 +320,7 @@ export const getUserPermissions = async (userId: string): Promise<UserPermission
  */
 export const resetUserPermissions = async (userId: string, role: string): Promise<User> => {
   const defaultPermissions = getDefaultPermissions(role);
-  const { data } = await api.post(`/v1/users/${userId}/permissions/reset`, { 
+  const { data } = await api.post(`/users/${userId}/permissions/reset`, { 
     role,
     permissions: defaultPermissions 
   });
@@ -339,7 +339,7 @@ export const updateUserAssignment = async (
   pharmacyId: string, 
   branchId?: string
 ): Promise<User> => {
-  const { data } = await api.patch(`/v1/users/${userId}/assignment`, { 
+  const { data } = await api.patch(`/users/${userId}/assignment`, { 
     pharmacyId, 
     branchId 
   });
@@ -354,7 +354,7 @@ export const getUserAssignments = async (userId: string): Promise<{
   current_pharmacy?: string;
   current_branch?: string;
 }> => {
-  const { data } = await api.get(`/v1/users/${userId}/assignments`);
+  const { data } = await api.get(`/users/${userId}/assignments`);
   return data;
 };
 
@@ -366,7 +366,7 @@ export const getUserAssignments = async (userId: string): Promise<{
  * Activer/désactiver un utilisateur
  */
 export const toggleUserStatus = async (id: string, is_active: boolean): Promise<User> => {
-  const { data } = await api.patch(`/v1/users/${id}/status`, { is_active });
+  const { data } = await api.patch(`/users/${id}/status`, { is_active });
   return data;
 };
 
@@ -374,7 +374,7 @@ export const toggleUserStatus = async (id: string, is_active: boolean): Promise<
  * Vérifier si un utilisateur est actif
  */
 export const checkUserStatus = async (id: string): Promise<{ is_active: boolean; is_online: boolean }> => {
-  const { data } = await api.get(`/v1/users/${id}/status`);
+  const { data } = await api.get(`/users/${id}/status`);
   return data;
 };
 
@@ -400,7 +400,7 @@ export const getUserSessionStats = async (filters: {
   if (filters.start_date) params.append('start_date', filters.start_date);
   if (filters.end_date) params.append('end_date', filters.end_date);
 
-  const { data } = await api.get('/v1/users/sessions/stats', { params });
+  const { data } = await api.get('/users/sessions/stats', { params });
   return data;
 };
 
@@ -416,7 +416,7 @@ export const getUserSessionHistory = async (filters: SessionHistoryFilters): Pro
   if (filters.limit) params.append('limit', filters.limit.toString());
   if (filters.page) params.append('page', filters.page.toString());
 
-  const { data } = await api.get(`/v1/users/${filters.user_id}/sessions`, { params });
+  const { data } = await api.get(`/users/${filters.user_id}/sessions`, { params });
   return data;
 };
 
@@ -428,7 +428,7 @@ export const getUserMonthlyStats = async (
   year: number,
   month: number
 ): Promise<UserMonthlyStats> => {
-  const { data } = await api.get(`/v1/users/${userId}/stats/monthly`, {
+  const { data } = await api.get(`/users/${userId}/stats/monthly`, {
     params: { year, month }
   });
   return data;
@@ -443,7 +443,7 @@ export const getOnlineUsers = async (pharmacyId?: string, branchId?: string): Pr
   if (pharmacyId) params.append('pharmacy_id', pharmacyId);
   if (branchId) params.append('branch_id', branchId);
 
-  const { data } = await api.get('/v1/users/online', { params });
+  const { data } = await api.get('/users/online', { params });
   return data;
 };
 
@@ -455,7 +455,7 @@ export const getOnlineUsers = async (pharmacyId?: string, branchId?: string): Pr
  * Enregistrer le début d'une session utilisateur
  */
 export const startUserSession = async (pharmacyId: string, branchId?: string): Promise<{ session_id: string }> => {
-  const { data } = await api.post('/v1/users/session/start', { pharmacyId, branchId });
+  const { data } = await api.post('/users/session/start', { pharmacyId, branchId });
   return data;
 };
 
@@ -463,7 +463,7 @@ export const startUserSession = async (pharmacyId: string, branchId?: string): P
  * Enregistrer la fin d'une session utilisateur
  */
 export const endUserSession = async (sessionId: string): Promise<{ duration: number }> => {
-  const { data } = await api.post(`/v1/users/session/${sessionId}/end`);
+  const { data } = await api.post(`/users/session/${sessionId}/end`);
   return data;
 };
 
@@ -499,7 +499,7 @@ export const getAttendanceReport = async (filters: {
   if (filters.branch_id) params.append('branch_id', filters.branch_id);
   if (filters.user_id) params.append('user_id', filters.user_id);
 
-  const { data } = await api.get('/v1/users/attendance/report', { params });
+  const { data } = await api.get('/users/attendance/report', { params });
   return data;
 };
 
@@ -511,7 +511,7 @@ export const getAttendanceReport = async (filters: {
  * Récupérer le profil de l'utilisateur connecté
  */
 export const getCurrentUserProfile = async (): Promise<User & { permissions: UserPermissions }> => {
-  const { data } = await api.get('/v1/users/me/profile');
+  const { data } = await api.get('/users/me/profile');
   return data;
 };
 
@@ -523,7 +523,7 @@ export const updateCurrentUserProfile = async (userData: {
   telephone?: string;
   adresse?: string;
 }): Promise<User> => {
-  const { data } = await api.patch('/v1/users/me/profile', userData);
+  const { data } = await api.patch('/users/me/profile', userData);
   return data;
 };
 
@@ -531,7 +531,7 @@ export const updateCurrentUserProfile = async (userData: {
  * Changer le mot de passe de l'utilisateur connecté
  */
 export const changePassword = async (oldPassword: string, newPassword: string): Promise<{ message: string }> => {
-  const { data } = await api.post('/v1/users/me/change-password', {
+  const { data } = await api.post('/users/me/change-password', {
     old_password: oldPassword,
     new_password: newPassword
   });
@@ -554,7 +554,7 @@ export const exportUsersData = async (format: 'csv' | 'excel' | 'pdf', filters?:
   if (filters?.role) params.append('role', filters.role);
   if (filters?.include_inactive) params.append('include_inactive', 'true');
 
-  const response = await api.get('/v1/users/export', {
+  const response = await api.get('/users/export', {
     params,
     responseType: 'blob'
   });
@@ -584,7 +584,7 @@ export const exportSessionsData = async (
   if (filters.branch_id) params.append('branch_id', filters.branch_id);
   if (filters.user_id) params.append('user_id', filters.user_id);
 
-  const response = await api.get('/v1/users/sessions/export', {
+  const response = await api.get('/users/sessions/export', {
     params,
     responseType: 'blob'
   });
@@ -615,7 +615,7 @@ export const getUsersStatistics = async (pharmacyId?: string): Promise<{
   const params = new URLSearchParams();
   if (pharmacyId) params.append('pharmacy_id', pharmacyId);
 
-  const { data } = await api.get('/v1/users/statistics', { params });
+  const { data } = await api.get('/users/statistics', { params });
   return data;
 };
 

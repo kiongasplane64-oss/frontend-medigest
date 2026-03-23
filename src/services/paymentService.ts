@@ -12,7 +12,7 @@ export const createCheckoutSession = async (
   billingCycle: 'monthly' | 'yearly',
   provider: PaymentProvider
 ): Promise<CheckoutSession> => {
-  const { data } = await api.post('/v1/payments/create-session', {
+  const { data } = await api.post('/payments/create-session', {
     plan_name: planName,
     cycle: billingCycle,
     provider: provider

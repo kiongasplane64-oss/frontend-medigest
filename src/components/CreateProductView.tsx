@@ -1,8 +1,7 @@
 // components/CreateProductView.tsx
 import { useEffect, useMemo, useState } from 'react';
-import type { Product, ProductCreate, ID } from '@/types/inventory.types';
+import type { Product, ProductCreate } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
-import { useAuthStore } from '@/store/useAuthStore';
 import {
   X,
   Save,
@@ -22,11 +21,65 @@ import {
   Sparkles,
   ScanLine,
   ShieldCheck,
+  Settings2,
+  Type,
+  Store,
 } from 'lucide-react';
 
-// Extension du type Product pour inclure pharmacy_id (si nécessaire)
+// ============================================================
+// TYPES
+// ============================================================
+
+interface ConfigResponse {
+  config: {
+    pharmacyInfo: {
+      name: string;
+      address: string;
+      phone: string;
+      email: string;
+      licenseNumber: string;
+    };
+    salesType: string;
+    taxRate: number;
+    marginConfig: {
+      defaultMargin: number;
+      minMargin: number;
+      maxMargin: number;
+    };
+    automaticPricing: {
+      enabled: boolean;
+      method: string;
+      value: number;
+    };
+    profitability: {
+      enabled: boolean;
+      rate: number;
+    };
+    primaryCurrency: string;
+    currencies: Array<{
+      code: string;
+      symbol: string;
+      isActive: boolean;
+      exchangeRate: number;
+    }>;
+    workingHours: {
+      enabled: boolean;
+      startTime: string;
+      endTime: string;
+      timezone: string;
+    };
+    allowNegativeStock: boolean;
+    lowStockThreshold: number;
+    expiryWarningDays: number;
+  };
+}
+
 interface ExtendedProduct extends Partial<Product> {
   pharmacy_id?: string | null;
+  batch_number?: string;
+  category_id?: string;
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
 }
 
 interface CreateProductViewInitialValues {
@@ -36,16 +89,21 @@ interface CreateProductViewInitialValues {
   category?: string;
   supplier?: string;
   location?: string;
-  pharmacy_id?: string; // Ajout du pharmacy_id optionnel
+  pharmacy_id?: string;
+  purchase_price?: number;
+  selling_price?: number;
+  quantity?: number;
 }
 
 interface CreateProductViewProps {
   open: boolean;
   onClose: () => void;
-  product?: ExtendedProduct | null; // Utilisation du type étendu
+  product?: ExtendedProduct | null;
   onSuccess?: () => void;
   initialValues?: CreateProductViewInitialValues;
-  pharmacyId?: string; // Ajout du pharmacy_id en prop
+  pharmacyConfig?: ConfigResponse;
+  pharmacyName?: string;
+  pharmacyId?: string;
 }
 
 type FormTab = 'general' | 'pricing' | 'advanced';
@@ -58,7 +116,8 @@ interface FormState {
   category: string;
   supplier: string;
   purchase_price: string;
-  selling_price: string;
+  selling_price_wholesale: string;
+  selling_price_retail: string;
   quantity: string;
   alert_threshold: string;
   minimum_stock: string;
@@ -66,15 +125,19 @@ interface FormState {
   expiry_date: string;
   location: string;
   laboratory: string;
-  pharmacy_id: string; // Ajout du champ pharmacy_id dans le state
+  batch_number: string;
 }
 
-const DEFAULT_MARGIN_PERCENT = 20;
+// ============================================================
+// CONSTANTES
+// ============================================================
 
-// Fonction utilitaire pour convertir ID en string
-const idToString = (id: ID): string => {
-  return String(id);
-};
+const DEFAULT_MARGIN_PERCENT = 25;
+const DEFAULT_TAX_RATE = 16;
+
+// ============================================================
+// FONCTIONS UTILITAIRES
+// ============================================================
 
 function toInputString(value: unknown): string {
   if (value === null || value === undefined) return '';
@@ -98,7 +161,6 @@ function generateProductCode(): string {
 function buildInitialFormState(
   product?: ExtendedProduct | null,
   initialValues?: CreateProductViewInitialValues,
-  defaultPharmacyId?: string,
 ): FormState {
   return {
     code: toInputString(initialValues?.code ?? product?.code ?? ''),
@@ -107,18 +169,25 @@ function buildInitialFormState(
     description: toInputString(product?.description ?? ''),
     category: toInputString(initialValues?.category ?? product?.category ?? ''),
     supplier: toInputString(initialValues?.supplier ?? product?.supplier ?? ''),
-    purchase_price: toInputString(product?.purchase_price ?? ''),
-    selling_price: toInputString(product?.selling_price ?? ''),
-    quantity: toInputString(product?.quantity ?? 0),
+    purchase_price: toInputString(initialValues?.purchase_price ?? product?.purchase_price ?? ''),
+    selling_price_wholesale: toInputString(
+      initialValues?.selling_price ?? product?.selling_price_wholesale ?? product?.selling_price ?? ''
+    ),
+    selling_price_retail: toInputString(product?.selling_price_retail ?? ''),
+    quantity: toInputString(initialValues?.quantity ?? product?.quantity ?? 0),
     alert_threshold: toInputString(product?.alert_threshold ?? 10),
     minimum_stock: toInputString(product?.minimum_stock ?? ''),
     maximum_stock: toInputString(product?.maximum_stock ?? ''),
     expiry_date: normalizeDateForInput(product?.expiry_date ?? ''),
     location: toInputString(initialValues?.location ?? product?.location ?? ''),
     laboratory: toInputString(product?.laboratory ?? ''),
-    pharmacy_id: toInputString(initialValues?.pharmacy_id ?? product?.pharmacy_id ?? defaultPharmacyId ?? ''),
+    batch_number: toInputString(product?.batch_number ?? ''),
   };
 }
+
+// ============================================================
+// COMPOSANT PRINCIPAL
+// ============================================================
 
 export default function CreateProductView({
   open,
@@ -126,36 +195,69 @@ export default function CreateProductView({
   product,
   onSuccess,
   initialValues,
-  pharmacyId: propPharmacyId, // Récupération du pharmacy_id depuis les props
+  pharmacyConfig,
+  pharmacyName,
+  pharmacyId,
 }: CreateProductViewProps) {
-  const { user } = useAuthStore();
+  // États
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<FormTab>('general');
-  const [hasTva, setHasTva] = useState<boolean>(product?.has_tva ?? false);
-  const [tvaRate, setTvaRate] = useState<number>(product?.tva_rate ?? 0);
+  const [hasTva, setHasTva] = useState<boolean>(product?.has_tva ?? true);
+  const [tvaRate, setTvaRate] = useState<number>(product?.tva_rate ?? DEFAULT_TAX_RATE);
   const [marginPercent, setMarginPercent] = useState<number>(DEFAULT_MARGIN_PERCENT);
-
-  // Déterminer le pharmacy_id par défaut (prop > user > undefined)
-  // Conversion de user?.pharmacy_id en string si nécessaire
-  const userPharmacyId = user?.pharmacy_id ? idToString(user.pharmacy_id) : undefined;
-  const defaultPharmacyId = propPharmacyId || userPharmacyId || undefined;
-
+  const [salesType, setSalesType] = useState<string>('both');
+  const [autoPricingEnabled, setAutoPricingEnabled] = useState<boolean>(false);
+  const [autoPricingMethod, setAutoPricingMethod] = useState<string>('percentage');
+  const [autoPricingValue, setAutoPricingValue] = useState<number>(25);
+  
+  // Formulaire
   const [form, setForm] = useState<FormState>(() =>
-    buildInitialFormState(product, initialValues, defaultPharmacyId),
+    buildInitialFormState(product, initialValues),
   );
 
+  // ============================================================
+  // EFFETS
+  // ============================================================
+
+  // Charger les configurations depuis pharmacyConfig
+  useEffect(() => {
+    if (pharmacyConfig?.config) {
+      const cfg = pharmacyConfig.config;
+      
+      if (cfg.salesType) {
+        setSalesType(cfg.salesType);
+      }
+      
+      if (cfg.automaticPricing?.enabled) {
+        setAutoPricingEnabled(true);
+        setAutoPricingMethod(cfg.automaticPricing.method || 'percentage');
+        setAutoPricingValue(cfg.automaticPricing.value || 25);
+      }
+      
+      if (cfg.marginConfig?.defaultMargin) {
+        setMarginPercent(cfg.marginConfig.defaultMargin);
+      }
+      
+      if (cfg.taxRate) {
+        setTvaRate(cfg.taxRate);
+      }
+    }
+  }, [pharmacyConfig]);
+
+  // Réinitialiser le formulaire quand le modal s'ouvre
   useEffect(() => {
     if (!open) return;
 
-    setForm(buildInitialFormState(product, initialValues, defaultPharmacyId));
-    setHasTva(product?.has_tva ?? false);
-    setTvaRate(product?.tva_rate ?? 0);
-    setMarginPercent(DEFAULT_MARGIN_PERCENT);
+    setForm(buildInitialFormState(product, initialValues));
+    setHasTva(product?.has_tva ?? true);
+    setTvaRate(product?.tva_rate ?? (pharmacyConfig?.config?.taxRate || DEFAULT_TAX_RATE));
+    setMarginPercent(pharmacyConfig?.config?.marginConfig?.defaultMargin || DEFAULT_MARGIN_PERCENT);
     setActiveTab('general');
     setError(null);
-  }, [open, product, initialValues, defaultPharmacyId]);
+  }, [open, product, initialValues, pharmacyConfig]);
 
+  // Gestion de la touche Échap
   useEffect(() => {
     if (!open) return;
 
@@ -169,46 +271,65 @@ export default function CreateProductView({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, loading, onClose]);
 
+  // ============================================================
+  // CALCULS DÉRIVÉS
+  // ============================================================
+
   const purchasePrice = Number(form.purchase_price || 0);
-  const sellingPrice = Number(form.selling_price || 0);
+  const sellingPriceWholesale = Number(form.selling_price_wholesale || 0);
+  const sellingPriceRetail = Number(form.selling_price_retail || 0);
   const quantity = Number(form.quantity || 0);
 
   const tvaAmount = useMemo(() => {
-    if (!hasTva || !sellingPrice || !tvaRate) return 0;
-    return (sellingPrice * tvaRate) / 100;
-  }, [hasTva, sellingPrice, tvaRate]);
+    if (!hasTva || !sellingPriceWholesale || !tvaRate) return 0;
+    return (sellingPriceWholesale * tvaRate) / 100;
+  }, [hasTva, sellingPriceWholesale, tvaRate]);
 
-  const sellingPriceWithTva = useMemo(() => {
-    return sellingPrice + tvaAmount;
-  }, [sellingPrice, tvaAmount]);
+  const sellingPriceWholesaleWithTva = useMemo(() => {
+    return sellingPriceWholesale + tvaAmount;
+  }, [sellingPriceWholesale, tvaAmount]);
 
-  const grossMargin = useMemo(() => {
-    if (!purchasePrice || !sellingPrice) return 0;
-    return sellingPrice - purchasePrice;
-  }, [purchasePrice, sellingPrice]);
+  const sellingPriceRetailWithTva = useMemo(() => {
+    if (!hasTva || !sellingPriceRetail || !tvaRate) return sellingPriceRetail;
+    return sellingPriceRetail + (sellingPriceRetail * tvaRate) / 100;
+  }, [hasTva, sellingPriceRetail, tvaRate]);
 
-  const grossMarginPercent = useMemo(() => {
-    if (!purchasePrice || !sellingPrice) return 0;
-    return ((sellingPrice - purchasePrice) / purchasePrice) * 100;
-  }, [purchasePrice, sellingPrice]);
+  const grossMarginWholesale = useMemo(() => {
+    if (!purchasePrice || !sellingPriceWholesale) return 0;
+    return sellingPriceWholesale - purchasePrice;
+  }, [purchasePrice, sellingPriceWholesale]);
+
+  const grossMarginPercentWholesale = useMemo(() => {
+    if (!purchasePrice || !sellingPriceWholesale) return 0;
+    return ((sellingPriceWholesale - purchasePrice) / purchasePrice) * 100;
+  }, [purchasePrice, sellingPriceWholesale]);
+
+  const grossMarginRetail = useMemo(() => {
+    if (!purchasePrice || !sellingPriceRetail) return 0;
+    return sellingPriceRetail - purchasePrice;
+  }, [purchasePrice, sellingPriceRetail]);
+
+  const grossMarginPercentRetail = useMemo(() => {
+    if (!purchasePrice || !sellingPriceRetail) return 0;
+    return ((sellingPriceRetail - purchasePrice) / purchasePrice) * 100;
+  }, [purchasePrice, sellingPriceRetail]);
 
   const estimatedStockValue = useMemo(() => {
-    return sellingPrice * quantity;
-  }, [sellingPrice, quantity]);
+    const price = salesType === 'wholesale' ? sellingPriceWholesale : sellingPriceRetail;
+    return price * quantity;
+  }, [sellingPriceWholesale, sellingPriceRetail, quantity, salesType]);
 
-  if (!open) return null;
+  // ============================================================
+  // GESTIONNAIRES
+  // ============================================================
 
   const setField = (field: keyof FormState, value: string) => {
-    setForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const validateForm = (): string | null => {
-    // Validation du pharmacy_id
-    if (!form.pharmacy_id.trim()) {
-      return "L'identifiant de la pharmacie est obligatoire. Veuillez vous assurer d'être connecté à une pharmacie.";
+    if (!pharmacyId && !initialValues?.pharmacy_id) {
+      return 'ID de pharmacie manquant. Veuillez sélectionner une pharmacie.';
     }
 
     if (!form.code.trim()) {
@@ -223,8 +344,16 @@ export default function CreateProductView({
       return "Le prix d'achat doit être supérieur à 0.";
     }
 
-    if (!form.selling_price || Number(form.selling_price) <= 0) {
-      return 'Le prix de vente doit être supérieur à 0.';
+    if (salesType === 'wholesale' || salesType === 'both') {
+      if (!form.selling_price_wholesale || Number(form.selling_price_wholesale) <= 0) {
+        return 'Le prix de vente en gros doit être supérieur à 0.';
+      }
+    }
+
+    if (salesType === 'retail' || salesType === 'both') {
+      if (!form.selling_price_retail || Number(form.selling_price_retail) <= 0) {
+        return 'Le prix de vente au détail doit être supérieur à 0.';
+      }
     }
 
     if (Number(form.quantity) < 0) {
@@ -259,7 +388,20 @@ export default function CreateProductView({
   };
 
   const buildPayload = (): ProductCreate => {
-    // Construction du payload avec pharmacy_id
+    // Déterminer le prix de vente principal selon le type de vente
+    let sellingPrice: number;
+    if (salesType === 'wholesale') {
+      sellingPrice = Number(form.selling_price_wholesale);
+    } else if (salesType === 'retail') {
+      sellingPrice = Number(form.selling_price_retail);
+    } else {
+      // Pour 'both', on utilise le prix de gros par défaut
+      sellingPrice = Number(form.selling_price_wholesale);
+    }
+
+    // Utiliser pharmacyId de la prop ou initialValues
+    const pharmacy_id = pharmacyId || initialValues?.pharmacy_id || '';
+
     const payload: ProductCreate = {
       code: form.code.trim(),
       barcode: form.barcode.trim() || undefined,
@@ -268,7 +410,7 @@ export default function CreateProductView({
       category: form.category.trim() || undefined,
       supplier: form.supplier.trim() || undefined,
       purchase_price: Number(form.purchase_price),
-      selling_price: Number(form.selling_price),
+      selling_price: sellingPrice,
       quantity: Number(form.quantity || 0),
       alert_threshold: Number(form.alert_threshold || 10),
       minimum_stock: form.minimum_stock ? Number(form.minimum_stock) : undefined,
@@ -278,17 +420,48 @@ export default function CreateProductView({
       laboratory: form.laboratory.trim() || undefined,
       has_tva: hasTva,
       tva_rate: hasTva ? Number(tvaRate || 0) : 0,
-      // Ajout du pharmacy_id s'il est défini
-      ...(form.pharmacy_id.trim() ? { pharmacy_id: form.pharmacy_id.trim() } : {}),
+      pharmacy_id: pharmacy_id,
     };
 
     return payload;
   };
 
-  const applySuggestedSellingPrice = () => {
+  const applySuggestedSellingPrice = (type: 'wholesale' | 'retail') => {
     if (!purchasePrice || purchasePrice <= 0) return;
-    const suggested = purchasePrice + (purchasePrice * marginPercent) / 100;
-    setField('selling_price', String(Number(suggested.toFixed(2))));
+
+    let suggested = purchasePrice;
+
+    if (autoPricingEnabled) {
+      switch (autoPricingMethod) {
+        case 'percentage':
+          suggested = purchasePrice * (1 + autoPricingValue / 100);
+          break;
+        case 'coefficient':
+          suggested = purchasePrice * autoPricingValue;
+          break;
+        case 'margin':
+          suggested = purchasePrice / (1 - autoPricingValue / 100);
+          break;
+        default:
+          suggested = purchasePrice * (1 + marginPercent / 100);
+      }
+    } else {
+      suggested = purchasePrice * (1 + marginPercent / 100);
+    }
+
+    const rounded = Number(suggested.toFixed(2));
+    
+    if (type === 'wholesale') {
+      setField('selling_price_wholesale', String(rounded));
+    } else {
+      setField('selling_price_retail', String(rounded));
+    }
+  };
+
+  const applyRetailPriceFromWholesale = () => {
+    if (!sellingPriceWholesale) return;
+    const retailPrice = sellingPriceWholesale * 1.2;
+    setField('selling_price_retail', String(Number(retailPrice.toFixed(2))));
   };
 
   const handleGenerateCode = () => {
@@ -316,8 +489,7 @@ export default function CreateProductView({
       const payload = buildPayload();
 
       if (product?.id) {
-        // Conversion de product.id en string si nécessaire
-        const productId = idToString(product.id);
+        const productId = String(product.id);
         await inventoryService.updateProduct(productId, payload);
       } else {
         await inventoryService.createProduct(payload);
@@ -328,23 +500,22 @@ export default function CreateProductView({
     } catch (err: any) {
       console.error('Erreur lors de la sauvegarde:', err);
 
-      // Gestion spécifique des erreurs de validation
+      // Afficher les erreurs de validation détaillées
       if (err.response?.data?.detail) {
         const detail = err.response.data.detail;
         if (Array.isArray(detail)) {
-          // Erreur de validation Pydantic
-          const missingFields = detail
-            .filter((d: any) => d.type === 'missing')
-            .map((d: any) => d.loc.join('.'));
-
-          if (missingFields.length > 0) {
-            setError(`Champs obligatoires manquants : ${missingFields.join(', ')}`);
-          } else {
-            setError(detail.map((d: any) => d.msg).join(', '));
-          }
-        } else {
+          const errorMessages = detail.map((d: any) => {
+            const field = d.loc?.join('.') || 'unknown';
+            return `${field}: ${d.msg}`;
+          });
+          setError(errorMessages.join(', '));
+        } else if (typeof detail === 'string') {
           setError(detail);
+        } else {
+          setError(JSON.stringify(detail));
         }
+      } else if (err.message) {
+        setError(err.message);
       } else {
         setError('Erreur lors de la sauvegarde du produit.');
       }
@@ -353,22 +524,35 @@ export default function CreateProductView({
     }
   };
 
+  // ============================================================
+  // RENDU
+  // ============================================================
+
+  if (!open) return null;
+
   const tabs: Array<{ id: FormTab; label: string; icon: React.ReactNode }> = [
     { id: 'general', label: 'Général', icon: <Package size={16} /> },
     { id: 'pricing', label: 'Prix & stock', icon: <DollarSign size={16} /> },
     { id: 'advanced', label: 'Avancé', icon: <FileText size={16} /> },
   ];
 
+  // Affichage de la pharmacie (nom ou ID)
+  const pharmacyDisplay = pharmacyName 
+    ? `${pharmacyName}${pharmacyId ? ` (ID: ${pharmacyId.slice(0, 8)}...)` : ''}`
+    : pharmacyId 
+      ? `Pharmacie ID: ${pharmacyId.slice(0, 8)}...` 
+      : 'Pharmacie non spécifiée';
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm md:items-center md:p-4">
       <div className="flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-[28px] bg-white shadow-2xl md:h-auto md:max-h-[94vh] md:rounded-4xl">
+        {/* Header */}
         <div className="border-b border-slate-200 bg-linear-to-r from-slate-900 via-slate-800 to-sky-900 px-4 py-4 text-white md:px-6 md:py-5">
           <div className="flex items-start justify-between gap-4">
             <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/10">
                 <Package size={22} />
               </div>
-
               <div className="min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-[0.25em] text-sky-200">
                   Produit & inventaire
@@ -383,7 +567,6 @@ export default function CreateProductView({
                 </p>
               </div>
             </div>
-
             <button
               onClick={onClose}
               disabled={loading}
@@ -394,6 +577,7 @@ export default function CreateProductView({
           </div>
         </div>
 
+        {/* Tabs */}
         <div className="border-b border-slate-200 bg-white px-3 py-3 md:px-4">
           <div className="flex gap-2 overflow-x-auto">
             {tabs.map((tab) => (
@@ -414,19 +598,38 @@ export default function CreateProductView({
           </div>
         </div>
 
+        {/* Form */}
         <div className="flex-1 overflow-y-auto bg-slate-50">
           <form onSubmit={handleSubmit} className="space-y-5 p-4 md:p-6">
-            {error ? (
+            {/* Messages d'erreur */}
+            {error && (
               <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
                 <AlertCircle size={18} className="mt-0.5 shrink-0" />
                 <div>
                   <p className="font-black">Erreur de validation</p>
-                  <p className="text-sm">{error}</p>
+                  <p className="text-sm wrap-break-word whitespace-pre-wrap">{error}</p>
                 </div>
               </div>
-            ) : null}
+            )}
 
-            {!product && initialValues?.barcode ? (
+            {/* Info pharmacie */}
+            {(pharmacyName || pharmacyId) && (
+              <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-blue-800">
+                <Store size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-black">Pharmacie concernée</p>
+                  <p className="text-sm">
+                    Le produit sera créé pour : <span className="font-semibold">{pharmacyDisplay}</span>
+                  </p>
+                  <p className="text-xs mt-1 text-blue-600">
+                    Cette information est automatiquement ajoutée lors de la création.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Info code-barres détecté */}
+            {initialValues?.barcode && !product && (
               <div className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sky-800">
                 <ScanLine size={18} className="mt-0.5 shrink-0" />
                 <div>
@@ -437,16 +640,25 @@ export default function CreateProductView({
                   </p>
                 </div>
               </div>
-            ) : null}
+            )}
 
-            {/* Champ caché pharmacy_id pour débogage (optionnel) */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
-                <span className="font-bold">Pharmacy ID:</span> {form.pharmacy_id || 'Non défini'}
+            {/* Info type de vente */}
+            {salesType && (
+              <div className="flex items-start gap-3 rounded-2xl border border-purple-200 bg-purple-50 p-4 text-purple-800">
+                <Settings2 size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-black">Type de vente configuré</p>
+                  <p className="text-sm">
+                    {salesType === 'wholesale' && 'Vente en gros uniquement'}
+                    {salesType === 'retail' && 'Vente au détail uniquement'}
+                    {salesType === 'both' && 'Vente en gros et au détail'}
+                  </p>
+                </div>
               </div>
             )}
 
-            {activeTab === 'general' ? (
+            {/* Tab Général */}
+            {activeTab === 'general' && (
               <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
                 <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                   <div className="mb-4">
@@ -472,7 +684,6 @@ export default function CreateProductView({
                           className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                         />
                       </div>
-
                       <div className="flex gap-2">
                         <button
                           type="button"
@@ -482,7 +693,6 @@ export default function CreateProductView({
                           <Sparkles size={14} />
                           Générer
                         </button>
-
                         <button
                           type="button"
                           onClick={handleCopyBarcodeToCode}
@@ -524,6 +734,24 @@ export default function CreateProductView({
 
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                        Catégorie
+                      </label>
+                      <div className="relative">
+                        <Type className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          value={form.category}
+                          onChange={(e) => setField('category', e.target.value)}
+                          placeholder="Médicaments, Parapharmacie, Matériel médical..."
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Saisissez une catégorie libre (ex: Antidouleurs, Antibiotiques, Vitamines)
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Description
                       </label>
                       <textarea
@@ -532,18 +760,6 @@ export default function CreateProductView({
                         rows={3}
                         placeholder="Description libre du produit, dosage, forme, remarque..."
                         className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Catégorie
-                      </label>
-                      <input
-                        value={form.category}
-                        onChange={(e) => setField('category', e.target.value)}
-                        placeholder="Médicaments"
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                       />
                     </div>
 
@@ -561,16 +777,31 @@ export default function CreateProductView({
                         />
                       </div>
                     </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                        Laboratoire
+                      </label>
+                      <div className="relative">
+                        <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          value={form.laboratory}
+                          onChange={(e) => setField('laboratory', e.target.value)}
+                          placeholder="Nom du laboratoire"
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
+                {/* Raccourcis et résumé */}
                 <div className="space-y-5">
                   <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                     <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
                       Raccourcis
                     </p>
                     <h3 className="mt-1 text-lg font-black text-slate-900">Assistants rapides</h3>
-
                     <div className="mt-4 space-y-3">
                       <button
                         type="button"
@@ -582,7 +813,6 @@ export default function CreateProductView({
                           Générer un code produit
                         </span>
                       </button>
-
                       <button
                         type="button"
                         onClick={handleCopyBarcodeToCode}
@@ -602,7 +832,6 @@ export default function CreateProductView({
                       Résumé
                     </p>
                     <h3 className="mt-1 text-lg font-black text-slate-900">Fiche produit</h3>
-
                     <div className="mt-4 space-y-3 text-sm">
                       <div className="flex justify-between gap-4">
                         <span className="text-slate-500">Code</span>
@@ -632,9 +861,10 @@ export default function CreateProductView({
                   </div>
                 </div>
               </div>
-            ) : null}
+            )}
 
-            {activeTab === 'pricing' ? (
+            {/* Tab Prix & Stock */}
+            {activeTab === 'pricing' && (
               <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
                 <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                   <div className="mb-4">
@@ -665,7 +895,77 @@ export default function CreateProductView({
 
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Seuil d&apos;alerte
+                        Numéro de lot
+                      </label>
+                      <div className="relative">
+                        <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          value={form.batch_number}
+                          onChange={(e) => setField('batch_number', e.target.value)}
+                          placeholder="LOT-2024-001"
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                        Prix d'achat *
+                      </label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={form.purchase_price}
+                          onChange={(e) => setField('purchase_price', e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                        />
+                      </div>
+                    </div>
+
+                    {(salesType === 'wholesale' || salesType === 'both') && (
+                      <div className="space-y-2">
+                        <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                          Prix de vente en gros *
+                        </label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={form.selling_price_wholesale}
+                            onChange={(e) => setField('selling_price_wholesale', e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {(salesType === 'retail' || salesType === 'both') && (
+                      <div className="space-y-2">
+                        <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                          Prix de vente au détail *
+                        </label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={form.selling_price_retail}
+                            onChange={(e) => setField('selling_price_retail', e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                        Seuil d'alerte
                       </label>
                       <input
                         type="number"
@@ -701,84 +1001,62 @@ export default function CreateProductView({
                         className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                       />
                     </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Prix d&apos;achat *
-                      </label>
-                      <div className="relative">
-                        <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          value={form.purchase_price}
-                          onChange={(e) => setField('purchase_price', e.target.value)}
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Prix de vente *
-                      </label>
-                      <div className="relative">
-                        <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          value={form.selling_price}
-                          onChange={(e) => setField('selling_price', e.target.value)}
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                        />
-                      </div>
-                    </div>
                   </div>
 
+                  {/* Assistant de prix */}
                   <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <div className="mb-4 flex items-center justify-between gap-3">
                       <div>
                         <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
-                          Assistant marge
+                          Assistant prix
                         </p>
-                        <h4 className="text-sm font-black text-slate-900">Calcul rapide du prix de vente</h4>
+                        <h4 className="text-sm font-black text-slate-900">
+                          Calcul automatique selon configuration
+                        </h4>
                       </div>
-                      <button
-                        type="button"
-                        onClick={applySuggestedSellingPrice}
-                        className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-700"
-                      >
-                        Appliquer
-                      </button>
                     </div>
-
-                    <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
-                      <div className="space-y-2">
-                        <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                          Marge souhaitée (%)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          value={marginPercent}
-                          onChange={(e) => setMarginPercent(Number(e.target.value || 0))}
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
-                        />
+                    <div className="flex flex-wrap gap-4">
+                      {(salesType === 'wholesale' || salesType === 'both') && (
+                        <button
+                          type="button"
+                          onClick={() => applySuggestedSellingPrice('wholesale')}
+                          className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700"
+                        >
+                          Appliquer prix gros
+                        </button>
+                      )}
+                      {(salesType === 'retail' || salesType === 'both') && (
+                        <button
+                          type="button"
+                          onClick={() => applySuggestedSellingPrice('retail')}
+                          className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold text-white hover:bg-purple-700"
+                        >
+                          Appliquer prix détail
+                        </button>
+                      )}
+                      {salesType === 'both' && sellingPriceWholesale > 0 && (
+                        <button
+                          type="button"
+                          onClick={applyRetailPriceFromWholesale}
+                          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
+                        >
+                          Détail = Gros × 1.2
+                        </button>
+                      )}
+                    </div>
+                    {autoPricingEnabled && (
+                      <div className="mt-3 rounded-xl bg-slate-100 p-3">
+                        <p className="text-xs text-slate-600">
+                          Configuration automatique active : 
+                          {autoPricingMethod === 'percentage' && `${autoPricingValue}% de marge`}
+                          {autoPricingMethod === 'coefficient' && `Coefficient ×${autoPricingValue}`}
+                          {autoPricingMethod === 'margin' && `Marge de ${autoPricingValue}%`}
+                        </p>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={applySuggestedSellingPrice}
-                        className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800"
-                      >
-                        Générer le prix
-                      </button>
-                    </div>
+                    )}
                   </div>
 
+                  {/* TVA */}
                   <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     <div className="mb-4 flex items-center gap-3">
                       <input
@@ -793,8 +1071,7 @@ export default function CreateProductView({
                         Produit soumis à TVA
                       </label>
                     </div>
-
-                    {hasTva ? (
+                    {hasTva && (
                       <div className="grid gap-4 md:grid-cols-2">
                         <div className="space-y-2">
                           <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
@@ -812,55 +1089,65 @@ export default function CreateProductView({
                             />
                           </div>
                         </div>
-
-                        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
-                            Montant TVA
-                          </p>
-                          <p className="mt-2 text-xl font-black text-slate-900">
-                            {tvaAmount.toLocaleString()} FG
-                          </p>
-                        </div>
                       </div>
-                    ) : null}
+                    )}
                   </div>
                 </div>
 
+                {/* Synthèse financière */}
                 <div className="space-y-5">
                   <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                     <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
                       Synthèse financière
                     </p>
                     <h3 className="mt-1 text-lg font-black text-slate-900">Indicateurs</h3>
-
                     <div className="mt-4 space-y-3">
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                          Marge brute
-                        </p>
-                        <p className="mt-2 text-lg font-black text-emerald-600">
-                          {grossMargin.toLocaleString()} FG
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                          Marge %
-                        </p>
-                        <p className="mt-2 text-lg font-black text-sky-600">
-                          {grossMarginPercent.toFixed(2)}%
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                          Prix TTC
-                        </p>
-                        <p className="mt-2 text-lg font-black text-violet-600">
-                          {sellingPriceWithTva.toLocaleString()} FG
-                        </p>
-                      </div>
-
+                      {(salesType === 'wholesale' || salesType === 'both') && (
+                        <>
+                          <div className="rounded-2xl bg-slate-50 p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                              Marge brute (gros)
+                            </p>
+                            <p className="mt-2 text-lg font-black text-emerald-600">
+                              {grossMarginWholesale.toLocaleString()} FG
+                            </p>
+                            <p className="text-sm text-slate-500">
+                              {grossMarginPercentWholesale.toFixed(2)}%
+                            </p>
+                          </div>
+                          <div className="rounded-2xl bg-slate-50 p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                              Prix TTC (gros)
+                            </p>
+                            <p className="mt-2 text-lg font-black text-violet-600">
+                              {sellingPriceWholesaleWithTva.toLocaleString()} FG
+                            </p>
+                          </div>
+                        </>
+                      )}
+                      {(salesType === 'retail' || salesType === 'both') && (
+                        <>
+                          <div className="rounded-2xl bg-slate-50 p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                              Marge brute (détail)
+                            </p>
+                            <p className="mt-2 text-lg font-black text-emerald-600">
+                              {grossMarginRetail.toLocaleString()} FG
+                            </p>
+                            <p className="text-sm text-slate-500">
+                              {grossMarginPercentRetail.toFixed(2)}%
+                            </p>
+                          </div>
+                          <div className="rounded-2xl bg-slate-50 p-4">
+                            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+                              Prix TTC (détail)
+                            </p>
+                            <p className="mt-2 text-lg font-black text-violet-600">
+                              {sellingPriceRetailWithTva.toLocaleString()} FG
+                            </p>
+                          </div>
+                        </>
+                      )}
                       <div className="rounded-2xl bg-slate-50 p-4">
                         <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                           Valeur estimée du stock
@@ -873,9 +1160,10 @@ export default function CreateProductView({
                   </div>
                 </div>
               </div>
-            ) : null}
+            )}
 
-            {activeTab === 'advanced' ? (
+            {/* Tab Avancé */}
+            {activeTab === 'advanced' && (
               <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                   <div className="mb-4">
@@ -883,10 +1171,9 @@ export default function CreateProductView({
                       Informations avancées
                     </p>
                     <h3 className="mt-1 text-lg font-black text-slate-900">
-                      Localisation, laboratoire et dates
+                      Localisation, dates et traçabilité
                     </h3>
                   </div>
-
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
@@ -902,23 +1189,7 @@ export default function CreateProductView({
                         />
                       </div>
                     </div>
-
                     <div className="space-y-2">
-                      <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-                        Laboratoire
-                      </label>
-                      <div className="relative">
-                        <Building2 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input
-                          value={form.laboratory}
-                          onChange={(e) => setField('laboratory', e.target.value)}
-                          placeholder="Nom du laboratoire"
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Date de péremption
                       </label>
@@ -941,11 +1212,10 @@ export default function CreateProductView({
                       Contrôle qualité
                     </p>
                     <h3 className="mt-1 text-lg font-black text-slate-900">Vérifications</h3>
-
                     <div className="mt-4 space-y-3 text-sm">
                       <div className="rounded-2xl bg-slate-50 p-4">
                         <p className="font-bold text-slate-700">
-                          {form.pharmacy_id ? '✓ Pharmacie ID renseigné' : '• Pharmacie ID manquant'}
+                          {pharmacyId ? '✓ Pharmacie ID renseigné' : '• Pharmacie ID manquant'}
                         </p>
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4">
@@ -963,26 +1233,24 @@ export default function CreateProductView({
                           {purchasePrice > 0 ? '✓ Prix d’achat valide' : '• Prix d’achat invalide'}
                         </p>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <p className="font-bold text-slate-700">
-                          {sellingPrice > 0 ? '✓ Prix de vente valide' : '• Prix de vente invalide'}
-                        </p>
-                      </div>
                     </div>
                   </div>
-
                   <div className="rounded-4xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
                     <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
                       Notes
                     </p>
                     <p className="mt-2 text-sm text-slate-500">
-                      Les champs obligatoires sont : pharmacie, code, désignation, prix d'achat et prix de vente.
+                      Les champs obligatoires sont : pharmacie, code, désignation, prix d'achat.
+                      {salesType === 'wholesale' && ' Le prix de vente en gros est obligatoire.'}
+                      {salesType === 'retail' && ' Le prix de vente au détail est obligatoire.'}
+                      {salesType === 'both' && ' Les prix de vente en gros et au détail sont obligatoires.'}
                     </p>
                   </div>
                 </div>
               </div>
-            ) : null}
+            )}
 
+            {/* Boutons d'action */}
             <div className="sticky bottom-0 z-10 border-t border-slate-200 bg-white/95 px-0 pt-2 backdrop-blur">
               <div className="flex flex-col-reverse gap-3 md:flex-row md:items-center md:justify-between">
                 <button
@@ -993,7 +1261,6 @@ export default function CreateProductView({
                 >
                   Annuler
                 </button>
-
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button
                     type="button"
@@ -1003,7 +1270,6 @@ export default function CreateProductView({
                   >
                     Générer un code
                   </button>
-
                   <button
                     type="submit"
                     disabled={loading}

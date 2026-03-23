@@ -122,7 +122,7 @@ export const getPharmacies = async (activeOnly: boolean = true): Promise<Pharmac
   const params = new URLSearchParams();
   if (activeOnly) params.append('active_only', 'true');
   
-  const { data } = await api.get('/v1/pharmacies', { params });
+  const { data } = await api.get('/pharmacies', { params });
   return data;
 };
 
@@ -130,7 +130,7 @@ export const getPharmacies = async (activeOnly: boolean = true): Promise<Pharmac
  * Récupère une pharmacie par son ID
  */
 export const getPharmacyById = async (id: string): Promise<Pharmacy> => {
-  const { data } = await api.get(`/v1/pharmacies/${id}`);
+  const { data } = await api.get(`/pharmacies/${id}`);
   return data;
 };
 
@@ -138,7 +138,7 @@ export const getPharmacyById = async (id: string): Promise<Pharmacy> => {
  * Récupère les limites de pharmacies pour le tenant
  */
 export const getPharmacyLimits = async (): Promise<PharmacyLimits> => {
-  const { data } = await api.get('/v1/pharmacies/limits');
+  const { data } = await api.get('/pharmacies/limits');
   return data;
 };
 
@@ -146,7 +146,7 @@ export const getPharmacyLimits = async (): Promise<PharmacyLimits> => {
  * Récupère la configuration d'une pharmacie
  */
 export const getPharmacyConfig = async (pharmacyId: string): Promise<PharmacyConfig> => {
-  const { data } = await api.get(`/v1/pharmacies/${pharmacyId}/config`);
+  const { data } = await api.get(`/pharmacies/${pharmacyId}/config`);
   return data.config;
 };
 
@@ -154,7 +154,7 @@ export const getPharmacyConfig = async (pharmacyId: string): Promise<PharmacyCon
  * Met à jour la configuration d'une pharmacie
  */
 export const updatePharmacyConfig = async (pharmacyId: string, config: Partial<PharmacyConfig>): Promise<PharmacyConfig> => {
-  const { data } = await api.patch(`/v1/pharmacies/${pharmacyId}/config`, config);
+  const { data } = await api.patch(`/pharmacies/${pharmacyId}/config`, config);
   return data.config;
 };
 
@@ -162,7 +162,7 @@ export const updatePharmacyConfig = async (pharmacyId: string, config: Partial<P
  * Récupère les branches d'une pharmacie
  */
 export const getPharmacyBranches = async (pharmacyId: string): Promise<Branch[]> => {
-  const { data } = await api.get(`/v1/pharmacies/${pharmacyId}/branches`);
+  const { data } = await api.get(`/pharmacies/${pharmacyId}/branches`);
   return data;
 };
 
@@ -176,7 +176,7 @@ export const createPharmacyBranch = async (pharmacyId: string, branchData: {
   email?: string;
   manager?: string;
 }): Promise<Branch> => {
-  const { data } = await api.post(`/v1/pharmacies/${pharmacyId}/branches`, branchData);
+  const { data } = await api.post(`/pharmacies/${pharmacyId}/branches`, branchData);
   return data.branch;
 };
 
@@ -184,7 +184,7 @@ export const createPharmacyBranch = async (pharmacyId: string, branchData: {
  * Met à jour une branche
  */
 export const updatePharmacyBranch = async (pharmacyId: string, branchId: string, branchData: Partial<Branch>): Promise<Branch> => {
-  const { data } = await api.put(`/v1/pharmacies/${pharmacyId}/branches/${branchId}`, branchData);
+  const { data } = await api.put(`/pharmacies/${pharmacyId}/branches/${branchId}`, branchData);
   return data;
 };
 
@@ -192,7 +192,7 @@ export const updatePharmacyBranch = async (pharmacyId: string, branchId: string,
  * Supprime (désactive) une branche
  */
 export const deletePharmacyBranch = async (pharmacyId: string, branchId: string): Promise<void> => {
-  await api.delete(`/v1/pharmacies/${pharmacyId}/branches/${branchId}`);
+  await api.delete(`/pharmacies/${pharmacyId}/branches/${branchId}`);
 };
 
 /**
@@ -209,7 +209,7 @@ export const createPharmacy = async (pharmacyData: {
   pharmacist_in_charge?: string;
   pharmacist_license?: string;
 }): Promise<Pharmacy> => {
-  const { data } = await api.post('/v1/pharmacies', pharmacyData);
+  const { data } = await api.post('/pharmacies', pharmacyData);
   return data;
 };
 
@@ -217,7 +217,7 @@ export const createPharmacy = async (pharmacyData: {
  * Met à jour une pharmacie
  */
 export const updatePharmacy = async (id: string, pharmacyData: Partial<Pharmacy>): Promise<Pharmacy> => {
-  const { data } = await api.put(`/v1/pharmacies/${id}`, pharmacyData);
+  const { data } = await api.put(`/pharmacies/${id}`, pharmacyData);
   return data;
 };
 
@@ -225,14 +225,14 @@ export const updatePharmacy = async (id: string, pharmacyData: Partial<Pharmacy>
  * Désactive une pharmacie (soft delete)
  */
 export const deactivatePharmacy = async (id: string): Promise<void> => {
-  await api.delete(`/v1/pharmacies/${id}`);
+  await api.delete(`/pharmacies/${id}`);
 };
 
 /**
  * Réactive une pharmacie
  */
 export const reactivatePharmacy = async (id: string): Promise<Pharmacy> => {
-  const { data } = await api.post(`/v1/pharmacies/${id}/reactivate`);
+  const { data } = await api.post(`/pharmacies/${id}/reactivate`);
   return data;
 };
 
@@ -255,7 +255,7 @@ export const checkPharmacyServiceStatus = async (pharmacyId: string): Promise<{
   message: string;
   next_service_time?: string;
 }> => {
-  const { data } = await api.get(`/v1/pharmacies/${pharmacyId}/service-status`);
+  const { data } = await api.get(`/pharmacies/${pharmacyId}/service-status`);
   return data;
 };
 

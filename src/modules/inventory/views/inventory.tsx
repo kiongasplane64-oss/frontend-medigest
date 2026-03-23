@@ -93,7 +93,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
   const loadInventorySession = async () => {
     setLoading(true);
     try {
-      const response = await api.get(`/api/v1/inventory/${sessionId}`);
+      const response = await api.get(`/inventory/${sessionId}`);
       setSession(response.data);
     } catch (error) {
       console.error('Erreur lors du chargement de l\'inventaire:', error);

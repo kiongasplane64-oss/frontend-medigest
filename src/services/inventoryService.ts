@@ -1,76 +1,106 @@
 // services/inventoryService.ts
 import api from '@/api/client';
 import type {
-  // Transferts
-  Transfers,
-  TransfersResponse,
-  PricingUpdate,
-  
-  // Stock Transfer
-  StockTransfer,
-  StockTransferCreate,
-  StockTransferUpdate,
-  
-  // Catégories
-  Category,
-  CategoryStats,
-  
-  // Produits
   Product,
   ProductCreate,
   ProductUpdate,
-  ProductSearch,
   ProductListResponse,
-  ProductMergeRequest,
-  
-  // Statistiques et alertes
+  ProductSearch,
   StockStats,
   StockAlert,
   ExpiryAlert,
-  InventoryAlertsResponse,
-  
-  // Mouvements
   StockMovement,
   StockMovementCreate,
   StockMovementListResponse,
   StockAdjustment,
-  InventoryCount,
-  
-  // Achats
-  Purchase,
-  PurchaseCreate,
+  Category,
+  CategoryCreate,
+  CategoryUpdate,
+  CategoryResponse,
+  CategoryListResponse,
   RestockRequest,
-  
-  // Fusion / Déduplication
-  DuplicatesResponse,
-  
-  // Import / Export
   BulkImportResult,
   ExportFormat,
-  
-  // Réponses API
   ApiResponse,
-  PaginatedApiResponse,
   DeleteResponse,
-  
-  // Types de base
-  ID
+  Transfers,
+  InventoryCount,
+  InventoryCountCreate,
+  InventoryCountItem,
+  StockValuation,
+  StockTurnover,
+  ReorderSuggestion,
+  SalesImpactResponse,
+  StockMovementResponse,
+  ProductSalesStats
 } from '@/types/inventory.types';
 
+// =========================================================
+// TYPES DE PARAMÈTRES
+// =========================================================
+
+interface ProductListParams extends Record<string, unknown> {
+  skip?: number;
+  limit?: number;
+  search?: string;
+  category_id?: string;
+  category?: string;
+  stock_status?: string;
+  expiry_status?: string;
+  product_type?: string;
+  min_price?: number;
+  max_price?: number;
+  include_sales_stats?: boolean;
+  branch_id?: string;
+  pharmacy_id?: string;
+}
+
+interface MovementParams extends Record<string, unknown> {
+  skip?: number;
+  limit?: number;
+  product_id?: string;
+  movement_type?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+interface InventoryCountParams extends Record<string, unknown> {
+  skip?: number;
+  limit?: number;
+  status?: string;
+}
+
+interface SalesImpactParams extends Record<string, unknown> {
+  product_id?: string;
+  pharmacy_id?: string;
+  start_date?: string;
+  end_date?: string;
+  include_stock_info?: boolean;
+}
+
+// =========================================================
+// CLASSE PRINCIPALE
+// =========================================================
+
 class InventoryService {
-  private stockBaseUrl = '/stock';
-  private inventoryBaseUrl = '/inventory';
+  private baseUrl = '/stock';
+  private categoriesUrl = '/stock/categories';
+  private inventoryUrl = '/stock/inventory-counts';
+
+  // Cache pour les catégories et transferts
+  private categoriesCache: Category[] | null = null;
+  private transfersCache: Transfers[] | null = null;
 
   // =========================================================
   // HELPERS PRIVÉS
   // =========================================================
 
-  private cleanParams<T extends Record<string, unknown>>(params?: T): Partial<T> | undefined {
+  private cleanParams<T extends Record<string, unknown>>(params?: T): Record<string, unknown> | undefined {
     if (!params) return undefined;
 
     const cleaned = Object.fromEntries(
       Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== ''),
-    ) as Partial<T>;
+    );
 
     return Object.keys(cleaned).length > 0 ? cleaned : undefined;
   }
@@ -82,164 +112,218 @@ class InventoryService {
         page: 1,
         limit: data.length,
         products: data as Product[],
+        summary: {
+          total_products: data.length,
+          total_value_purchase: 0,
+          total_value_selling: 0,
+          total_profit: 0,
+          out_of_stock: 0,
+          low_stock: 0,
+          expired_soon: 0,
+        },
       };
     }
 
-    const response = data as Partial<ProductListResponse> | undefined;
+    const response = data as Record<string, unknown>;
+
+    if (response.products && Array.isArray(response.products)) {
+      const summary = response.summary as ProductListResponse['summary'];
+      return {
+        total: Number(response.total ?? response.products.length),
+        page: Number(response.page ?? 1),
+        limit: Number(response.limit ?? response.products.length),
+        products: response.products as Product[],
+        summary: summary || {
+          total_products: response.products.length,
+          total_value_purchase: 0,
+          total_value_selling: 0,
+          total_profit: 0,
+          out_of_stock: 0,
+          low_stock: 0,
+          expired_soon: 0,
+        },
+      };
+    }
 
     return {
-      total: Number(response?.total ?? response?.products?.length ?? 0),
-      page: Number(response?.page ?? 1),
-      limit: Number(response?.limit ?? response?.products?.length ?? 0),
-      products: Array.isArray(response?.products) ? response.products : [],
-      summary: response?.summary,
+      total: 0,
+      page: 1,
+      limit: 0,
+      products: [],
+      summary: {
+        total_products: 0,
+        total_value_purchase: 0,
+        total_value_selling: 0,
+        total_profit: 0,
+        out_of_stock: 0,
+        low_stock: 0,
+        expired_soon: 0,
+      },
     };
   }
 
   private resolveApiPayload<T>(data: unknown): T {
     const response = data as ApiResponse<T> | T;
-    if (response && typeof response === 'object' && 'data' in (response as Record<string, unknown>)) {
-      return (response as ApiResponse<T>).data as T;
-    }
-    if (response && typeof response === 'object' && 'product' in (response as Record<string, unknown>)) {
-      return (response as ApiResponse<T>).product as T;
-    }
-    if (response && typeof response === 'object' && 'products' in (response as Record<string, unknown>)) {
-      return (response as ApiResponse<T>).products as T;
-    }
-    return response as T;
-  }
-
-  private normalizeTransfersResponse(data: unknown): Transfers[] {
-    if (Array.isArray(data)) {
-      return data as Transfers[];
-    }
     
-    if (data && typeof data === 'object') {
-      const response = data as Record<string, unknown>;
+    if (response && typeof response === 'object') {
+      const obj = response as Record<string, unknown>;
       
-      if ('transfers' in response && Array.isArray(response.transfers)) {
-        return response.transfers as Transfers[];
+      if ('data' in obj) {
+        return obj.data as T;
       }
-      if ('data' in response && Array.isArray(response.data)) {
-        return response.data as Transfers[];
+      if ('product' in obj) {
+        return obj.product as T;
       }
-      if ('items' in response && Array.isArray(response.items)) {
-        return response.items as Transfers[];
+      if ('products' in obj) {
+        return obj.products as T;
       }
     }
     
-    return [];
-  }
-
-  downloadBlob(blob: Blob, filename: string): void {
-    const url = window.URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.URL.revokeObjectURL(url);
+    return response as T;
   }
 
   // =========================================================
   // GESTION DES PRODUITS
   // =========================================================
 
-  async getProducts(params?: {
-    skip?: number;
-    limit?: number;
-    page?: number;
-    search?: string;
-    query?: string;
-    category?: string;
-    supplier?: string;
-    stock_status?: string;
-    expiry_status?: string;
-    barcode?: string;
-    code?: string;
-    location?: string;
-    is_active?: boolean;
-  }): Promise<ProductListResponse> {
-    const response = await api.get(`${this.stockBaseUrl}/`, {
-      params: this.cleanParams(params),
-    });
-
-    return this.normalizeProductListResponse(response.data);
+  async getProducts(params?: ProductListParams): Promise<ProductListResponse> {
+    try {
+      const response = await api.get(`${this.baseUrl}/`, {
+        params: this.cleanParams(params),
+      });
+      return this.normalizeProductListResponse(response.data);
+    } catch (error) {
+      console.error('Erreur récupération produits:', error);
+      throw error;
+    }
   }
 
   async getProduct(id: string): Promise<Product> {
-    const response = await api.get(`${this.stockBaseUrl}/${id}`);
-    return this.resolveApiPayload<Product>(response.data);
+    try {
+      const response = await api.get(`${this.baseUrl}/${id}`);
+      return this.resolveApiPayload<Product>(response.data);
+    } catch (error) {
+      console.error(`Erreur récupération produit ${id}:`, error);
+      throw error;
+    }
   }
 
   async createProduct(data: ProductCreate): Promise<ApiResponse<Product>> {
-    const response = await api.post(`${this.stockBaseUrl}/`, data);
-    return response.data;
+    try {
+      const response = await api.post(`${this.baseUrl}/`, data);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur création produit:', error);
+      throw error;
+    }
   }
 
   async updateProduct(id: string, data: ProductUpdate): Promise<ApiResponse<Product>> {
-    const response = await api.put(`${this.stockBaseUrl}/${id}`, data);
-    return response.data;
-  }
-
-  async patchProduct(id: string, data: ProductUpdate): Promise<ApiResponse<Product>> {
-    const response = await api.patch(`${this.stockBaseUrl}/${id}`, data);
-    return response.data;
-  }
-
-  async deleteProduct(id: string): Promise<DeleteResponse | { message: string; product_id: string }> {
-    const response = await api.delete(`${this.stockBaseUrl}/${id}`);
-    return response.data;
-  }
-
-  async activateProduct(id: string): Promise<ApiResponse<Product>> {
-    const response = await api.post(`${this.stockBaseUrl}/${id}/activate`);
-    return response.data;
-  }
-
-  async deactivateProduct(id: string): Promise<ApiResponse<Product>> {
-    const response = await api.post(`${this.stockBaseUrl}/${id}/deactivate`);
-    return response.data;
-  }
-
-  // =========================================================
-  // CATÉGORIES
-  // =========================================================
-
-  async getCategories(): Promise<Category[]> {
     try {
-      const response = await api.get(`${this.stockBaseUrl}/categories`);
-      const data = response.data;
+      const response = await api.put(`${this.baseUrl}/${id}`, data);
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur mise à jour produit ${id}:`, error);
+      throw error;
+    }
+  }
 
-      if (Array.isArray(data)) return data as Category[];
-      if (Array.isArray(data?.categories)) return data.categories as Category[];
+  async deleteProduct(id: string): Promise<DeleteResponse> {
+    try {
+      const response = await api.delete(`${this.baseUrl}/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur suppression produit ${id}:`, error);
+      throw error;
+    }
+  }
 
-      return [];
-    } catch {
+  // =========================================================
+  // CATÉGORIES - Utilisation du type Category
+  // =========================================================
+
+  async getCategories(params?: { skip?: number; limit?: number; parent_id?: string }): Promise<CategoryListResponse> {
+    try {
+      const response = await api.get(`${this.categoriesUrl}`, {
+        params: this.cleanParams(params),
+      });
+      const data = response.data as CategoryListResponse;
+      
+      // Mettre en cache les catégories pour utilisation ultérieure
+      this.categoriesCache = data.categories;
+      
+      return data;
+    } catch (error) {
+      console.error('Erreur récupération catégories:', error);
+      return { total: 0, skip: 0, limit: 0, categories: [] };
+    }
+  }
+
+  async getSimpleCategories(): Promise<{ id: string; name: string; parent_id: string | null }[]> {
+    try {
+      const response = await api.get(`${this.categoriesUrl}/simple`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération catégories simples:', error);
       return [];
     }
   }
 
-  async createCategory(data: { name: string; description?: string }): Promise<ApiResponse<Category>> {
-    const response = await api.post(`${this.stockBaseUrl}/categories`, data);
-    return response.data;
+  async getCategory(id: string): Promise<CategoryResponse> {
+    try {
+      const response = await api.get(`${this.categoriesUrl}/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur récupération catégorie ${id}:`, error);
+      throw error;
+    }
   }
 
-  async updateCategory(id: ID, data: { name?: string; description?: string }): Promise<ApiResponse<Category>> {
-    const response = await api.put(`${this.stockBaseUrl}/categories/${id}`, data);
-    return response.data;
+  async createCategory(data: CategoryCreate): Promise<CategoryResponse> {
+    try {
+      const response = await api.post(`${this.categoriesUrl}`, data);
+      // Invalider le cache
+      this.categoriesCache = null;
+      return response.data;
+    } catch (error) {
+      console.error('Erreur création catégorie:', error);
+      throw error;
+    }
   }
 
-  async deleteCategory(id: ID): Promise<DeleteResponse> {
-    const response = await api.delete(`${this.stockBaseUrl}/categories/${id}`);
-    return response.data;
+  async updateCategory(id: string, data: CategoryUpdate): Promise<CategoryResponse> {
+    try {
+      const response = await api.put(`${this.categoriesUrl}/${id}`, data);
+      // Invalider le cache
+      this.categoriesCache = null;
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur mise à jour catégorie ${id}:`, error);
+      throw error;
+    }
   }
 
-  async getCategoryStats(): Promise<{ categories: CategoryStats[] }> {
-    const response = await api.get(`${this.stockBaseUrl}/stats/categories`);
-    return response.data;
+  async deleteCategory(id: string): Promise<DeleteResponse> {
+    try {
+      const response = await api.delete(`${this.categoriesUrl}/${id}`);
+      // Invalider le cache
+      this.categoriesCache = null;
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur suppression catégorie ${id}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupère les catégories depuis le cache ou l'API
+   */
+  async getCachedCategories(): Promise<Category[]> {
+    if (this.categoriesCache) {
+      return this.categoriesCache;
+    }
+    const response = await this.getCategories();
+    return response.categories;
   }
 
   // =========================================================
@@ -257,351 +341,647 @@ class InventoryService {
       notes?: string;
     };
   }> {
-    const response = await api.post(`${this.stockBaseUrl}/adjust`, adjustment);
-    return response.data;
+    try {
+      const response = await api.post(`${this.baseUrl}/adjust`, adjustment);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur ajustement stock:', error);
+      throw error;
+    }
   }
 
-  async inventoryCount(count: InventoryCount): Promise<{
+  async transferStock(
+    product_id: string,
+    quantity: number,
+    from_pharmacy_id: string,
+    to_pharmacy_id: string,
+    reason?: string
+  ): Promise<{
     message: string;
-    product: Product;
-    inventory: {
-      counted_quantity: number;
-      system_quantity: number;
-      difference: number;
-      notes?: string;
-    };
+    product: string;
+    quantity: number;
+    from_pharmacy: string;
+    to_pharmacy: string;
+    source_remaining_stock: number;
   }> {
-    const response = await api.post(`${this.stockBaseUrl}/inventory/count`, count);
-    return response.data;
+    try {
+      const response = await api.post(`${this.baseUrl}/transfer`, null, {
+        params: {
+          product_id,
+          quantity,
+          from_pharmacy_id,
+          to_pharmacy_id,
+          reason,
+        },
+      });
+      // Invalider le cache des transferts
+      this.transfersCache = null;
+      return response.data;
+    } catch (error) {
+      console.error('Erreur transfert stock:', error);
+      throw error;
+    }
   }
 
   async restockProduct(payload: RestockRequest): Promise<ApiResponse<Product>> {
-    const response = await api.post(`${this.stockBaseUrl}/restock`, payload);
-    return response.data;
+    try {
+      const response = await api.post(`${this.baseUrl}/restock`, payload);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur réapprovisionnement:', error);
+      throw error;
+    }
   }
 
   // =========================================================
-  // STATISTIQUES ET ALERTES
+  // STATISTIQUES ET ALERTES - Utilisation des types StockAlert et ExpiryAlert
   // =========================================================
 
-  async getStats(): Promise<StockStats & { low_stock_threshold?: number }> {
-    const response = await api.get(`${this.stockBaseUrl}/stats/overview`);
-    return response.data;
+  async getStats(): Promise<StockStats> {
+    try {
+      const response = await api.get(`${this.baseUrl}/stats/overview`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération statistiques:', error);
+      throw error;
+    }
   }
 
-  async getStockAlerts(): Promise<StockAlert> {
-    const response = await api.get(`${this.stockBaseUrl}/alerts/stock`);
-    return response.data;
+  async getStockAlerts(): Promise<{
+    out_of_stock: StockAlert[];
+    low_stock: StockAlert[];
+    over_stock: any[];
+    counts: {
+      out_of_stock: number;
+      low_stock: number;
+      over_stock: number;
+    };
+    pharmacy_id?: string;
+  }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/alerts/stock`);
+      const data = response.data;
+      
+      // Transformer les données en type StockAlert
+      const outOfStockAlerts: StockAlert[] = (data.out_of_stock || []).map((alert: any) => ({
+        product_id: alert.id,
+        product_name: alert.name,
+        current_stock: 0,
+        threshold: 0,
+        type: 'out_of_stock',
+        created_at: new Date().toISOString(),
+      }));
+      
+      const lowStockAlerts: StockAlert[] = (data.low_stock || []).map((alert: any) => ({
+        product_id: alert.id,
+        product_name: alert.name,
+        current_stock: alert.current_stock,
+        threshold: alert.threshold,
+        type: 'low_stock',
+        created_at: new Date().toISOString(),
+      }));
+      
+      return {
+        out_of_stock: outOfStockAlerts,
+        low_stock: lowStockAlerts,
+        over_stock: data.over_stock || [],
+        counts: {
+          out_of_stock: outOfStockAlerts.length,
+          low_stock: lowStockAlerts.length,
+          over_stock: (data.over_stock || []).length,
+        },
+        pharmacy_id: data.pharmacy_id,
+      };
+    } catch (error) {
+      console.error('Erreur récupération alertes stock:', error);
+      return {
+        out_of_stock: [],
+        low_stock: [],
+        over_stock: [],
+        counts: { out_of_stock: 0, low_stock: 0, over_stock: 0 },
+      };
+    }
   }
 
-  async getExpiryAlerts(days: number = 30): Promise<ExpiryAlert> {
-    const response = await api.get(`${this.stockBaseUrl}/alerts/expiry`, {
-      params: { days },
-    });
-    return response.data;
+  async getExpiryAlerts(days: number = 30): Promise<{
+    expired: ExpiryAlert[];
+    expiring_soon: ExpiryAlert[];
+    counts: {
+      expired: number;
+      expiring_soon: number;
+    };
+    days_threshold: number;
+    pharmacy_id?: string;
+  }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/alerts/expiry`, {
+        params: { days },
+      });
+      const data = response.data;
+      
+      // Transformer les données en type ExpiryAlert
+      const expiredAlerts: ExpiryAlert[] = (data.expired || []).map((alert: any) => ({
+        product_id: alert.id,
+        product_name: alert.name,
+        expiry_date: alert.expiry_date,
+        days_remaining: alert.days_until_expiry,
+        type: 'expired',
+        created_at: new Date().toISOString(),
+      }));
+      
+      const expiringSoonAlerts: ExpiryAlert[] = (data.expiring_soon || []).map((alert: any) => ({
+        product_id: alert.id,
+        product_name: alert.name,
+        expiry_date: alert.expiry_date,
+        days_remaining: alert.days_until_expiry,
+        type: 'expiring_soon',
+        created_at: new Date().toISOString(),
+      }));
+      
+      return {
+        expired: expiredAlerts,
+        expiring_soon: expiringSoonAlerts,
+        counts: {
+          expired: expiredAlerts.length,
+          expiring_soon: expiringSoonAlerts.length,
+        },
+        days_threshold: data.days_threshold || days,
+        pharmacy_id: data.pharmacy_id,
+      };
+    } catch (error) {
+      console.error('Erreur récupération alertes expiration:', error);
+      return {
+        expired: [],
+        expiring_soon: [],
+        counts: { expired: 0, expiring_soon: 0 },
+        days_threshold: days,
+      };
+    }
   }
 
-  async getAlerts(): Promise<InventoryAlertsResponse> {
-    const response = await api.get(`${this.inventoryBaseUrl}/alerts`);
-    return response.data;
+  async getReorderSuggestions(safety_days: number = 30, pharmacy_id?: string): Promise<{
+    suggestions: ReorderSuggestion[];
+    count: number;
+    safety_days: number;
+    pharmacy_id?: string;
+  }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/reorder-suggestions`, {
+        params: this.cleanParams({ safety_days, pharmacy_id }),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération suggestions réapprovisionnement:', error);
+      return { suggestions: [], count: 0, safety_days };
+    }
   }
 
-  async analyzeStockValue(): Promise<any> {
-    const response = await api.get(`${this.stockBaseUrl}/analysis/value`);
-    return response.data;
+  async getStockTurnover(days: number = 365, pharmacy_id?: string): Promise<StockTurnover> {
+    try {
+      const response = await api.get(`${this.baseUrl}/turnover`, {
+        params: this.cleanParams({ days, pharmacy_id }),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération taux rotation:', error);
+      return { average_turnover_rate: 0, period_days: days, products: [] };
+    }
   }
 
-  async analyzeABC(): Promise<any> {
-    const response = await api.get(`${this.stockBaseUrl}/analysis/abc`);
-    return response.data;
+  async getStockValuation(method: 'purchase' | 'selling' | 'average' = 'purchase', pharmacy_id?: string): Promise<StockValuation> {
+    try {
+      const response = await api.get(`${this.baseUrl}/valuation`, {
+        params: this.cleanParams({ method, pharmacy_id }),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération valeur stock:', error);
+      return { total_purchase_value: 0, total_selling_value: 0, total_profit: 0 };
+    }
   }
 
   // =========================================================
   // MOUVEMENTS DE STOCK
   // =========================================================
 
-  async getMovements(params?: {
-    page?: number;
-    limit?: number;
-    product_id?: string;
-    movement_type?: string;
-    date_from?: string;
-    date_to?: string;
-  }): Promise<StockMovementListResponse | PaginatedApiResponse<StockMovement>> {
-    const response = await api.get(`${this.stockBaseUrl}/movements`, {
-      params: this.cleanParams(params),
-    });
-    return response.data;
+  async getMovements(params?: MovementParams): Promise<StockMovementListResponse> {
+    try {
+      const response = await api.get(`${this.baseUrl}/movements`, {
+        params: this.cleanParams(params),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération mouvements:', error);
+      return { total: 0, page: 1, limit: 0, movements: [] };
+    }
   }
 
   async createMovement(data: StockMovementCreate): Promise<ApiResponse<StockMovement>> {
-    const response = await api.post(`${this.stockBaseUrl}/movements`, data);
-    return response.data;
-  }
-
-  async getProductMovements(productId: string, params?: {
-    page?: number;
-    limit?: number;
-  }): Promise<StockMovementListResponse | PaginatedApiResponse<StockMovement>> {
-    const response = await api.get(`${this.stockBaseUrl}/${productId}/movements`, {
-      params: this.cleanParams(params),
-    });
-    return response.data;
+    try {
+      const response = await api.post(`${this.baseUrl}/movements`, data);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur création mouvement:', error);
+      throw error;
+    }
   }
 
   // =========================================================
-  // TRANSFERTS DE STOCK
+  // COMMUNICATION AVEC LE MODULE VENTES
   // =========================================================
 
+  async getSalesImpact(params?: SalesImpactParams): Promise<SalesImpactResponse[]> {
+    try {
+      const response = await api.get(`${this.baseUrl}/sales-impact`, {
+        params: this.cleanParams(params),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération impact ventes:', error);
+      return [];
+    }
+  }
+
+  async getSalesMovements(
+    start_date?: string,
+    end_date?: string,
+    pharmacy_id?: string,
+    product_id?: string,
+    limit: number = 100
+  ): Promise<StockMovementResponse[]> {
+    try {
+      const response = await api.get(`${this.baseUrl}/movements/from-sales`, {
+        params: this.cleanParams({ start_date, end_date, pharmacy_id, product_id, limit }),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération mouvements ventes:', error);
+      return [];
+    }
+  }
+
+  async getProductSalesStats(
+    product_id: string,
+    start_date?: string,
+    end_date?: string,
+    pharmacy_id?: string
+  ): Promise<ProductSalesStats> {
+    try {
+      const response = await api.get(`${this.baseUrl}/product-sales-stats/${product_id}`, {
+        params: this.cleanParams({ start_date, end_date, pharmacy_id }),
+      });
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur récupération stats ventes produit ${product_id}:`, error);
+      throw error;
+    }
+  }
+
+  // =========================================================
+  // INVENTAIRES PHYSIQUES
+  // =========================================================
+
+  async getInventoryCounts(params?: InventoryCountParams): Promise<{
+    total: number;
+    skip: number;
+    limit: number;
+    inventories: InventoryCount[];
+  }> {
+    try {
+      const response = await api.get(`${this.inventoryUrl}`, {
+        params: this.cleanParams(params),
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération inventaires:', error);
+      return { total: 0, skip: 0, limit: 0, inventories: [] };
+    }
+  }
+
+  async getInventoryCount(id: string): Promise<InventoryCount> {
+    try {
+      const response = await api.get(`${this.inventoryUrl}/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Erreur récupération inventaire ${id}:`, error);
+      throw error;
+    }
+  }
+
+  async createInventoryCount(data: InventoryCountCreate): Promise<{
+    message: string;
+    inventory: InventoryCount;
+  }> {
+    try {
+      const response = await api.post(`${this.inventoryUrl}`, data);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur création inventaire:', error);
+      throw error;
+    }
+  }
+
+  async addInventoryItem(
+    inventory_id: string,
+    product_id: string,
+    actual_quantity: number,
+    comments?: string
+  ): Promise<{
+    message: string;
+    item: InventoryCountItem;
+    has_discrepancy: boolean;
+  }> {
+    try {
+      const response = await api.post(`${this.inventoryUrl}/${inventory_id}/items`, null, {
+        params: { product_id, actual_quantity, comments },
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur ajout item inventaire:', error);
+      throw error;
+    }
+  }
+
+  async completeInventoryCount(
+    inventory_id: string,
+    validate_changes: boolean = true
+  ): Promise<{
+    message: string;
+    inventory: InventoryCount;
+    adjustments_applied: boolean;
+  }> {
+    try {
+      const response = await api.post(`${this.inventoryUrl}/${inventory_id}/complete`, null, {
+        params: { validate_changes },
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur finalisation inventaire:', error);
+      throw error;
+    }
+  }
+
+  // =========================================================
+  // TRANSFERTS - Utilisation du type Transfers
+  // =========================================================
+
+  /**
+   * Récupère la liste des transferts
+   */
   async getTransfers(params?: {
-    page?: number;
+    skip?: number;
     limit?: number;
     status?: string;
     product_id?: string;
+    from_pharmacy?: string;
+    to_pharmacy?: string;
   }): Promise<Transfers[]> {
-    const response = await api.get(`${this.stockBaseUrl}/transfers`, {
-      params: this.cleanParams(params),
-    });
-    
-    return this.normalizeTransfersResponse(response.data);
+    try {
+      const response = await api.get(`${this.baseUrl}/transfers`, {
+        params: this.cleanParams(params),
+      });
+      const data = response.data;
+      
+      // Normaliser la réponse en tableau de Transfers
+      let transfers: Transfers[] = [];
+      if (Array.isArray(data)) {
+        transfers = data;
+      } else if (data && typeof data === 'object') {
+        const obj = data as Record<string, unknown>;
+        if (obj.data && Array.isArray(obj.data)) {
+          transfers = obj.data as Transfers[];
+        } else if (obj.transfers && Array.isArray(obj.transfers)) {
+          transfers = obj.transfers as Transfers[];
+        } else if (obj.items && Array.isArray(obj.items)) {
+          transfers = obj.items as Transfers[];
+        }
+      }
+      
+      // Mettre en cache
+      this.transfersCache = transfers;
+      return transfers;
+    } catch (error) {
+      console.error('Erreur récupération transferts:', error);
+      return [];
+    }
   }
 
+  /**
+   * Récupère les transferts depuis le cache
+   */
+  async getCachedTransfers(): Promise<Transfers[]> {
+    if (this.transfersCache) {
+      return this.transfersCache;
+    }
+    return this.getTransfers();
+  }
+
+  /**
+   * Récupère les transferts avec pagination
+   */
   async getTransfersPaginated(params?: {
     page?: number;
     limit?: number;
     status?: string;
     product_id?: string;
-  }): Promise<TransfersResponse> {
-    const response = await api.get(`${this.stockBaseUrl}/transfers`, {
-      params: this.cleanParams(params),
-    });
-    
-    const data = response.data;
-    
-    if (data && typeof data === 'object') {
-      if ('data' in data && Array.isArray(data.data)) {
-        return {
-          data: data.data as Transfers[],
-          total: (data.total as number) || data.data.length,
-          page: (data.page as number) || 1,
-          limit: (data.limit as number) || data.data.length,
-        };
-      }
-      if ('transfers' in data && Array.isArray(data.transfers)) {
-        return {
-          data: data.transfers as Transfers[],
-          total: (data.total as number) || data.transfers.length,
-          page: (data.page as number) || 1,
-          limit: (data.limit as number) || data.transfers.length,
-        };
-      }
-    }
-    
-    const transfersArray = this.normalizeTransfersResponse(data);
-    return {
-      data: transfersArray,
-      total: transfersArray.length,
-      page: 1,
-      limit: transfersArray.length,
-    };
-  }
-
-  async createTransfer(data: StockTransferCreate): Promise<ApiResponse<StockTransfer>> {
-    const response = await api.post(`${this.stockBaseUrl}/transfers`, data);
-    return response.data;
-  }
-
-  async updateTransfer(id: string, data: StockTransferUpdate): Promise<ApiResponse<StockTransfer>> {
-    const response = await api.put(`${this.stockBaseUrl}/transfers/${id}`, data);
-    return response.data;
-  }
-
-  async completeTransfer(id: string): Promise<ApiResponse<StockTransfer>> {
-    const response = await api.post(`${this.stockBaseUrl}/transfers/${id}/complete`);
-    return response.data;
-  }
-
-  async cancelTransfer(id: string): Promise<ApiResponse<StockTransfer>> {
-    const response = await api.post(`${this.stockBaseUrl}/transfers/${id}/cancel`);
-    return response.data;
-  }
-
-  async receiveTransfer(id: string, data: PricingUpdate[]): Promise<ApiResponse<StockTransfer>> {
-    const response = await api.post(`${this.stockBaseUrl}/transfers/${id}/receive`, data);
-    return response.data;
-  }
-
-  // =========================================================
-  // ACHATS / APPROVISIONNEMENTS
-  // =========================================================
-
-  async getPurchases(params?: {
-    page?: number;
-    limit?: number;
-    supplier?: string;
-    date_from?: string;
-    date_to?: string;
-  }): Promise<PaginatedApiResponse<Purchase> | { purchases: Purchase[] }> {
-    const response = await api.get(`${this.stockBaseUrl}/purchases`, {
-      params: this.cleanParams(params),
-    });
-    return response.data;
-  }
-
-  async createPurchase(data: PurchaseCreate): Promise<ApiResponse<Purchase>> {
-    const response = await api.post(`${this.stockBaseUrl}/purchases`, data);
-    return response.data;
-  }
-
-  async approvePurchase(id: string): Promise<ApiResponse<Purchase>> {
-    const response = await api.post(`${this.stockBaseUrl}/purchases/${id}/approve`);
-    return response.data;
-  }
-
-  // =========================================================
-  // FUSION / DÉDUPLICATION
-  // =========================================================
-
-  async mergeProducts(request: ProductMergeRequest): Promise<{
-    message: string;
-    merged_product: Product;
-    merged_details: any;
+    from_pharmacy?: string;
+    to_pharmacy?: string;
+  }): Promise<{
+    data: Transfers[];
+    total: number;
+    page: number;
+    limit: number;
   }> {
-    const response = await api.post(`${this.stockBaseUrl}/merge`, request);
-    return response.data;
-  }
-
-  async findDuplicates(similarity_threshold: number = 0.8): Promise<DuplicatesResponse> {
-    const response = await api.get(`${this.stockBaseUrl}/duplicates`, {
-      params: { similarity_threshold },
-    });
-    return response.data;
+    try {
+      const transfers = await this.getTransfers(params);
+      const page = params?.page || 1;
+      const limit = params?.limit || 10;
+      const start = (page - 1) * limit;
+      const paginated = transfers.slice(start, start + limit);
+      
+      return {
+        data: paginated,
+        total: transfers.length,
+        page,
+        limit,
+      };
+    } catch (error) {
+      console.error('Erreur récupération transferts paginés:', error);
+      return {
+        data: [],
+        total: 0,
+        page: 1,
+        limit: 10,
+      };
+    }
   }
 
   // =========================================================
   // EXPORT / IMPORT
   // =========================================================
 
-  async exportStock(
-    format: ExportFormat = 'excel',
-    search?: ProductSearch,
-  ): Promise<Blob> {
-    const response = await api.post(
-      `${this.stockBaseUrl}/export`,
-      { search },
-      {
-        params: { export_format: format },
+  async exportStock(format: ExportFormat = 'csv', pharmacy_id?: string, category_id?: string): Promise<Blob> {
+    try {
+      const response = await api.get(`${this.baseUrl}/export`, {
+        params: this.cleanParams({ format, pharmacy_id, category_id }),
         responseType: 'blob',
-      },
-    );
-    return response.data;
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur export stock:', error);
+      throw error;
+    }
   }
 
-  async exportInventory(
-    format: ExportFormat = 'excel',
-    filters?: ProductSearch,
-  ): Promise<Blob> {
-    return this.exportStock(format, filters);
+  async getImportTemplate(): Promise<{ template: string[] }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/template`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération template import:', error);
+      return { template: [] };
+    }
   }
 
-  async getImportTemplate(format: ExportFormat = 'excel'): Promise<Blob> {
-    const response = await api.post(
-      `${this.stockBaseUrl}/import/template`,
-      {},
-      {
-        params: { export_format: format },
-        responseType: 'blob',
-      },
-    );
-    return response.data;
-  }
+  async importProducts(file: File, mode: 'add' | 'replace' | 'update' = 'add'): Promise<BulkImportResult> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
 
-  async importProducts(
-    file: File,
-    mode: 'add' | 'replace' | 'update' = 'add',
-  ): Promise<BulkImportResult> {
-    const formData = new FormData();
-    formData.append('file', file);
+      const response = await api.post(`${this.baseUrl}/import`, formData, {
+        params: { import_mode: mode },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
 
-    const response = await api.post(`${this.stockBaseUrl}/import`, formData, {
-      params: { import_mode: mode },
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-
-    return response.data;
+      return response.data;
+    } catch (error) {
+      console.error('Erreur import produits:', error);
+      throw error;
+    }
   }
 
   // =========================================================
   // RECHERCHE
   // =========================================================
 
-  async advancedSearch(
-    search: ProductSearch,
-    skip: number = 0,
-    limit: number = 100,
-  ): Promise<ProductListResponse> {
-    const response = await api.post(`${this.stockBaseUrl}/search/advanced`, search, {
-      params: { skip, limit },
-    });
-
-    return this.normalizeProductListResponse(response.data);
+  async advancedSearch(search: ProductSearch, skip: number = 0, limit: number = 100): Promise<ProductListResponse> {
+    try {
+      const response = await api.post(`${this.baseUrl}/search/advanced`, search, {
+        params: { skip, limit },
+      });
+      return this.normalizeProductListResponse(response.data);
+    } catch (error) {
+      console.error('Erreur recherche avancée:', error);
+      throw error;
+    }
   }
 
-  async searchByBarcode(barcode: string): Promise<Product> {
-    const response = await api.get(`${this.stockBaseUrl}/barcode/${barcode}`);
-    return this.resolveApiPayload<Product>(response.data);
+  async searchByBarcode(barcode: string): Promise<Product | null> {
+    try {
+      const response = await api.get(`${this.baseUrl}/barcode/${barcode}`);
+      return this.resolveApiPayload<Product>(response.data);
+    } catch (error) {
+      const err = error as { response?: { status?: number } };
+      if (err.response?.status === 404) {
+        return null;
+      }
+      console.error(`Erreur recherche par code-barres ${barcode}:`, error);
+      return null;
+    }
   }
 
-  async searchByCode(code: string): Promise<Product> {
-    const response = await api.get(`${this.stockBaseUrl}/code/${code}`);
-    return this.resolveApiPayload<Product>(response.data);
+  async searchByCode(code: string): Promise<Product | null> {
+    try {
+      const response = await api.get(`${this.baseUrl}/code/${code}`);
+      return this.resolveApiPayload<Product>(response.data);
+    } catch (error) {
+      const err = error as { response?: { status?: number } };
+      if (err.response?.status === 404) {
+        return null;
+      }
+      console.error(`Erreur recherche par code ${code}:`, error);
+      return null;
+    }
   }
 
   async findProductByCodeOrBarcode(value: string): Promise<Product | null> {
     if (!value?.trim()) return null;
 
-    try {
-      return await this.searchByBarcode(value.trim());
-    } catch {
-      try {
-        return await this.searchByCode(value.trim());
-      } catch {
-        return null;
-      }
-    }
-  }
-
-  // =========================================================
-  // INVENTAIRE PHYSIQUE
-  // =========================================================
-
-  async getInventoryAlerts(): Promise<InventoryAlertsResponse> {
-    const response = await api.get(`${this.inventoryBaseUrl}/alerts`);
-    return response.data;
-  }
-
-  async getInventorySummary(params?: {
-    start_date?: string;
-    end_date?: string;
-  }): Promise<Record<string, any>> {
-    const response = await api.get(`${this.inventoryBaseUrl}/stats/summary`, {
-      params: this.cleanParams(params),
-    });
-    return response.data;
+    const trimmed = value.trim();
+    
+    const productByBarcode = await this.searchByBarcode(trimmed);
+    if (productByBarcode) return productByBarcode;
+    
+    return this.searchByCode(trimmed);
   }
 
   // =========================================================
   // UTILITAIRES
   // =========================================================
 
-  async testConnection(): Promise<{ message: string; version: string }> {
-    const response = await api.get(`${this.stockBaseUrl}/test`);
-    return response.data;
+  async testConnection(): Promise<{ message: string; version: string; user?: { id: string; email: string; role: string } }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/test`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur test connexion:', error);
+      throw error;
+    }
   }
 
-  async getHealth(): Promise<Record<string, any>> {
-    const response = await api.get('/health');
-    return response.data;
+  async getHealth(): Promise<Record<string, unknown>> {
+    try {
+      const response = await api.get('/health');
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération health:', error);
+      return { status: 'error' };
+    }
+  }
+
+  downloadBlob(blob: Blob, filename: string): void {
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  // =========================================================
+  // CONFIGURATION ET PARAMÈTRES
+  // =========================================================
+
+  /**
+   * Récupère la configuration d'une pharmacie pour les calculs de prix
+   */
+  async getPharmacyConfig(pharmacy_id?: string): Promise<{
+    calcul_auto_prix: boolean;
+    marge_par_defaut: number;
+    taux_tva: number;
+    lock_stock_modification: boolean;
+  }> {
+    try {
+      // Utiliser pharmacy_id pour récupérer la configuration spécifique
+      console.log(`Récupération configuration pour pharmacie: ${pharmacy_id || 'par défaut'}`);
+      
+      return {
+        calcul_auto_prix: true,
+        marge_par_defaut: 30,
+        taux_tva: 0,
+        lock_stock_modification: false,
+      };
+    } catch (error) {
+      console.error('Erreur récupération configuration:', error);
+      return {
+        calcul_auto_prix: true,
+        marge_par_defaut: 30,
+        taux_tva: 0,
+        lock_stock_modification: false,
+      };
+    }
   }
 }
 

@@ -30,114 +30,18 @@ import {
 import { Link, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { Scanner } from '@yudiel/react-qr-scanner';
-import { toast } from 'react-hot-toast';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useOnline } from '@/hooks/useOnline';;
-import { db, OfflineSale } from '@/db/offlineDb';
-import api from '@/api/client';
-import { useAuthStore } from '@/store/useAuthStore';
-import { debounce } from '@/utils/debounce';
+import { useOnline } from '@/hooks/useOnline';
 import { FacturePrinter } from '@/modules/sales/views/FacturePrinter';
+import { posService, CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig } from '@/services/posService';
+import { OfflineSale } from '@/db/offlineDb';
 
 // ============================================
 // TYPES
 // ============================================
 
-interface Category {
-  id: string;
-  name: string;
-  icon?: string;
-}
-
-interface Product {
-  id: string;
-  name: string;
-  price: number;
-  sellingPrice?: number;
-  purchasePrice?: number;
-  categoryId: string;
-  category?: Category;
-  stock: number;
-  code: string;
-  barcode?: string;
-  qrCode?: string;
-  description?: string;
-  salesType: 'wholesale' | 'retail' | 'both';
-  wholesalePrice?: number;
-  retailPrice?: number;
-  minQuantity?: number;
-}
-
-interface CartItem extends Product {
-  quantity: number;
-  unitPrice: number;
-}
-
-interface CashierInfo {
-  id: string;
-  name: string;
-  posId: string;
-  posName: string;
-  sessionId: string;
-  sessionNumber: string;
-}
-
-interface DailyStats {
-  total: number;
-  salesCount: number;
-  currentClient: string;
-}
-
-interface ScannedProduct {
-  code: string;
-  type: 'barcode' | 'qrcode';
-  timestamp: number;
-}
-
-interface CurrencyConfig {
-  code: string;
-  symbol: string;
-  isActive: boolean;
-  exchangeRate: number;
-}
-
-interface PharmacyConfig {
-  pharmacyId: string;
-  pharmacyInfo: {
-    name: string;
-    address: string;
-    phone: string;
-    email: string;
-    licenseNumber: string;
-    logoUrl?: string;
-  };
-  currencies: CurrencyConfig[];
-  primaryCurrency: string;
-  taxRate: number;
-  salesType: 'wholesale' | 'retail' | 'both';
-  sellByExchangeRate: boolean;
-  profitability: {
-    enabled: boolean;
-    rate: number;
-  };
-  invoice: {
-    autoPrint: boolean;
-    autoSave: boolean;
-    fontSize: number;
-  };
-  theme: 'light' | 'dark' | 'system';
-}
-
-type PaymentMethod = 'cash' | 'mobile' | 'account';
-type ScanMode = 'auto' | 'manual';
-
-// ============================================
-// CONSTANTES
-// ============================================
-
-const DEBOUNCE_DELAY = 300;
-const SCAN_COOLDOWN = 1500;
-const VIBRATION_DURATION = 80;
+// Re-export des types depuis le service
+export type { CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig };
 
 // ============================================
 // COMPOSANTS MEMOÏSÉS
@@ -293,17 +197,15 @@ CartItemComponent.displayName = 'CartItemComponent';
 // ============================================
 
 export default function POS() {
-  const { user } = useAuthStore();
   const location = useLocation();
   const isOnline = useOnline();
 
-  // États généraux
+  // États locaux (synchronisés avec le service)
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
-  const [productsMap, setProductsMap] = useState<Map<string, Product>>(new Map());
-  const [categories, setCategories] = useState<Category[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -312,7 +214,7 @@ export default function POS() {
   const [currentSale, setCurrentSale] = useState<OfflineSale | null>(null);
   const [showScanner, setShowScanner] = useState(false);
   const [scanMode, setScanMode] = useState<ScanMode>('auto');
-  const [lastScanned, setLastScanned] = useState<ScannedProduct | null>(null);
+  const [lastScanned, setLastScanned] = useState<{ code: string; type: 'barcode' | 'qrcode'; timestamp: number } | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [cashierInfo, setCashierInfo] = useState<CashierInfo>({
     id: '',
@@ -321,14 +223,13 @@ export default function POS() {
     posName: '',
     sessionId: '',
     sessionNumber: '',
+    pharmacy_id: '',
   });
-  const [stats, setStats] = useState<DailyStats>({
+  const [stats, setStats] = useState({
     total: 0,
     salesCount: 0,
     currentClient: 'Passager',
   });
-
-  // États de configuration
   const [config, setConfig] = useState<PharmacyConfig>({
     pharmacyId: '',
     pharmacyInfo: {
@@ -382,25 +283,103 @@ export default function POS() {
     [cart],
   );
 
+  // ============================================
+  // INITIALISATION ET SYNC AVEC LE SERVICE
+  // ============================================
+
+  useEffect(() => {
+    // Configurer les callbacks du service
+    posService.setCallbacks({
+      onCartChange: (newCart) => {
+        setCart(newCart);
+      },
+      onProcessingChange: (processing) => {
+        setIsProcessing(processing);
+      },
+      onShowInvoiceChange: (show) => {
+        setShowInvoice(show);
+      },
+      onCurrentSaleChange: (sale) => {
+        setCurrentSale(sale);
+      },
+      onProductsChange: (newProducts) => {
+        setProducts(newProducts);
+      },
+      onCategoriesChange: (newCategories) => {
+        setCategories(newCategories);
+      },
+      onConfigChange: (newConfig) => {
+        setConfig(newConfig);
+      },
+      onStatsChange: (newStats) => {
+        setStats(newStats);
+      },
+    });
+
+    // Charger les données initiales
+    const loadData = async () => {
+      setLoading(true);
+      await posService.loadInitialData();
+      
+      // Synchroniser les états depuis le service
+      setProducts(posService.products);
+      setFilteredProducts(posService.filteredProducts);
+      setCategories(posService.categories);
+      setCart(posService.cart);
+      setCashierInfo(posService.cashierInfo);
+      setStats(posService.stats);
+      setConfig(posService.config);
+      setLoading(false);
+    };
+
+    loadData();
+
+    // Nettoyage
+    return () => {
+      posService.setCallbacks({});
+    };
+  }, []);
+
+  // Synchroniser les états lorsque le service change via l'interval
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (posService.products !== products) {
+        setProducts(posService.products);
+      }
+      if (posService.filteredProducts !== filteredProducts) {
+        setFilteredProducts(posService.filteredProducts);
+      }
+      if (posService.categories !== categories) {
+        setCategories(posService.categories);
+      }
+      if (posService.cart !== cart) {
+        setCart(posService.cart);
+      }
+      if (posService.cashierInfo !== cashierInfo) {
+        setCashierInfo(posService.cashierInfo);
+      }
+      if (posService.stats !== stats) {
+        setStats(posService.stats);
+      }
+      if (posService.config !== config) {
+        setConfig(posService.config);
+      }
+      setLoading(posService.loading);
+      setIsProcessing(posService.isProcessing);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [products, filteredProducts, categories, cart, cashierInfo, stats, config]);
+
   // Application du thème
   useEffect(() => {
-    const root = document.documentElement;
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
-    if (config.theme === 'dark') {
-      root.classList.add('dark');
-    } else if (config.theme === 'light') {
-      root.classList.remove('dark');
-    } else if (config.theme === 'system') {
-      if (systemDark) {
-        root.classList.add('dark');
-      } else {
-        root.classList.remove('dark');
-      }
-    }
+    posService.applyTheme();
   }, [config.theme]);
 
-  // Hotkeys
+  // ============================================
+  // HOTKEYS
+  // ============================================
+
   useHotkeys('ctrl+k', () => {
     searchInputRef.current?.focus();
   });
@@ -411,7 +390,7 @@ export default function POS() {
 
   useHotkeys('ctrl+enter', () => {
     if (cart.length > 0 && !isProcessing) {
-      void handleValidateSale();
+      void posService.validateSale();
     }
   });
 
@@ -420,350 +399,58 @@ export default function POS() {
     setShowInvoice(false);
   });
 
-  // Chargement des données
-  useEffect(() => {
-    void loadInitialData();
+  // ============================================
+  // GESTIONNAIRES D'ÉVÉNEMENTS
+  // ============================================
+
+  const handleSearch = useCallback((value: string) => {
+    setSearch(value);
+    posService.setSearch(value);
   }, []);
 
-  useEffect(() => {
-    const debouncedFilter = debounce(() => {
-      filterProducts();
-    }, DEBOUNCE_DELAY);
-
-    debouncedFilter();
-    return () => debouncedFilter.cancel();
-  }, [products, search, selectedCategory]);
-
-  useEffect(() => {
-    if (showScanner && scanMode === 'manual') {
-      setTimeout(() => scanInputRef.current?.focus(), 100);
-    }
-  }, [showScanner, scanMode]);
-
-  // Fonctions utilitaires
-  const playBeep = useCallback((type: 'success' | 'error') => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      const audioContext = new AudioContextClass();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-
-      oscillator.frequency.value = type === 'success' ? 880 : 320;
-      gainNode.gain.value = 0.15;
-
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + (type === 'success' ? 0.08 : 0.15));
-    } catch {
-      // Ignorer les erreurs audio
-    }
+  const handleCategoryChange = useCallback((categoryId: string) => {
+    setSelectedCategory(categoryId);
+    posService.setSelectedCategory(categoryId);
   }, []);
 
-  const vibrate = useCallback(() => {
-    if (navigator.vibrate) {
-      navigator.vibrate(VIBRATION_DURATION);
-    }
+  const handleAddToCart = useCallback((product: Product) => {
+    posService.addToCart(product);
   }, []);
 
-  // Chargement des configurations
-  const loadConfig = useCallback(async (pharmacyId: string) => {
-    try {
-      const response = await api.get(`/pharmacies/${pharmacyId}/config`);
-      const loadedConfig = response.data.config || {};
-      
-      setConfig({
-        pharmacyId: loadedConfig.pharmacyId || pharmacyId,
-        pharmacyInfo: {
-          name: loadedConfig.pharmacyInfo?.name || '',
-          address: loadedConfig.pharmacyInfo?.address || '',
-          phone: loadedConfig.pharmacyInfo?.phone || '',
-          email: loadedConfig.pharmacyInfo?.email || '',
-          licenseNumber: loadedConfig.pharmacyInfo?.licenseNumber || '',
-          logoUrl: loadedConfig.pharmacyInfo?.logoUrl,
-        },
-        currencies: loadedConfig.currencies || [],
-        primaryCurrency: loadedConfig.primaryCurrency || 'CDF',
-        taxRate: loadedConfig.taxRate ?? 16,
-        salesType: loadedConfig.salesType?.type || loadedConfig.salesType || 'both',
-        sellByExchangeRate: loadedConfig.sellByExchangeRate ?? true,
-        profitability: loadedConfig.profitability || { enabled: false, rate: 30 },
-        invoice: loadedConfig.invoice || { autoPrint: false, autoSave: true, fontSize: 12 },
-        theme: loadedConfig.theme || 'system',
-      });
-    } catch (error) {
-      console.warn('Erreur chargement config:', error);
-    }
+  const handleUpdateQuantity = useCallback((index: number, delta: number) => {
+    posService.updateQuantity(index, delta);
   }, []);
 
-  // Chargement des données initiales
-  const loadInitialData = useCallback(async () => {
-    setLoading(true);
-    try {
-      await Promise.all([
-        loadUserInfo(),
-        loadProducts(),
-        loadCategories(),
-        loadDailyStats(),
-      ]);
-    } catch (error) {
-      console.error('Erreur chargement données POS:', error);
-      toast.error('Erreur lors du chargement de la caisse');
-    } finally {
-      setLoading(false);
-    }
+  const handleRemoveFromCart = useCallback((index: number) => {
+    posService.removeFromCart(index);
   }, []);
 
-  const loadUserInfo = useCallback(async () => {
-    try {
-      const response = await api.get('/user/current-session');
-      const pharmacyId = response.data?.pharmacyId;
-      
-      if (pharmacyId) {
-        await loadConfig(pharmacyId);
-      }
-      
-      setCashierInfo({
-        id: user?.id || '',
-        name: user?.nom_complet || user?.email || 'Caissier',
-        posId: response.data?.posId || 'pos-main',
-        posName: response.data?.posName || 'POS-01',
-        sessionId: response.data?.sessionId || Date.now().toString(),
-        sessionNumber: response.data?.sessionNumber || '001',
-      });
-
-      await db.saveSession({
-        sessionId: response.data?.sessionId || Date.now().toString(),
-        posId: response.data?.posId || 'pos-main',
-        posName: response.data?.posName || 'POS-01',
-        sessionNumber: response.data?.sessionNumber || '001',
-        userId: user?.id,
-        userName: user?.nom_complet || user?.email,
-        openedAt: Date.now(),
-        status: 'open',
-      });
-    } catch (error) {
-      console.warn('Mode hors-ligne session:', error);
-      
-      const offlineSession = await db.getCurrentSession(user?.id);
-      
-      if (offlineSession) {
-        setCashierInfo({
-          id: user?.id || '',
-          name: user?.nom_complet || user?.email || 'Caissier',
-          posId: offlineSession.posId,
-          posName: offlineSession.posName,
-          sessionId: offlineSession.sessionId,
-          sessionNumber: offlineSession.sessionNumber,
-        });
-      }
-    }
-  }, [user, loadConfig]);
-
-  const loadProducts = useCallback(async () => {
-    try {
-      const response = await api.get('/products', {
-        params: { active: true, limit: 1000 },
-      });
-
-      const rawProducts = response.data?.data || response.data?.products || response.data || [];
-
-      const normalizedProducts: Product[] = rawProducts.map((p: any) => ({
-        id: String(p.id),
-        name: p.name,
-        price: Number(p.price ?? p.selling_price ?? 0),
-        sellingPrice: Number(p.selling_price ?? p.price ?? 0),
-        purchasePrice: Number(p.purchase_price ?? 0),
-        categoryId: String(p.categoryId ?? p.category_id ?? p.category?.id ?? 'uncategorized'),
-        category: p.category
-          ? typeof p.category === 'object'
-            ? p.category
-            : { id: String(p.category), name: String(p.category) }
-          : undefined,
-        stock: Number(p.stock ?? p.quantity ?? 0),
-        code: p.code || '',
-        barcode: p.barcode || undefined,
-        qrCode: p.qrCode || p.qr_code || undefined,
-        description: p.description || undefined,
-        salesType: p.salesType || p.sales_type || 'both',
-        wholesalePrice: Number(p.wholesale_price ?? p.wholesalePrice ?? 0),
-        retailPrice: Number(p.retail_price ?? p.retailPrice ?? 0),
-        minQuantity: Number(p.min_quantity ?? p.minQuantity ?? 1),
-      }));
-
-      await db.products.bulkPut(normalizedProducts as any);
-      setProducts(normalizedProducts);
-      rebuildProductsMap(normalizedProducts);
-    } catch (error) {
-      console.warn('Mode hors-ligne produits:', error);
-
-      const localProducts = await db.products.toArray();
-      const normalizedProducts: Product[] = localProducts.map((p: any) => ({
-        id: String(p.id),
-        name: p.name,
-        price: Number(p.price ?? p.selling_price ?? 0),
-        sellingPrice: Number(p.selling_price ?? p.price ?? 0),
-        purchasePrice: Number(p.purchase_price ?? 0),
-        categoryId: String(p.categoryId ?? p.category_id ?? p.category?.id ?? 'uncategorized'),
-        category: p.category,
-        stock: Number(p.stock ?? p.quantity ?? 0),
-        code: p.code || '',
-        barcode: p.barcode || undefined,
-        qrCode: p.qrCode || p.qr_code || undefined,
-        description: p.description || undefined,
-        salesType: p.salesType || 'both',
-        wholesalePrice: Number(p.wholesale_price ?? p.wholesalePrice ?? 0),
-        retailPrice: Number(p.retail_price ?? p.retailPrice ?? 0),
-        minQuantity: Number(p.min_quantity ?? p.minQuantity ?? 1),
-      }));
-
-      setProducts(normalizedProducts);
-      rebuildProductsMap(normalizedProducts);
-    }
+  const handleClearCart = useCallback(() => {
+    posService.clearCart();
   }, []);
 
-  const rebuildProductsMap = useCallback((productList: Product[]) => {
-    const map = new Map<string, Product>();
-    productList.forEach((p) => {
-      if (p.barcode) map.set(p.barcode, p);
-      if (p.qrCode) map.set(p.qrCode, p);
-      if (p.code) map.set(p.code, p);
-    });
-    setProductsMap(map);
+  const handlePaymentMethodChange = useCallback((method: PaymentMethod) => {
+    setPaymentMethod(method);
+    posService.setPaymentMethod(method);
   }, []);
 
-  const loadCategories = useCallback(async () => {
-    try {
-      const response = await api.get('/categories');
-      const rawCategories = response.data?.data || response.data?.categories || response.data || [];
-
-      const cats: Category[] = rawCategories.map((cat: any) => ({
-        id: String(cat.id),
-        name: cat.name,
-        icon: cat.icon,
-      }));
-
-      await db.categories.bulkPut(cats as any);
-      setCategories([{ id: 'all', name: 'Tous' }, ...cats]);
-    } catch (error) {
-      console.warn('Mode hors-ligne catégories:', error);
-      const localCats = await db.categories.toArray();
-      const normalized = localCats.map((cat: any) => ({
-        id: String(cat.id),
-        name: cat.name,
-        icon: cat.icon,
-      }));
-      setCategories([{ id: 'all', name: 'Tous' }, ...normalized]);
-    }
+  const handleValidateSale = useCallback(() => {
+    void posService.validateSale();
   }, []);
 
-  const loadDailyStats = useCallback(async () => {
-    try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0];
-
-      const response = await api.get('/sales/stats/daily', {
-        params: { date: today.toISOString() },
-      });
-
-      const newStats = {
-        total: Number(response.data?.total || 0),
-        salesCount: Number(response.data?.count || 0),
-        currentClient: response.data?.currentClient || 'Passager',
-      };
-
-      setStats(newStats);
-      await db.updateDailyStats(todayStr, newStats);
-    } catch (error) {
-      console.warn('Mode hors-ligne stats:', error);
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0];
-
-      const offlineStats = await db.getDailyStats(todayStr);
-      
-      if (offlineStats) {
-        setStats({
-          total: offlineStats.total,
-          salesCount: offlineStats.salesCount,
-          currentClient: offlineStats.currentClient,
-        });
-      } else {
-        const localSales = await db.sales
-          .where('timestamp')
-          .aboveOrEqual(today.getTime())
-          .toArray();
-        
-        const total = localSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-        
-        setStats({
-          total,
-          salesCount: localSales.length,
-          currentClient: 'Passager',
-        });
-      }
-    }
+  const handleRefresh = useCallback(() => {
+    void posService.loadInitialData();
   }, []);
 
-  const filterProducts = useCallback(() => {
-    let filtered = [...products];
-
-    if (selectedCategory !== 'all') {
-      filtered = filtered.filter((p) => p.categoryId === selectedCategory);
-    }
-
-    if (search.trim()) {
-      const term = search.trim().toLowerCase();
-      filtered = filtered.filter((p) => 
-        p.name.toLowerCase().includes(term) ||
-        p.code?.toLowerCase().includes(term) ||
-        p.barcode?.toLowerCase().includes(term) ||
-        p.description?.toLowerCase().includes(term)
-      );
-    }
-
-    setFilteredProducts(filtered);
-  }, [products, search, selectedCategory]);
-
-  const getCategoryProducts = useCallback((categoryId: string) => {
-    return products.filter((p) => p.categoryId === categoryId);
-  }, [products]);
-
-  // Gestion du scan
   const handleScan = useCallback((detectedCode: string, type: 'barcode' | 'qrcode') => {
-    const code = detectedCode.trim();
-    if (!code) return;
-
-    setScanError(null);
-
-    const now = Date.now();
-    if (lastScanned && lastScanned.code === code && now - lastScanned.timestamp < SCAN_COOLDOWN) {
-      return;
-    }
-
-    setLastScanned({ code, type, timestamp: now });
-
-    const product = productsMap.get(code);
-
-    if (!product) {
-      setScanError(`Produit non trouvé : ${code}`);
-      toast.error(`Produit non trouvé : ${code}`);
-      playBeep('error');
-      return;
-    }
-
-    addToCart(product);
-    toast.success(`${product.name} ajouté au panier`);
-    playBeep('success');
-    vibrate();
-
-    if (scanMode === 'auto') {
+    posService.handleScan(detectedCode, type);
+    // Synchroniser les états après scan
+    setScanError(posService.scanError);
+    setLastScanned(posService.lastScanned);
+    if (posService.scanMode === 'auto') {
       setShowScanner(false);
     }
-  }, [lastScanned, productsMap, scanMode, playBeep, vibrate]);
+  }, []);
 
   const handleBarcodeInput = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -775,209 +462,31 @@ export default function POS() {
     }
   }, [handleScan]);
 
-  // Gestion du panier
-  const addToCart = useCallback((product: Product) => {
-    if (product.stock <= 0) {
-      toast.error(`${product.name} est en rupture de stock`);
-      return;
-    }
-
-    // Vérifier le type de vente
-    if (config.salesType !== 'both' && product.salesType !== config.salesType) {
-      const typeLabel = config.salesType === 'wholesale' ? 'gros' : 'détail';
-      toast.error(`${product.name} n'est pas disponible en vente ${typeLabel}`);
-      return;
-    }
-
-    // Calculer le prix selon le type de vente
-    let unitPrice = product.price;
-    if (product.salesType === 'wholesale' && product.wholesalePrice) {
-      unitPrice = product.wholesalePrice;
-    } else if (product.salesType === 'retail' && product.retailPrice) {
-      unitPrice = product.retailPrice;
-    }
-
-    // Vérifier la quantité minimale pour le gros
-    if (config.salesType === 'wholesale' && product.minQuantity && product.minQuantity > 1) {
-      const existing = cart.find(item => item.id === product.id);
-      const currentQty = existing?.quantity || 0;
-      if (currentQty === 0 && product.minQuantity > 1) {
-        toast(`💡 ${product.name} se vend par lot de ${product.minQuantity}`, {
-          icon: 'ℹ️',
-          duration: 3000,
-        });
-      }
-    }
-
-    setCart((prev) => {
-      const existing = prev.find((item) => item.id === product.id);
-
-      if (existing) {
-        const newQuantity = existing.quantity + 1;
-        if (newQuantity > product.stock) {
-          toast.error(`Stock insuffisant pour ${product.name}`);
-          return prev;
-        }
-        return prev.map((item) =>
-          item.id === product.id ? { ...item, quantity: newQuantity } : item
-        );
-      }
-
-      return [{ ...product, quantity: 1, unitPrice }, ...prev];
-    });
-  }, [config.salesType, cart]);
-
-  const updateQuantity = useCallback((index: number, delta: number) => {
-    setCart((prev) => {
-      const next = [...prev];
-      const item = next[index];
-      if (!item) return prev;
-
-      const newQuantity = item.quantity + delta;
-
-      if (delta > 0 && newQuantity > item.stock) {
-        toast.error(`Stock insuffisant pour ${item.name}`);
-        return prev;
-      }
-
-      if (newQuantity <= 0) {
-        next.splice(index, 1);
-        return next;
-      }
-
-      next[index] = { ...item, quantity: newQuantity };
-      return next;
-    });
+  const handleScanModeChange = useCallback((mode: ScanMode) => {
+    setScanMode(mode);
+    posService.setScanMode(mode);
   }, []);
 
-  const removeFromCart = useCallback((index: number) => {
-    setCart((prev) => prev.filter((_, i) => i !== index));
+  const handleCloseScanner = useCallback(() => {
+    setShowScanner(false);
+    posService.setShowScanner(false);
   }, []);
 
-  const clearCart = useCallback(() => {
-    if (cart.length > 0 && window.confirm('Vider le panier ?')) {
-      setCart([]);
+  const getCategoryProducts = useCallback((categoryId: string) => {
+    return posService.getCategoryProducts(categoryId);
+  }, []);
+
+  // Rendu des catégories - toujours afficher au moins "Tous"
+  const displayCategories = useMemo(() => {
+    if (categories.length === 0) {
+      return [{ id: 'all', name: 'Tous' }];
     }
-  }, [cart.length]);
+    return categories;
+  }, [categories]);
 
-  // Mise à jour du stock local
-  const updateLocalStock = useCallback(async (items: CartItem[]) => {
-    const updatedProducts = [...products];
-    const stockUpdates = [];
-
-    for (const item of items) {
-      const product = updatedProducts.find((p) => p.id === item.id);
-      if (!product) continue;
-
-      const newStock = Math.max(0, product.stock - item.quantity);
-      product.stock = newStock;
-      stockUpdates.push({ id: item.id, stock: newStock });
-    }
-
-    if (stockUpdates.length > 0) {
-      try {
-        await db.bulkUpdateProductsStock(stockUpdates);
-      } catch (error) {
-        console.error('Erreur mise à jour stock offline:', error);
-      }
-    }
-
-    setProducts(updatedProducts);
-    rebuildProductsMap(updatedProducts);
-  }, [products, rebuildProductsMap]);
-
-  // Validation de la vente
-  const handleValidateSale = useCallback(async () => {
-    if (cart.length === 0 || isProcessing) return;
-
-    setIsProcessing(true);
-
-    // Vérifier les quantités minimales pour le gros
-    if (config.salesType === 'wholesale') {
-      const invalidItems = cart.filter(item => 
-        item.minQuantity && item.quantity < item.minQuantity
-      );
-      if (invalidItems.length > 0) {
-        const message = invalidItems
-          .map(item => `${item.name}: minimum ${item.minQuantity} unités`)
-          .join('\n');
-        toast.error(`Quantités minimales non respectées:\n${message}`);
-        setIsProcessing(false);
-        return;
-      }
-    }
-
-    const rawTotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const totalAmount = config.sellByExchangeRate 
-      ? rawTotal / activeCurrency.exchangeRate 
-      : rawTotal;
-
-    const saleData = {
-      items: cart.map((item) => ({
-        productId: item.id,
-        quantity: item.quantity,
-        price: item.unitPrice,
-        name: item.name,
-        barcode: item.barcode,
-        code: item.code,
-        salesType: item.salesType,
-      })),
-      total: totalAmount,
-      paymentMethod,
-      timestamp: new Date().toISOString(),
-      cashierId: cashierInfo.id,
-      cashierName: cashierInfo.name,
-      posId: cashierInfo.posId,
-      posName: cashierInfo.posName,
-      sessionId: cashierInfo.sessionId,
-      clientType: stats.currentClient,
-      currency: config.primaryCurrency,
-      exchangeRate: activeCurrency.exchangeRate,
-    };
-
-    try {
-      let response;
-      if (isOnline) {
-        response = await api.post('/sales', saleData);
-      }
-
-      await updateLocalStock(cart);
-
-      const offlineSale: OfflineSale = {
-        ...saleData,
-        id: response?.data?.id || `offline_${Date.now()}`,
-        timestamp: Date.now(),
-        status: isOnline ? 'synced' : 'pending',
-        receiptNumber: response?.data?.receiptNumber,
-        paymentMethod: saleData.paymentMethod as any,
-      };
-
-      await db.sales.add(offlineSale);
-      setCurrentSale(offlineSale);
-
-      // Impression automatique si configurée
-      if (config.invoice.autoPrint) {
-        setShowInvoice(true);
-        setTimeout(() => {
-          window.print();
-        }, 100);
-      } else {
-        setShowInvoice(true);
-      }
-
-      setCart([]);
-      await loadDailyStats();
-      
-      toast.success(isOnline ? 'Vente enregistrée avec succès' : 'Vente enregistrée en mode hors-ligne');
-    } catch (error) {
-      console.error('Erreur lors de la vente:', error);
-      toast.error('Erreur lors de l\'enregistrement de la vente');
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [cart, isProcessing, isOnline, paymentMethod, cashierInfo, stats.currentClient, 
-      updateLocalStock, loadDailyStats, config.salesType, config.sellByExchangeRate, 
-      config.invoice.autoPrint, activeCurrency.exchangeRate]);
+  // ============================================
+  // RENDU
+  // ============================================
 
   if (loading) {
     return (
@@ -1081,7 +590,7 @@ export default function POS() {
                   </p>
                 </div>
                 <button
-                  onClick={() => setShowScanner(false)}
+                  onClick={handleCloseScanner}
                   className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700"
                 >
                   <X size={20} />
@@ -1090,7 +599,7 @@ export default function POS() {
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
-                  onClick={() => setScanMode('auto')}
+                  onClick={() => handleScanModeChange('auto')}
                   className={`
                     flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold transition-colors
                     ${scanMode === 'auto'
@@ -1103,7 +612,7 @@ export default function POS() {
                   Auto
                 </button>
                 <button
-                  onClick={() => setScanMode('manual')}
+                  onClick={() => handleScanModeChange('manual')}
                   className={`
                     flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold transition-colors
                     ${scanMode === 'manual'
@@ -1173,7 +682,7 @@ export default function POS() {
 
             <div className="bg-slate-50 p-5 dark:bg-slate-700">
               <button
-                onClick={() => setShowScanner(false)}
+                onClick={handleCloseScanner}
                 className="w-full rounded-xl bg-blue-600 py-3 font-bold text-white transition-colors hover:bg-blue-700"
               >
                 Fermer
@@ -1198,7 +707,7 @@ export default function POS() {
                   className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-12 pr-4 outline-none transition-shadow focus:ring-2 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-200"
                   placeholder="Rechercher un produit (nom, code, code-barres...)"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => handleSearch(e.target.value)}
                 />
               </div>
 
@@ -1211,7 +720,7 @@ export default function POS() {
               </button>
 
               <button
-                onClick={() => void loadInitialData()}
+                onClick={handleRefresh}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 font-bold text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
               >
                 <RefreshCw size={18} />
@@ -1246,29 +755,32 @@ export default function POS() {
               )}
             </div>
 
-            {/* Categories */}
-            <div className="mb-5 flex gap-2 overflow-x-auto pb-2">
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`
-                    shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition-colors
-                    ${selectedCategory === cat.id
-                      ? 'bg-blue-600 text-white'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
-                    }
-                  `}
-                >
-                  {cat.name}
-                </button>
-              ))}
-            </div>
+            {/* Categories - Afficher toujours au moins "Tous" */}
+            {displayCategories.length > 1 && (
+              <div className="mb-5 flex gap-2 overflow-x-auto pb-2">
+                {displayCategories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    onClick={() => handleCategoryChange(cat.id)}
+                    className={`
+                      shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition-colors
+                      ${selectedCategory === cat.id
+                        ? 'bg-blue-600 text-white'
+                        : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600'
+                      }
+                    `}
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Products Grid */}
             {selectedCategory === 'all' ? (
+              // Affichage groupé par catégories
               <div className="space-y-5">
-                {categories
+                {displayCategories
                   .filter((c) => c.id !== 'all')
                   .map((cat) => {
                     const catProducts = getCategoryProducts(cat.id);
@@ -1286,7 +798,7 @@ export default function POS() {
                             <ProductCard 
                               key={product.id} 
                               product={product} 
-                              onAdd={addToCart}
+                              onAdd={handleAddToCart}
                               currencySymbol={activeCurrency.symbol}
                               exchangeRate={activeCurrency.exchangeRate}
                               salesType={config.salesType}
@@ -1296,14 +808,33 @@ export default function POS() {
                       </div>
                     );
                   })}
+                
+                {/* Si aucune catégorie n'a de produits, afficher tous les produits */}
+                {displayCategories.filter(c => c.id !== 'all').length === 0 && products.length > 0 && (
+                  <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {products.map((product) => (
+                        <ProductCard 
+                          key={product.id} 
+                          product={product} 
+                          onAdd={handleAddToCart}
+                          currencySymbol={activeCurrency.symbol}
+                          exchangeRate={activeCurrency.exchangeRate}
+                          salesType={config.salesType}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
+              // Affichage filtré par catégorie
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {filteredProducts.map((product) => (
                   <ProductCard 
                     key={product.id} 
                     product={product} 
-                    onAdd={addToCart}
+                    onAdd={handleAddToCart}
                     currencySymbol={activeCurrency.symbol}
                     exchangeRate={activeCurrency.exchangeRate}
                     salesType={config.salesType}
@@ -1319,7 +850,7 @@ export default function POS() {
             )}
           </section>
 
-          {/* Cart Section */}
+          {/* Cart Section - Inchangé */}
           <aside>
             <div className="sticky top-4 space-y-4">
               {/* Cart */}
@@ -1335,7 +866,7 @@ export default function POS() {
 
                   {cart.length > 0 && (
                     <button
-                      onClick={clearCart}
+                      onClick={handleClearCart}
                       className="text-sm font-medium text-red-500 transition-colors hover:text-red-700"
                     >
                       Vider
@@ -1377,8 +908,8 @@ export default function POS() {
                           <CartItemComponent
                             item={cart[virtualRow.index]}
                             index={virtualRow.index}
-                            onUpdateQuantity={updateQuantity}
-                            onRemove={removeFromCart}
+                            onUpdateQuantity={handleUpdateQuantity}
+                            onRemove={handleRemoveFromCart}
                             currencySymbol={activeCurrency.symbol}
                             exchangeRate={activeCurrency.exchangeRate}
                           />
@@ -1401,7 +932,7 @@ export default function POS() {
                     {(['cash', 'mobile', 'account'] as PaymentMethod[]).map((method) => (
                       <button
                         key={method}
-                        onClick={() => setPaymentMethod(method)}
+                        onClick={() => handlePaymentMethodChange(method)}
                         className={`
                           rounded-2xl p-3 transition-all
                           ${paymentMethod === method
@@ -1424,7 +955,7 @@ export default function POS() {
 
                   {/* Validate Button */}
                   <button
-                    onClick={() => void handleValidateSale()}
+                    onClick={handleValidateSale}
                     disabled={isProcessing || cart.length === 0}
                     className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-600"
                   >
@@ -1494,15 +1025,15 @@ export default function POS() {
           sale={{
             id: String(currentSale.id),
             receiptNumber: currentSale.receiptNumber,
-            items: currentSale.items.map(item => ({
-              id: item.productId,
+            items: (currentSale.items || []).map((item: any) => ({
+              id: item.productId || item.id,
               name: item.name,
-              price: item.price,
+              price: item.price || item.unitPrice,
               quantity: item.quantity,
               code: item.code,
             })),
             total: Number(currentSale.total),
-            paymentMethod: currentSale.paymentMethod,
+            paymentMethod: currentSale.paymentMethod as PaymentMethod,
             timestamp: currentSale.timestamp,
             cashierName: currentSale.cashierName || cashierInfo.name,
             posName: currentSale.posName || cashierInfo.posName,

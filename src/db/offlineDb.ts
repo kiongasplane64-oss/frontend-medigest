@@ -31,7 +31,7 @@ export interface OfflineCategory {
 }
 
 export interface OfflineSale {
-  id?: number;
+  id?: number; // Changé de string à number pour Dexie auto-increment
   items: any[];
   total: number;
   paymentMethod: string;
@@ -45,6 +45,8 @@ export interface OfflineSale {
   clientType?: string;
   receiptNumber?: string;
   synced?: boolean;
+  currency?: string;
+  exchangeRate?: number;
 }
 
 export interface OfflineSession {
@@ -58,6 +60,7 @@ export interface OfflineSession {
   openedAt: number;
   closedAt?: number;
   status: 'open' | 'closed';
+  pharmacy_id?: string; // Ajout du champ manquant
 }
 
 export interface OfflineDailyStats {
@@ -70,11 +73,11 @@ export interface OfflineDailyStats {
 }
 
 export class OfflineDatabase extends Dexie {
-  sales!: Table<OfflineSale>;
-  products!: Table<OfflineProduct>;
-  categories!: Table<OfflineCategory>;
-  sessions!: Table<OfflineSession>;
-  dailyStats!: Table<OfflineDailyStats>;
+  sales!: Table<OfflineSale, number>; // Type d'index modifié
+  products!: Table<OfflineProduct, string>;
+  categories!: Table<OfflineCategory, string>;
+  sessions!: Table<OfflineSession, string>;
+  dailyStats!: Table<OfflineDailyStats, string>;
 
   constructor() {
     super('PharmaOfflineDB');
@@ -86,7 +89,6 @@ export class OfflineDatabase extends Dexie {
       sessions: 'id, sessionId, posId, userId, status, openedAt',
       dailyStats: 'id, date'
     }).upgrade(() => {
-      // Migration des anciennes données si nécessaire
       console.log('Mise à jour de la base de données vers version 2');
     });
   }
@@ -144,7 +146,7 @@ export class OfflineDatabase extends Dexie {
   }
 
   async markSaleAsSynced(saleId: number): Promise<void> {
-    await this.sales.update(saleId, { status: 'synced' });
+    await this.sales.update(saleId, { status: 'synced', synced: true });
   }
 
   // Méthodes pour les sessions

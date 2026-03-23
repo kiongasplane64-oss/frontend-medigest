@@ -10,7 +10,7 @@ export const startSyncManager = () => {
 
     for (const sale of pendingSales) {
       try {
-        await api.post('/v1/sales', {
+        await api.post('/sales', {
           items: sale.items,
           total: sale.total,
           timestamp: sale.timestamp

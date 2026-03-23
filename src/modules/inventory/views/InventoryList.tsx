@@ -1,4 +1,4 @@
-// InventoryList.tsx (version finale corrigée)
+// InventoryList.tsx - Version corrigée
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -26,15 +26,16 @@ import {
   ScanLine,
   Warehouse,
   CircleDollarSign,
-  DollarSign
+  DollarSign,
+  Loader2,
+  Settings
 } from 'lucide-react';
 import Barcode from 'react-barcode';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 
 import { inventoryService } from '@/services/inventoryService';
-import { locationService } from '@/services/locationService';
-import type { Product, StockStats, Category, Location } from '@/types/inventory.types';
-import { useCurrencyConfig } from '@/hooks/useCurrencyConfig';
+import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
+import type { Product, StockStats, Category } from '@/types/inventory.types';
 import { SearchInput } from '@/components/SearchInput';
 import { StatCardDetail } from '@/components/StatCardDetail';
 import ProductListView from '@/components/ProductListView';
@@ -54,13 +55,6 @@ interface SortConfig {
   direction: SortDirection;
 }
 
-interface ProductListResponse {
-  products: Product[];
-  total?: number;
-  page?: number;
-  limit?: number;
-}
-
 interface StatCardProps {
   title: string;
   value: string | number;
@@ -68,6 +62,7 @@ interface StatCardProps {
   tone: 'blue' | 'green' | 'amber' | 'red' | 'violet';
   subtitle?: string;
   onClick?: () => void;
+  loading?: boolean;
 }
 
 interface QuickActionButtonProps {
@@ -75,32 +70,21 @@ interface QuickActionButtonProps {
   icon: React.ReactNode;
   onClick: () => void;
   variant?: 'default' | 'primary' | 'success' | 'warning';
+  loading?: boolean;
 }
 
-const serviceWithOptionalCategories = inventoryService as typeof inventoryService & {
-  getCategories?: () => Promise<Category[]>;
-  getAlerts?: () => Promise<{
-    low_stock_count?: number;
-    expiring_soon_count?: number;
-    expired_count?: number;
-    alerts?: {
-      low_stock?: Array<Record<string, unknown>>;
-      expiring_soon?: Array<Record<string, unknown>>;
-      expired?: Array<Record<string, unknown>>;
-    };
-  }>;
-};
-
-function normalizeProductsResponse(data: unknown): Product[] {
-  if (!data) return [];
-  if (Array.isArray(data)) return data as Product[];
-  const response = data as ProductListResponse;
-  if (Array.isArray(response.products)) return response.products;
-  return [];
+interface InventoryListProps {
+  pharmacyId?: string;
+  tenantId?: string;
 }
 
+// Constantes de configuration
+const DEFAULT_LOW_STOCK_THRESHOLD = 10;
+const DEFAULT_PAGINATION_LIMIT = 100;
+
+// Fonctions utilitaires
 function getCategoryName(product: Product): string {
-  if (typeof product.category === 'string') return product.category;
+  if (typeof product.category === 'string') return product.category || 'Sans catégorie';
   if (product.category && typeof product.category === 'object' && 'name' in product.category) {
     return String((product.category as { name?: string }).name ?? 'Sans catégorie');
   }
@@ -117,17 +101,21 @@ function getBarcodeValue(product: Product): string {
 
 function isProductExpired(product: Product): boolean {
   if (!product.expiry_date) return false;
-  const d = new Date(product.expiry_date);
-  if (Number.isNaN(d.getTime())) return false;
-  return d < new Date();
+  const expiryDate = new Date(product.expiry_date);
+  if (isNaN(expiryDate.getTime())) return false;
+  return expiryDate < new Date();
 }
 
-function isProductLowStock(product: Product, threshold: number = 10): boolean {
-  const qty = Number(product.quantity ?? 0);
-  return qty <= threshold;
+function isProductLowStock(product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): boolean {
+  const quantity = Number(product.quantity ?? 0);
+  return quantity > 0 && quantity <= threshold;
 }
 
-function getStockBadge(product: Product, threshold: number = 10): {
+function isProductOutOfStock(product: Product): boolean {
+  return Number(product.quantity ?? 0) <= 0;
+}
+
+function getStockBadge(product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): {
   label: string;
   className: string;
 } {
@@ -138,9 +126,7 @@ function getStockBadge(product: Product, threshold: number = 10): {
     };
   }
 
-  const quantity = Number(product.quantity ?? 0);
-
-  if (quantity <= 0) {
+  if (isProductOutOfStock(product)) {
     return {
       label: 'Rupture',
       className: 'bg-red-100 text-red-700 border border-red-200',
@@ -160,7 +146,7 @@ function getStockBadge(product: Product, threshold: number = 10): {
   };
 }
 
-function StatCard({ title, value, icon, tone, subtitle, onClick }: StatCardProps) {
+function StatCard({ title, value, icon, tone, subtitle, onClick, loading = false }: StatCardProps) {
   const tones = {
     blue: 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100',
     green: 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100',
@@ -181,8 +167,12 @@ function StatCard({ title, value, icon, tone, subtitle, onClick }: StatCardProps
           <p className="mb-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
             {title}
           </p>
-          <p className="truncate text-xl font-black text-slate-900 md:text-3xl">{value}</p>
-          {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
+          {loading ? (
+            <div className="h-8 w-20 animate-pulse rounded-lg bg-slate-200 md:h-10" />
+          ) : (
+            <p className="truncate text-xl font-black text-slate-900 md:text-3xl">{value}</p>
+          )}
+          {subtitle && !loading && <p className="mt-1 text-xs text-slate-500">{subtitle}</p>}
         </div>
 
         <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border ${tones[tone]}`}>
@@ -193,7 +183,7 @@ function StatCard({ title, value, icon, tone, subtitle, onClick }: StatCardProps
   );
 }
 
-function QuickActionButton({ label, icon, onClick, variant = 'default' }: QuickActionButtonProps) {
+function QuickActionButton({ label, icon, onClick, variant = 'default', loading = false }: QuickActionButtonProps) {
   const variants = {
     default: 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
     primary: 'bg-sky-600 text-white hover:bg-sky-700 shadow-lg shadow-sky-100',
@@ -204,23 +194,33 @@ function QuickActionButton({ label, icon, onClick, variant = 'default' }: QuickA
   return (
     <button
       onClick={onClick}
-      className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold transition-all active:scale-[0.98] ${variants[variant]}`}
+      disabled={loading}
+      className={`flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold transition-all active:scale-[0.98] ${
+        variants[variant]
+      } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
     >
-      {icon}
+      {loading ? <Loader2 size={16} className="animate-spin" /> : icon}
       <span className="hidden sm:inline">{label}</span>
     </button>
   );
 }
 
-interface InventoryListProps {
-  pharmacyId?: string;
-}
-
-export default function InventoryList({ pharmacyId }: InventoryListProps) {
+export default function InventoryList({ pharmacyId, tenantId: _tenantId }: InventoryListProps) {
   const queryClient = useQueryClient();
   const isMobile = useMediaQuery('(max-width: 768px)');
-  const { formatPrice, primaryCurrency, isLoading: currencyLoading } = useCurrencyConfig(pharmacyId);
+  
+  // Récupération de la configuration de la pharmacie
+  const { 
+    config, 
+    isLoading: configLoading,
+    formatPrice, 
+    primaryCurrency,
+    lowStockThreshold,
+    expiryWarningDays,
+    taxRate
+  } = usePharmacyConfig(pharmacyId);
 
+  // États
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
@@ -229,7 +229,9 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(isMobile ? 'grid' : 'list');
   const [showFilters, setShowFilters] = useState(false);
+  const [currentPage] = useState(1);
 
+  // États des modaux
   const [showAddModal, setShowAddModal] = useState(false);
   const [showProductList, setShowProductList] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -243,14 +245,18 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     title: string;
     data: any;
   } | null>(null);
+  const [showConfigModal, setShowConfigModal] = useState(false);
 
+  // États pour le scanner
   const [barcodeToCreate, setBarcodeToCreate] = useState<string>('');
   const [showBarcodeCreateChoice, setShowBarcodeCreateChoice] = useState(false);
 
+  // Ajuster le mode d'affichage pour mobile
   useEffect(() => {
     setViewMode(isMobile ? 'grid' : 'list');
   }, [isMobile]);
 
+  // Query: Récupération des produits
   const {
     data: productsData,
     isLoading: productsLoading,
@@ -258,90 +264,54 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     error: productsError,
     isFetching,
   } = useQuery({
-    queryKey: ['inventory-products', searchTerm, selectedCategory, selectedLocation],
+    queryKey: ['inventory-products', pharmacyId, searchTerm, selectedCategory, selectedLocation, currentPage],
     queryFn: () =>
       inventoryService.getProducts({
         search: searchTerm || undefined,
         category: selectedCategory !== 'all' ? selectedCategory : undefined,
         location: selectedLocation !== 'all' ? selectedLocation : undefined,
-        limit: 1000,
+        skip: (currentPage - 1) * DEFAULT_PAGINATION_LIMIT,
+        limit: DEFAULT_PAGINATION_LIMIT,
+        include_sales_stats: true,
       }),
     staleTime: 5 * 60 * 1000,
+    enabled: !!pharmacyId,
   });
 
-  const { data: stats, isLoading: statsLoading } = useQuery<StockStats & { low_stock_threshold?: number }>({
+  // Query: Récupération des statistiques
+  const { data: stats, isLoading: statsLoading } = useQuery<StockStats>({
     queryKey: ['inventory-stats', pharmacyId],
     queryFn: () => inventoryService.getStats(),
     staleTime: 5 * 60 * 1000,
+    enabled: !!pharmacyId,
   });
 
-  const { data: alertsData } = useQuery({
-    queryKey: ['inventory-alerts', pharmacyId],
-    queryFn: async () => {
-      if (typeof serviceWithOptionalCategories.getAlerts === 'function') {
-        return serviceWithOptionalCategories.getAlerts();
-      }
-      return null;
-    },
-    staleTime: 2 * 60 * 1000,
-  });
-
+  // Query: Récupération des catégories - CORRIGÉE
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ['inventory-categories', pharmacyId],
     queryFn: async () => {
-      if (typeof serviceWithOptionalCategories.getCategories === 'function') {
-        return serviceWithOptionalCategories.getCategories();
-      }
-
-      const products = normalizeProductsResponse(productsData);
-      const map = new Map<string, Category>();
-
-      for (const product of products) {
-        const name = getCategoryName(product);
-        if (!map.has(name)) {
-          map.set(name, {
-            id: name,
-            name,
-            product_count: 1,
-          } as Category);
-        } else {
-          const current = map.get(name)!;
-          map.set(name, {
-            ...current,
-            product_count: Number(current.product_count ?? 0) + 1,
-          });
-        }
-      }
-
-      return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+      const response = await inventoryService.getCategories({ skip: 0, limit: 100 });
+      return response.categories;
     },
     staleTime: 10 * 60 * 1000,
     enabled: true,
   });
 
-  const { data: locations = [] } = useQuery<Location[]>({
-    queryKey: ['inventory-locations', pharmacyId],
-    queryFn: () => locationService.getLocations(),
-    staleTime: 10 * 60 * 1000,
-  });
-
+  // Mutation: Suppression de produit
   const deleteMutation = useMutation({
     mutationFn: (id: string) => inventoryService.deleteProduct(id),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['inventory-products'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-stats'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-categories'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-locations'] }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: ['inventory-products'] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-categories'] });
     },
     onError: (error) => {
       console.error('Erreur suppression produit:', error);
-      window.alert('Erreur lors de la suppression du produit.');
+      alert('Erreur lors de la suppression du produit.');
     },
   });
 
+  // Scanner QR code / code-barres
   useEffect(() => {
     let scanner: Html5QrcodeScanner | null = null;
     let mounted = true;
@@ -359,16 +329,11 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     );
 
     scanner.render(
-      (decodedText) => {
+      async (decodedText: string) => {
         if (!mounted) return;
 
-        const currentProducts = normalizeProductsResponse(productsData);
-        const found = currentProducts.find(
-          (product) =>
-            product.barcode === decodedText ||
-            product.code === decodedText ||
-            String(product.id) === decodedText,
-        );
+        // Rechercher le produit par code-barres ou code
+        const found = await inventoryService.findProductByCodeOrBarcode(decodedText);
 
         if (found) {
           setSelectedProduct(found);
@@ -381,7 +346,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
 
         setIsScanning(false);
       },
-      (scanError) => {
+      (scanError: string) => {
         if (scanError) {
           console.warn('Scan info:', scanError);
         }
@@ -391,15 +356,22 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     return () => {
       mounted = false;
       if (scanner) {
-        scanner.clear().catch((err) => {
+        scanner.clear().catch((err: Error) => {
           console.warn('Erreur fermeture scanner:', err);
         });
       }
     };
-  }, [isScanning, productsData]);
+  }, [isScanning]);
 
-  const products = useMemo(() => normalizeProductsResponse(productsData), [productsData]);
+  // Traitement des données
+  const products = useMemo(() => {
+    if (!productsData?.products) return [];
+    return productsData.products;
+  }, [productsData]);
 
+  const totalProducts = productsData?.total || products.length;
+
+  // Tri des produits
   const sortedProducts = useMemo(() => {
     const cloned = [...products];
 
@@ -431,29 +403,29 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     return cloned;
   }, [products, sortConfig]);
 
+  // Produits affichés selon le mode
   const displayedProducts = useMemo(() => {
     if (viewMode === 'grid') return sortedProducts.slice(0, 12);
     return sortedProducts.slice(0, 10);
   }, [sortedProducts, viewMode]);
 
+  // Calcul des statistiques locales
   const inventoryHighlights = useMemo(() => {
+    const threshold = lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD;
     const total = products.length;
-    const low = products.filter(p => isProductLowStock(p, stats?.low_stock_threshold)).length;
+    const low = products.filter(p => isProductLowStock(p, threshold)).length;
     const expired = products.filter(isProductExpired).length;
-    const rupture = products.filter((p) => Number(p.quantity ?? 0) <= 0).length;
+    const rupture = products.filter(isProductOutOfStock).length;
 
-    return {
-      total,
-      low,
-      expired,
-      rupture,
-    };
-  }, [products, stats]);
+    return { total, low, expired, rupture };
+  }, [products, lowStockThreshold]);
 
-  const totalSelling = Number(stats?.total_value_selling ?? 0);
-  const totalPurchase = Number(stats?.total_value_purchase ?? 0);
+  // Calcul des valeurs financières - CORRIGÉ avec les bonnes propriétés
+  const totalSelling = Number((stats as any)?.total_value_selling ?? stats?.total_selling_value ?? 0);
+  const totalPurchase = Number((stats as any)?.total_value_purchase ?? stats?.total_purchase_value ?? 0);
   const potentialMargin = totalSelling - totalPurchase;
 
+  // Handlers
   const handleSort = (field: keyof Product) => {
     setSortConfig((prev) => {
       if (prev?.field === field) {
@@ -478,6 +450,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
 
     const code = getProductCode(product);
     const barcodeValue = getBarcodeValue(product);
+    const formattedPrice = formatPrice(product.selling_price);
 
     printWindow.document.write(`
       <html>
@@ -526,8 +499,8 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
           </style>
         </head>
         <body>
-          <div class="name">${product.name}</div>
-          <div class="price">${formatPrice(product.selling_price)}</div>
+          <div class="name">${product.name.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+          <div class="price">${formattedPrice}</div>
           <svg id="barcode"></svg>
           <div class="code">${code}</div>
           <script>
@@ -552,18 +525,14 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
   const handleImport = async (file: File) => {
     try {
       const result = await inventoryService.importProducts(file, 'add');
-      window.alert(result?.message || 'Importation effectuée avec succès.');
+      alert(result?.message || 'Importation effectuée avec succès.');
 
-      await Promise.all([
-        refetch(),
-        queryClient.invalidateQueries({ queryKey: ['inventory-stats'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-categories'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-alerts'] }),
-        queryClient.invalidateQueries({ queryKey: ['inventory-locations'] }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: ['inventory-products'] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-categories'] });
     } catch (error) {
       console.error('Erreur import:', error);
-      window.alert("Erreur lors de l'importation.");
+      alert("Erreur lors de l'importation.");
     }
   };
 
@@ -581,22 +550,24 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
           purchaseValue: totalPurchase,
           sellingValue: totalSelling,
           profit: potentialMargin,
-          averageMargin: stats?.average_margin
+          averageMargin: (stats as any)?.average_margin,
+          currency: primaryCurrency
         };
         break;
       case 'margin':
         data = {
           totalMargin: potentialMargin,
-          byCategory: categories.map(cat => ({
+          byCategory: categories.map((cat: Category) => ({
             category: cat.name,
             profit: (potentialMargin * (cat.product_count || 1)) / (products.length || 1),
-            margin: stats?.average_margin || 0
+            margin: (stats as any)?.average_margin || 0
           }))
         };
         break;
       case 'lowstock':
         data = {
-          products: products.filter(p => isProductLowStock(p, stats?.low_stock_threshold)).slice(0, 10)
+          products: products.filter(p => isProductLowStock(p, lowStockThreshold)).slice(0, 10),
+          threshold: lowStockThreshold
         };
         break;
       case 'expired':
@@ -607,7 +578,8 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
       case 'purchase':
         data = {
           totalPurchase,
-          productCount: products.length
+          productCount: products.length,
+          averagePurchasePrice: products.length > 0 ? totalPurchase / products.length : 0
         };
         break;
     }
@@ -615,7 +587,10 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
     setShowStatDetail({ type, title, data });
   };
 
-  if (productsLoading || statsLoading || currencyLoading) {
+  // États de chargement
+  const isLoading = productsLoading || statsLoading || configLoading;
+
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-6">
         <div className="mb-6 h-28 animate-pulse rounded-[28px] bg-slate-200" />
@@ -650,7 +625,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 via-white to-sky-50 p-3 md:p-6">
       <div className="mx-auto max-w-400 space-y-5">
-        {/* Header avec titre simplifié */}
+        {/* Header */}
         <div className="overflow-hidden rounded-[30px] border border-slate-200 bg-white p-5 shadow-md md:p-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
@@ -662,19 +637,22 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                   Inventaire
                 </h1>
                 <p className="text-sm text-slate-500">
-                  {products.length} produits • {inventoryHighlights.rupture} ruptures
+                  {totalProducts} produits • {inventoryHighlights.rupture} ruptures
                 </p>
               </div>
             </div>
             
             <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-100 px-4 py-2 rounded-2xl">
               <DollarSign size={16} className="text-sky-600" />
-              <span>Devise principale: {primaryCurrency}</span>
+              <span>Devise: {primaryCurrency || 'CDF'}</span>
+              {taxRate !== undefined && (
+                <span className="ml-2 text-slate-400">| TVA: {taxRate}%</span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Cartes de statistiques cliquables */}
+        {/* Cartes de statistiques */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
             title="Valeur du stock"
@@ -683,18 +661,20 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             tone="blue"
             subtitle={`${stats?.total_products ?? 0} produits`}
             onClick={() => handleStatCardClick('value', 'Valeur du stock')}
+            loading={statsLoading}
           />
           <StatCard
             title="Marge potentielle"
             value={formatPrice(potentialMargin)}
             icon={<TrendingUp size={20} />}
             tone="green"
-            subtitle={`${stats?.average_margin?.toFixed(1) || 0}% de marge`}
+            subtitle={`${(stats as any)?.average_margin?.toFixed(1) || 0}% de marge`}
             onClick={() => handleStatCardClick('margin', 'Marge potentielle')}
+            loading={statsLoading}
           />
           <StatCard
             title="Stock faible"
-            value={alertsData?.low_stock_count ?? inventoryHighlights.low}
+            value={inventoryHighlights.low}
             icon={<AlertCircle size={20} />}
             tone="amber"
             subtitle={`${inventoryHighlights.rupture} en rupture`}
@@ -702,10 +682,10 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
           />
           <StatCard
             title="Produits expirés"
-            value={stats?.expired_count ?? inventoryHighlights.expired}
+            value={inventoryHighlights.expired}
             icon={<Clock size={20} />}
             tone="red"
-            subtitle={`${stats?.expiring_soon_count ?? 0} bientôt expirés`}
+            subtitle={`Seuil: ${expiryWarningDays || 30} jours`}
             onClick={() => handleStatCardClick('expired', 'Produits expirés')}
           />
           <StatCard
@@ -715,13 +695,13 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             tone="violet"
             subtitle="Coût d'acquisition"
             onClick={() => handleStatCardClick('purchase', "Valeur d'achat")}
+            loading={statsLoading}
           />
         </div>
 
         {/* Barre d'actions */}
         <div className="rounded-[30px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap gap-3 items-center">
-            {/* Recherche élargie */}
             <SearchInput
               value={searchTerm}
               onChange={setSearchTerm}
@@ -731,7 +711,6 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
               pharmacyId={pharmacyId}
             />
 
-            {/* Boutons d'action */}
             <div className="flex flex-wrap gap-2">
               <QuickActionButton
                 label="Achat"
@@ -746,7 +725,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                   if (selectedProduct) {
                     setShowApproModal(true);
                   } else {
-                    window.alert('Sélectionnez d’abord un produit');
+                    alert('Sélectionnez d’abord un produit');
                   }
                 }}
                 variant="success"
@@ -785,6 +764,11 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                 icon={<ScanLine size={16} />}
                 onClick={() => setIsScanning(true)}
               />
+              <QuickActionButton
+                label="Config"
+                icon={<Settings size={16} />}
+                onClick={() => setShowConfigModal(true)}
+              />
             </div>
           </div>
 
@@ -800,7 +784,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             }}
           />
 
-          {/* Barre de filtres */}
+          {/* Filtres */}
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               onClick={() => setShowFilters(!showFilters)}
@@ -832,7 +816,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             >
               <span className="inline-flex items-center gap-2">
                 <Eye size={16} />
-                Tout voir
+                Tout voir ({totalProducts})
               </span>
             </button>
 
@@ -868,7 +852,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
               >
                 <option value="all">Toutes les catégories</option>
-                {categories.map((cat) => (
+                {categories.map((cat: Category) => (
                   <option key={String(cat.id)} value={cat.name}>
                     {cat.name} {cat.product_count ? `(${cat.product_count})` : ''}
                   </option>
@@ -881,19 +865,20 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
               >
                 <option value="all">Tous les emplacements</option>
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.name} {loc.product_count ? `(${loc.product_count})` : ''}
-                  </option>
-                ))}
+                <option value="principal">Principal</option>
+                <option value="reserve">Réserve</option>
               </select>
 
-              <select className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100">
-                <option>État du stock : tous</option>
-                <option>En stock</option>
-                <option>Stock faible</option>
-                <option>Rupture</option>
-                <option>Périmé</option>
+              <select
+                value="all"
+                onChange={() => {}}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="all">État du stock : tous</option>
+                <option value="in_stock">En stock</option>
+                <option value="low_stock">Stock faible</option>
+                <option value="out_of_stock">Rupture</option>
+                <option value="expired">Périmé</option>
               </select>
             </div>
           )}
@@ -918,11 +903,11 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-600">
               <span className="inline-flex items-center gap-2 rounded-full bg-blue-100 px-3 py-1 text-blue-700">
                 <Package size={14} />
-                {products.length} produits
+                {totalProducts} produits
               </span>
               <span className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-amber-700">
                 <AlertCircle size={14} />
-                {alertsData?.low_stock_count ?? inventoryHighlights.low} faibles
+                {inventoryHighlights.low} faibles
               </span>
               <span className="inline-flex items-center gap-2 rounded-full bg-red-100 px-3 py-1 text-red-700">
                 <Clock size={14} />
@@ -970,16 +955,17 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
 
                 <tbody className="divide-y divide-slate-100">
                   {displayedProducts.map((product, index) => {
-                    const lowStock = isProductLowStock(product, stats?.low_stock_threshold);
+                    const lowStock = isProductLowStock(product, lowStockThreshold);
                     const expired = isProductExpired(product);
-                    const badge = getStockBadge(product, stats?.low_stock_threshold);
+                    const outOfStock = isProductOutOfStock(product);
+                    const badge = getStockBadge(product, lowStockThreshold);
                     const profit = (product.selling_price - product.purchase_price) * product.quantity;
 
                     return (
                       <tr
                         key={String(product.id)}
                         className={`transition-colors hover:bg-sky-50/40 ${
-                          expired ? 'bg-red-50/50' : lowStock ? 'bg-amber-50/40' : 'bg-white'
+                          expired ? 'bg-red-50/50' : outOfStock ? 'bg-red-50/30' : lowStock ? 'bg-amber-50/40' : 'bg-white'
                         }`}
                       >
                         <td className="px-3 py-3 text-sm font-bold text-slate-500">{index + 1}</td>
@@ -1008,7 +994,9 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                         <td className="px-3 py-3 text-center">
                           <span
                             className={`inline-flex min-w-16 items-center justify-center rounded-full px-3 py-1 text-xs font-black ${
-                              lowStock
+                              outOfStock
+                                ? 'bg-red-100 text-red-700'
+                                : lowStock
                                 ? 'bg-amber-100 text-amber-700'
                                 : 'bg-emerald-100 text-emerald-700'
                             }`}
@@ -1095,9 +1083,10 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
           ) : (
             <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-3 xl:grid-cols-5">
               {displayedProducts.map((product) => {
-                const lowStock = isProductLowStock(product, stats?.low_stock_threshold);
+                const lowStock = isProductLowStock(product, lowStockThreshold);
                 const expired = isProductExpired(product);
-                const badge = getStockBadge(product, stats?.low_stock_threshold);
+                const outOfStock = isProductOutOfStock(product);
+                const badge = getStockBadge(product, lowStockThreshold);
 
                 return (
                   <div
@@ -1105,6 +1094,8 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                     className={`rounded-3xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg ${
                       expired
                         ? 'border-red-200 bg-red-50/40'
+                        : outOfStock
+                        ? 'border-red-200 bg-red-50/30'
                         : lowStock
                           ? 'border-amber-200 bg-amber-50/30'
                           : 'border-slate-200 bg-white'
@@ -1144,7 +1135,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Stock</span>
-                        <span className={`font-black ${lowStock ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        <span className={`font-black ${outOfStock ? 'text-red-600' : lowStock ? 'text-amber-600' : 'text-emerald-600'}`}>
                           {product.quantity}
                         </span>
                       </div>
@@ -1299,7 +1290,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
               setBarcodeToCreate('');
             }}
             onSuccess={() => {
-              void refetch();
+              refetch();
               setShowAddModal(false);
               setBarcodeToCreate('');
             }}
@@ -1344,7 +1335,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             open={showAchatModal}
             onClose={() => setShowAchatModal(false)}
             onSuccess={() => {
-              void refetch();
+              refetch();
               setShowAchatModal(false);
             }}
           />
@@ -1359,7 +1350,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             }}
             product={selectedProduct}
             onSuccess={() => {
-              void refetch();
+              refetch();
               setShowApproModal(false);
               setSelectedProduct(null);
             }}
@@ -1371,7 +1362,7 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             open={showInitialStockModal}
             onClose={() => setShowInitialStockModal(false)}
             onSuccess={() => {
-              void refetch();
+              refetch();
               setShowInitialStockModal(false);
             }}
           />
@@ -1406,6 +1397,115 @@ export default function InventoryList({ pharmacyId }: InventoryListProps) {
             onClose={() => setShowStatDetail(null)}
             pharmacyId={pharmacyId}
           />
+        )}
+
+        {showConfigModal && config && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl rounded-[28px] bg-white p-6 shadow-2xl">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
+                    <Settings size={22} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Configuration du stock</h3>
+                    <p className="text-sm text-slate-500">
+                      Paramètres de gestion d'inventaire
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowConfigModal(false)}
+                  className="rounded-xl p-2 text-slate-400 hover:bg-slate-100"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <h4 className="mb-3 font-bold text-slate-800">Seuils d'alerte</h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Stock faible (quantité)</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Alerte expiration (jours)</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {expiryWarningDays ?? 30} jours
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <h4 className="mb-3 font-bold text-slate-800">Configuration financière</h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Devise principale</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {primaryCurrency || 'CDF'}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Taux TVA</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {taxRate ?? 0}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <h4 className="mb-3 font-bold text-slate-800">Méthodes de calcul</h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Prix de vente</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {config?.automaticPricing?.enabled ? 'Auto (marge fixe)' : 'Manuel'}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Marge par défaut</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {config?.marginConfig?.defaultMargin ?? 25}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <h4 className="mb-3 font-bold text-slate-800">Horaires de service</h4>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Ouverture</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {config?.workingHours?.startTime || '08:00'}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600">Fermeture</label>
+                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
+                        {config?.workingHours?.endTime || '20:00'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => setShowConfigModal(false)}
+                  className="rounded-2xl bg-slate-100 px-6 py-3 font-bold text-slate-700 hover:bg-slate-200"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

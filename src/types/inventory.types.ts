@@ -72,10 +72,50 @@ export interface Category {
   id: ID;
   name: string;
   description?: string;
+  icon?: string;
+  color?: string;
   product_count?: number;
   is_active?: boolean;
+  parent_id?: ID | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface CategoryCreate {
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  is_active?: boolean;
+  parent_id?: ID | null;
+}
+
+export interface CategoryUpdate {
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  is_active?: boolean;
+  parent_id?: ID | null;
+}
+
+export interface CategoryResponse {
+  id: ID;
+  name: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  is_active: boolean;
+  parent_id?: ID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CategoryListResponse {
+  total: number;
+  skip: number;
+  limit: number;
+  categories: CategoryResponse[];
 }
 
 export interface CategoryStats {
@@ -198,6 +238,8 @@ export interface ProductCreate {
   is_available?: boolean;
   image_url?: string;
   notes?: string;
+  pharmacy_id?: string;
+  branch_id?: string;
 }
 
 export interface ProductUpdate {
@@ -255,6 +297,7 @@ export interface ProductSearch {
   query?: string;
   search?: string;
   category?: string;
+  category_id?: string;
   supplier?: string;
   stock_status?: StockStatus | string;
   expiry_status?: ExpiryStatus | string;
@@ -271,8 +314,13 @@ export interface ProductSearch {
   is_available?: boolean;
   page?: number;
   limit?: number;
+  skip?: number;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
+  product_type?: string;
+  branch_id?: string;
+  pharmacy_id?: string;
+  include_sales_stats?: boolean;
 }
 
 export interface ProductListResponse {
@@ -281,10 +329,10 @@ export interface ProductListResponse {
   limit: number;
   products: Product[];
   summary?: {
+    total_products?: number;
     total_value_purchase: number;
     total_value_selling: number;
     total_profit: number;
-    total_products?: number;
     out_of_stock?: number;
     low_stock?: number;
     expired_soon?: number;
@@ -315,8 +363,8 @@ export interface ProductMergeRequest {
 export interface StockStats {
   total_products: number;
   total_quantity: number;
-  total_value_purchase: number;
-  total_value_selling: number;
+  total_purchase_value: number;
+  total_selling_value: number;
   total_margin: number;
   total_profit_potential?: number;
   average_margin: number;
@@ -423,6 +471,13 @@ export interface StockMovement {
   tenant_id?: ID;
   created_at: string;
   updated_at?: string;
+  pharmacy_id?: ID;
+  branch_id?: ID;
+  batch_number?: string;
+  cost_price?: number;
+  selling_price?: number;
+  sale_id?: ID;
+  sale_item_id?: ID;
 }
 
 export interface StockMovementCreate {
@@ -438,6 +493,9 @@ export interface StockMovementCreate {
   source_location?: string;
   destination_location?: string;
   unit_cost?: number;
+  pharmacy_id?: ID;
+  branch_id?: ID;
+  batch_number?: string;
 }
 
 export interface StockMovementListResponse {
@@ -445,6 +503,27 @@ export interface StockMovementListResponse {
   page: number;
   limit: number;
   movements: StockMovement[];
+}
+
+export interface StockMovementResponse {
+  id: ID;
+  product_id: ID;
+  product_name: string;
+  product_code: string;
+  pharmacy_id: ID;
+  quantity_before: number;
+  quantity_after: number;
+  quantity_change: number;
+  movement_type: string;
+  reason: string;
+  reference?: string;
+  batch_number?: string;
+  cost_price?: number;
+  selling_price?: number;
+  sale_id?: ID;
+  sale_item_id?: ID;
+  created_at: string;
+  created_by?: ID;
 }
 
 // =========================================================
@@ -459,9 +538,61 @@ export interface StockAdjustment {
 }
 
 export interface InventoryCount {
-  product_id: ID;
-  counted_quantity: number;
+  id: ID;
+  tenant_id: ID;
+  count_number: string;
+  count_date: string;
+  location?: string;
+  total_products: number;
+  counted_products: number;
+  discrepancies: number;
+  theoretical_value: number;
+  actual_value: number;
+  difference_value: number;
+  status: 'pending' | 'in_progress' | 'completed' | 'validated' | 'cancelled';
+  created_by: ID;
+  validated_by?: ID;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  validated_at?: string;
   notes?: string;
+  progress_percentage?: number;
+  difference_percentage?: number;
+}
+
+export interface InventoryCountCreate {
+  count_date?: string;
+  location?: string;
+  notes?: string;
+}
+
+export interface InventoryCountItem {
+  id: ID;
+  inventory_count_id: ID;
+  product_id: ID;
+  product_code?: string;
+  product_name?: string;
+  theoretical_quantity: number;
+  actual_quantity: number;
+  quantity_difference: number;
+  unit_price: number;
+  theoretical_value: number;
+  actual_value: number;
+  value_difference: number;
+  batch_number?: string;
+  location?: string;
+  status: 'pending' | 'counted' | 'validated';
+  comments?: string;
+  counted_at?: string;
+  validated_at?: string;
+  has_discrepancy: boolean;
+  discrepancy_percentage: number;
+}
+
+export interface InventoryCountComplete {
+  inventory_id: ID;
+  validate_changes: boolean;
 }
 
 // =========================================================
@@ -601,6 +732,76 @@ export interface PricingUpdate {
 }
 
 // =========================================================
+// STATISTIQUES AVANCÉES
+// =========================================================
+
+export interface StockTurnover {
+  average_turnover_rate: number;
+  period_days: number;
+  products: Array<{
+    product_id: string;
+    product_name: string;
+    product_code: string;
+    total_sold: number;
+    avg_inventory: number;
+    turnover_rate: number;
+  }>;
+}
+
+export interface StockValuation {
+  total_purchase_value: number;
+  total_selling_value: number;
+  total_profit: number;
+  valuation_method?: string;
+}
+
+export interface ReorderSuggestion {
+  product_id: string;
+  product_name: string;
+  product_code: string;
+  current_stock: number;
+  minimum_stock: number;
+  daily_consumption: number;
+  suggested_order: number;
+  priority: 'high' | 'medium' | 'low';
+}
+
+export interface SalesImpactResponse {
+  product_id: string;
+  product_code: string;
+  product_name: string;
+  unit: string;
+  total_sold: number;
+  total_revenue: number;
+  sale_count: number;
+  average_price: number;
+  current_stock?: number;
+  alert_threshold?: number;
+  stock_status?: string;
+  stock_value?: number;
+  stock_impact?: number;
+}
+
+export interface ProductSalesStats {
+  product_id: string;
+  product_name: string;
+  product_code: string;
+  total_sold: number;
+  total_revenue: number;
+  sale_count: number;
+  average_quantity_per_sale: number;
+  daily_average: number;
+  weekly_average: number;
+  monthly_average: number;
+  stock_turnover_rate: number;
+  forecast: Array<{
+    period_days: number;
+    forecast_quantity: number;
+    confidence: string;
+  }>;
+}
+
+// =========================================================
 // FUSION / DÉDUPLICATION
 // =========================================================
 
@@ -713,4 +914,54 @@ export enum MovementTypeEnum {
   DAMAGE = 'damage',
   LOSS = 'loss',
   MANUAL_ADJUSTMENT = 'manual_adjustment'
+}
+
+// =========================================================
+// CONFIGURATION
+// =========================================================
+
+export interface PharmacyConfig {
+  currencies?: Array<{
+    code: string;
+    symbol: string;
+    isActive: boolean;
+    exchangeRate: number;
+  }>;
+  primaryCurrency?: string;
+  taxRate?: number;
+  lowStockThreshold?: number;
+  expiryWarningDays?: number;
+  allowNegativeStock?: boolean;
+  workingHours?: {
+    enabled: boolean;
+    startTime: string;
+    endTime: string;
+    overtimeEndTime?: string;
+    daysOff: Record<string, boolean>;
+    timezone?: string;
+  };
+  marginConfig?: {
+    defaultMargin: number;
+    minMargin: number;
+    maxMargin: number;
+  };
+  automaticPricing?: {
+    enabled: boolean;
+    method: 'percentage' | 'fixed';
+    value: number;
+  };
+  productReturnDays?: number;
+  theme?: string;
+  pharmacyInfo?: {
+    name: string;
+    address: string;
+    phone: string;
+    email: string;
+    licenseNumber: string;
+    logoUrl?: string;
+  };
+  calcul_auto_prix?: boolean;
+  marge_par_defaut?: number;
+  taux_tva?: number;
+  lock_stock_modification?: boolean;
 }
