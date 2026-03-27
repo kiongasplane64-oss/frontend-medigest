@@ -1,62 +1,88 @@
 // services/dashboard.service.ts
+/**
+ * Service de tableau de bord
+ * Communication 100% avec les endpoints dashboard.py
+ * Version unifiée - mars 2026
+ */
+
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 
+// ===================================================================
+// TYPES ET INTERFACES
+// ===================================================================
+
 export interface DashboardStats {
+  // Ventes
   daily_sales: number;
+  daily_sales_count: number;
+  weekly_sales: number;
   monthly_sales: number;
   sales_trend: number;
+  daily_transactions: number;
+  monthly_transactions: number;
+  sales_history: SalesHistoryItem[];
+
+  // Stock
   total_products: number;
   out_of_stock_count: number;
   low_stock_count: number;
   expired_count: number;
   expiring_soon_count: number;
+
+  // Finances
   total_stock_value: number;
   total_purchase_value: number;
   potential_profit: number;
+  monthly_costs: number;
+  daily_expenses: number;
   net_profit: number;
-  active_users: number;
+  daily_profit: number;
+  profit_margin: number;
+  stock_turnover: number;
+
+  // Dettes
+  monthly_debts: number;
+  total_debts: number;
+  unpaid_debts: number;
+  recovery_rate: number;
+
+  // Achats
+  monthly_purchases: number;
+  daily_purchases: number;
+  suppliers_count: number;
+  pending_orders: number;
+
+  // Clients
   total_customers: number;
+  average_basket: number;
+
+  // Utilisateurs
+  active_users: number;
+
+  // Transferts
+  pending_transfers_count: number;
+
+  // Tenant
   tenant?: {
-    id: number;
+    id: string;
     name: string;
     plan_name: string;
     max_users: number;
-    subscription_end: string;
+    subscription_end: string | null;
   };
-  alerts: Alert[];
-  sales_history: SalesHistoryItem[];
-}
 
-export interface Alert {
-  id: number;
-  type: 'low_stock' | 'expired' | 'expiring';
-  severity: 'low' | 'medium' | 'high';
-  message: string;
-  product_id: number;
-  product_name: string;
-  current_stock: number;
-  threshold: number;
-  expiry_date?: string;
-  created_at: string;
-  is_resolved: boolean;
-}
+  // Alertes
+  alerts: DashboardAlert[];
+  has_critical_alerts: boolean;
 
-export interface Transfer {
-  id: number;
-  product_id: number;
-  product_name: string;
-  quantity: number;
-  from_pharmacy_id: number;
-  from_pharmacy_name: string;
-  to_pharmacy_id: number;
-  to_pharmacy_name: string;
-  status: 'pending' | 'accepted' | 'rejected' | 'completed' | 'cancelled';
-  notes?: string;
-  created_at: string;
-  updated_at: string;
-  created_by: number;
-  created_by_name: string;
+  // Données supplémentaires
+  recent_transactions: RecentTransaction[];
+  recent_purchases: RecentPurchase[];
+  debt_list: DebtItem[];
+  expense_categories: ExpenseCategory[];
+  low_stock_products: LowStockProduct[];
+  expiring_products: ExpiringProduct[];
 }
 
 export interface SalesHistoryItem {
@@ -66,49 +92,281 @@ export interface SalesHistoryItem {
   transaction_count?: number;
 }
 
+export interface DashboardAlert {
+  id: string;
+  type: 'low_stock' | 'expired' | 'expiring';
+  severity: 'low' | 'medium' | 'high';
+  severity_priority?: number;
+  message: string;
+  product_id: string | null;
+  product_name: string;
+  product_code?: string | null;
+  current_stock: number;
+  threshold: number;
+  expiry_date?: string | null;
+  created_at: string;
+  is_resolved: boolean;
+}
+
+export interface RecentTransaction {
+  reference: string;
+  amount: number;
+  date: string;
+  payment_method: string;
+}
+
+export interface RecentPurchase {
+  supplier_name: string;
+  amount: number;
+  date: string;
+}
+
+export interface DebtItem {
+  customer_name: string;
+  amount: number;
+  due_date: string;
+}
+
+export interface ExpenseCategory {
+  name: string;
+  amount: number;
+}
+
+export interface LowStockProduct {
+  name: string;
+  current_stock: number;
+  threshold: number;
+}
+
+export interface ExpiringProduct {
+  name: string;
+  expiry_date: string;
+  quantity: number;
+}
+
+export interface DashboardAlertsResponse {
+  alerts: DashboardAlert[];
+  total: number;
+  has_critical: boolean;
+}
+
+export interface SalesTrend {
+  period: string;
+  count: number;
+  amount: number;
+}
+
+export interface ProductCategory {
+  category: string;
+  count: number;
+  total_quantity: number;
+  total_value: number;
+}
+
+export interface ExpiryProductsResponse {
+  expired: ExpiryProduct[];
+  expiring_soon: ExpiryProduct[];
+  out_of_stock: OutOfStockProduct[];
+  summary: {
+    expired_count: number;
+    expiring_soon_count: number;
+    out_of_stock_count: number;
+    total_affected: number;
+  };
+}
+
+export interface ExpiryProduct {
+  id: string;
+  name: string;
+  code: string;
+  expiry_date: string;
+  quantity: number;
+  unit: string;
+  selling_price: number;
+  purchase_price?: number;
+  days_left?: number;
+}
+
+export interface OutOfStockProduct {
+  id: string;
+  name: string;
+  code: string;
+  quantity: number;
+  unit: string;
+  threshold: number;
+}
+
+export interface NeverSoldProductsResponse {
+  products: NeverSoldProduct[];
+  total_count: number;
+  total_value: number;
+}
+
+export interface NeverSoldProduct {
+  id: string;
+  name: string;
+  code: string;
+  quantity: number;
+  category: string;
+  unit: string;
+  purchase_price: number;
+  selling_price: number;
+  stock_value: number;
+  created_at: string | null;
+  days_in_stock: number;
+}
+
+export interface SalesByUserResponse {
+  period: {
+    start_date: string;
+    end_date: string;
+    days: number;
+  };
+  users: UserSales[];
+  summary: {
+    total_users: number;
+    total_sales_count: number;
+    total_amount: number;
+    average_per_user: number;
+    total_items_sold: number;
+  };
+}
+
+export interface UserSales {
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  user_role: string;
+  sales_count: number;
+  total_amount: number;
+  average_basket: number;
+  items_sold: number;
+  percentage: number;
+}
+
+export interface DailyProfitResponse {
+  date: string;
+  summary: {
+    total_sales: number;
+    total_cost: number;
+    gross_profit: number;
+    operational_costs: number;
+    net_profit: number;
+    profit_margin: number;
+    sales_count: number;
+  };
+  sales: DailyProfitSale[];
+}
+
+export interface DailyProfitSale {
+  sale_id: string;
+  reference: string;
+  total_amount: number;
+  cost_amount: number;
+  profit: number;
+  profit_margin: number;
+  payment_method: string;
+  created_at: string | null;
+}
+
+export interface PerformanceIndicators {
+  turnover_rate: number;
+  average_cart: number;
+  conversion_rate: number;
+  customer_satisfaction: number;
+  employee_productivity: number;
+}
+
+export interface LowStockReportResponse {
+  critical: LowStockCritical[];
+  warning: LowStockWarning[];
+}
+
+export interface LowStockCritical {
+  product_id: string;
+  product_name: string;
+  current_stock: number;
+  threshold: number;
+  deficit: number;
+}
+
+export interface LowStockWarning {
+  product_id: string;
+  product_name: string;
+  current_stock: number;
+  threshold: number;
+}
+
+export interface UserSession {
+  session_id: string;
+  platform: string;
+  device_type: string | null;
+  device_name: string | null;
+  browser: string | null;
+  os: string | null;
+  ip_address: string | null;
+  location_city: string | null;
+  location_country: string | null;
+  is_active: boolean;
+  last_activity: string | null;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface UserSessionsResponse {
+  sessions: UserSession[];
+  active_count: number;
+  total_count: number;
+}
+
 export interface DashboardFilters {
   pharmacy_id?: number;
   start_date?: string;
   end_date?: string;
+  limit?: number;
+  severity?: 'low' | 'medium' | 'high';
+  type?: 'low_stock' | 'expired' | 'expiring';
+  include_resolved?: boolean;
+  period?: 'day' | 'week' | 'month' | 'year';
 }
+
+// ===================================================================
+// SERVICE
+// ===================================================================
 
 class DashboardService {
   private baseURL: string;
-  private timeout: number = 30000; // 30 secondes
+  private timeout: number = 30000;
 
   constructor() {
     this.baseURL = import.meta.env.VITE_API_URL || 'https://backend-medigest.onrender.com';
     
-    // Configuration du retry pour les échecs de requête
     axiosRetry(axios, {
       retries: 3,
       retryDelay: axiosRetry.exponentialDelay,
       retryCondition: (error) => {
         return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
-               error.response?.status === 429 || // Too Many Requests
-               (error.response?.status ?? 0) >= 500; // Erreurs serveur
+               error.response?.status === 429 ||
+               (error.response?.status ?? 0) >= 500;
       }
     });
   }
 
-  private getHeaders() {
+  private getHeaders(): Record<string, string> {
     const token = localStorage.getItem('token');
-    if (!token) {
-      throw new Error('Token d\'authentification non trouvé');
-    }
+    const tenantId = localStorage.getItem('tenantId') || localStorage.getItem('pharmacyId') || '';
     
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-Tenant-ID': localStorage.getItem('pharmacyId') || ''
+      'X-Tenant-ID': tenantId
     };
   }
 
-  private handleError(error: any, context: string): never {
+  private handleError(error: unknown, context: string): never {
     console.error(`Erreur DashboardService.${context}:`, error);
     
-    if (error.response) {
-      // Erreur de réponse HTTP
+    if (axios.isAxiosError(error) && error.response) {
       switch (error.response.status) {
         case 401:
           throw new Error('Session expirée. Veuillez vous reconnecter.');
@@ -121,100 +379,95 @@ class DashboardService {
         case 429:
           throw new Error('Trop de requêtes. Veuillez patienter.');
         default:
-          throw new Error(error.response.data?.message || `Erreur serveur (${error.response.status})`);
+          const message = error.response.data?.message || error.response.data?.detail || `Erreur serveur (${error.response.status})`;
+          throw new Error(message);
       }
-    } else if (error.request) {
-      // Pas de réponse du serveur
+    } else if (axios.isAxiosError(error) && error.request) {
       throw new Error('Impossible de contacter le serveur. Vérifiez votre connexion.');
+    } else if (error instanceof Error) {
+      throw new Error(`Erreur: ${error.message}`);
     } else {
-      // Erreur de configuration
-      throw new Error(`Erreur de configuration: ${error.message}`);
+      throw new Error('Une erreur inconnue est survenue');
     }
   }
 
+  // ===================================================================
+  // ENDPOINTS PRINCIPAUX
+  // ===================================================================
+
+  /**
+   * Récupère toutes les statistiques du dashboard
+   * GET /dashboard/stats
+   */
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/dashboard/stats`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/stats`, {
         headers: this.getHeaders(),
         params: {
           pharmacy_id: filters?.pharmacy_id,
           start_date: filters?.start_date,
           end_date: filters?.end_date,
-          t: Date.now() // Cache busting
+          t: Date.now()
         },
         timeout: this.timeout
       });
-
-      if (!response.data) {
-        throw new Error('Aucune donnée reçue du serveur');
-      }
-
+      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getDashboardStats');
     }
   }
 
-  async getAlerts(
-    filters?: {
-      pharmacy_id?: number;
-      limit?: number;
-      type?: 'low_stock' | 'expired' | 'expiring';
-      include_resolved?: boolean;
-    }
-  ): Promise<{ alerts: Alert[]; total: number }> {
+  /**
+   * Récupère les alertes d'inventaire
+   * GET /dashboard/alerts
+   */
+  async getAlerts(filters?: DashboardFilters): Promise<DashboardAlertsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/inventory/alerts`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/alerts`, {
         headers: this.getHeaders(),
         params: {
           pharmacy_id: filters?.pharmacy_id,
-          limit: filters?.limit || 50,
+          limit: filters?.limit || 10,
+          severity: filters?.severity,
           type: filters?.type,
           include_resolved: filters?.include_resolved || false,
           t: Date.now()
         },
         timeout: this.timeout
       });
-
-      return {
-        alerts: response.data.alerts || [],
-        total: response.data.total || 0
-      };
+      
+      return response.data;
     } catch (error) {
       return this.handleError(error, 'getAlerts');
     }
   }
 
-  async getPendingTransfers(pharmacyId?: number): Promise<Transfer[]> {
+  /**
+   * Marque une alerte comme résolue
+   * POST /dashboard/alerts/{alert_id}/resolve
+   */
+  async resolveAlert(alertId: string): Promise<{ success: boolean; message: string; alert_id: string }> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/transfers/pending`, {
-        headers: this.getHeaders(),
-        params: {
-          pharmacy_id: pharmacyId,
-          status: 'pending',
-          direction: 'incoming',
-          t: Date.now()
-        },
-        timeout: this.timeout
-      });
-
-      return response.data.transfers || [];
+      const response = await axios.post(
+        `${this.baseURL}/dashboard/alerts/${alertId}/resolve`,
+        {},
+        { headers: this.getHeaders(), timeout: this.timeout }
+      );
+      
+      return response.data;
     } catch (error) {
-      return this.handleError(error, 'getPendingTransfers');
+      return this.handleError(error, 'resolveAlert');
     }
   }
 
-  async getSalesHistory(
-    filters?: {
-      pharmacy_id?: number;
-      period?: 'day' | 'week' | 'month' | 'year';
-      start_date?: string;
-      end_date?: string;
-      limit?: number;
-    }
-  ): Promise<SalesHistoryItem[]> {
+  /**
+   * Récupère l'historique des ventes
+   * GET /dashboard/sales-history
+   */
+  async getSalesHistory(filters?: DashboardFilters): Promise<{ history: SalesHistoryItem[] }> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/dashboard/sales-history`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/sales-history`, {
         headers: this.getHeaders(),
         params: {
           pharmacy_id: filters?.pharmacy_id,
@@ -226,133 +479,311 @@ class DashboardService {
         },
         timeout: this.timeout
       });
-
-      return response.data.history || [];
+      
+      return response.data;
     } catch (error) {
       return this.handleError(error, 'getSalesHistory');
     }
   }
 
-  async getExpiryReport(pharmacyId?: number): Promise<{
-    expiring_soon: Array<{
-      product_id: number;
-      product_name: string;
-      batch_number: string;
-      expiry_date: string;
-      quantity: number;
-      days_until_expiry: number;
-    }>;
-    expired: Array<{
-      product_id: number;
-      product_name: string;
-      batch_number: string;
-      expiry_date: string;
-      quantity: number;
-      days_expired: number;
-    }>;
-  }> {
+  /**
+   * Récupère les tendances des ventes
+   * GET /dashboard/sales/trends
+   */
+  async getSalesTrends(period: 'day' | 'week' | 'month' | 'year' = 'week', pharmacyId?: number): Promise<SalesTrend[]> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/inventory/expiry-report`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/sales/trends`, {
         headers: this.getHeaders(),
         params: {
           pharmacy_id: pharmacyId,
+          period,
           t: Date.now()
         },
         timeout: this.timeout
       });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getSalesTrends');
+    }
+  }
 
+  /**
+   * Récupère la distribution des produits par catégorie
+   * GET /dashboard/products/categories
+   */
+  async getProductsByCategory(pharmacyId?: number): Promise<ProductCategory[]> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/products/categories`, {
+        headers: this.getHeaders(),
+        params: { pharmacy_id: pharmacyId, t: Date.now() },
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getProductsByCategory');
+    }
+  }
+
+  /**
+   * Récupère les produits expirés et ceux qui expirent bientôt
+   * GET /dashboard/expired-products
+   */
+  async getExpiryReport(pharmacyId?: number, days: number = 30): Promise<ExpiryProductsResponse> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/expired-products`, {
+        headers: this.getHeaders(),
+        params: { pharmacy_id: pharmacyId, days, t: Date.now() },
+        timeout: this.timeout
+      });
+      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getExpiryReport');
     }
   }
 
-  async getLowStockReport(pharmacyId?: number): Promise<{
-    critical: Array<{
-      product_id: number;
-      product_name: string;
-      current_stock: number;
-      threshold: number;
-      deficit: number;
-    }>;
-    warning: Array<{
-      product_id: number;
-      product_name: string;
-      current_stock: number;
-      threshold: number;
-    }>;
-  }> {
+  /**
+   * Récupère les produits qui n'ont jamais été vendus
+   * GET /dashboard/products/never-sold
+   */
+  async getNeverSoldProducts(pharmacyId?: number, limit: number = 50): Promise<NeverSoldProductsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/inventory/low-stock-report`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/products/never-sold`, {
         headers: this.getHeaders(),
-        params: {
-          pharmacy_id: pharmacyId,
-          t: Date.now()
-        },
+        params: { pharmacy_id: pharmacyId, limit, t: Date.now() },
         timeout: this.timeout
       });
-
+      
       return response.data;
     } catch (error) {
-      return this.handleError(error, 'getLowStockReport');
+      return this.handleError(error, 'getNeverSoldProducts');
     }
   }
 
-  async getPerformanceIndicators(pharmacyId?: number): Promise<{
-    turnover_rate: number; // Taux de rotation du stock
-    average_cart: number; // Panier moyen
-    conversion_rate: number; // Taux de conversion
-    customer_satisfaction: number; // Satisfaction client
-    employee_productivity: number; // Productivité employé
-  }> {
+  /**
+   * Récupère les ventes par utilisateur
+   * GET /dashboard/sales/by-user
+   */
+  async getSalesByUser(
+    startDate?: string,
+    endDate?: string,
+    pharmacyId?: number
+  ): Promise<SalesByUserResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/dashboard/performance`, {
+      const response = await axios.get(`${this.baseURL}/dashboard/sales/by-user`, {
         headers: this.getHeaders(),
         params: {
           pharmacy_id: pharmacyId,
+          start_date: startDate,
+          end_date: endDate,
           t: Date.now()
         },
         timeout: this.timeout
       });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getSalesByUser');
+    }
+  }
 
+  /**
+   * Récupère le bénéfice journalier détaillé
+   * GET /dashboard/daily-profit
+   */
+  async getDailyProfit(targetDate?: string, pharmacyId?: number): Promise<DailyProfitResponse> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/daily-profit`, {
+        headers: this.getHeaders(),
+        params: {
+          pharmacy_id: pharmacyId,
+          target_date: targetDate,
+          t: Date.now()
+        },
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getDailyProfit');
+    }
+  }
+
+  /**
+   * Récupère les indicateurs de performance
+   * GET /dashboard/performance
+   */
+  async getPerformanceIndicators(period: 'day' | 'week' | 'month' | 'year' = 'month', pharmacyId?: number): Promise<PerformanceIndicators> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/performance`, {
+        headers: this.getHeaders(),
+        params: { pharmacy_id: pharmacyId, period, t: Date.now() },
+        timeout: this.timeout
+      });
+      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getPerformanceIndicators');
     }
   }
 
-  async resolveAlert(alertId: number): Promise<{ success: boolean; message: string }> {
+  /**
+   * Rafraîchit le cache du dashboard
+   * POST /dashboard/refresh-cache
+   */
+  async refreshDashboardCache(pharmacyId?: number): Promise<{ success: boolean; message: string }> {
     try {
       const response = await axios.post(
-        `${this.baseURL}/api/inventory/alerts/${alertId}/resolve`,
-        {},
-        {
-          headers: this.getHeaders(),
-          timeout: this.timeout
-        }
+        `${this.baseURL}/dashboard/refresh-cache`,
+        { pharmacy_id: pharmacyId },
+        { headers: this.getHeaders(), timeout: this.timeout }
       );
-
+      
       return response.data;
     } catch (error) {
-      return this.handleError(error, 'resolveAlert');
+      console.warn('Erreur lors du rafraîchissement du cache:', error);
+      return { success: false, message: 'Erreur lors du rafraîchissement' };
     }
   }
 
-  async refreshDashboardCache(pharmacyId?: number): Promise<void> {
+  /**
+   * Récupère le rapport des produits en stock bas
+   * GET /dashboard/low-stock-report
+   */
+  async getLowStockReport(pharmacyId?: number, thresholdMultiplier: number = 1.0): Promise<LowStockReportResponse> {
     try {
-      await axios.post(
-        `${this.baseURL}/api/dashboard/refresh-cache`,
-        { pharmacy_id: pharmacyId },
-        {
-          headers: this.getHeaders(),
-          timeout: this.timeout
-        }
-      );
+      const response = await axios.get(`${this.baseURL}/dashboard/low-stock-report`, {
+        headers: this.getHeaders(),
+        params: {
+          pharmacy_id: pharmacyId,
+          threshold_multiplier: thresholdMultiplier,
+          t: Date.now()
+        },
+        timeout: this.timeout
+      });
+      
+      return response.data;
     } catch (error) {
-      console.warn('Erreur lors du rafraîchissement du cache:', error);
-      // Ne pas bloquer le flux principal si le rafraîchissement échoue
+      return this.handleError(error, 'getLowStockReport');
+    }
+  }
+
+  // ===================================================================
+  // SESSIONS UTILISATEUR
+  // ===================================================================
+
+  /**
+   * Enregistre une nouvelle session utilisateur
+   * POST /dashboard/session/register
+   */
+  async registerSession(params: {
+    platform?: string;
+    device_type?: string;
+    device_name?: string;
+    browser?: string;
+    browser_version?: string;
+    os?: string;
+    os_version?: string;
+    ip_address?: string;
+    user_agent?: string;
+    location_city?: string;
+    location_country?: string;
+  }): Promise<{ session_id: string; platform: string; device_name: string | null; created_at: string; expires_at: string }> {
+    try {
+      const response = await axios.post(`${this.baseURL}/dashboard/session/register`, null, {
+        headers: this.getHeaders(),
+        params,
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'registerSession');
+    }
+  }
+
+  /**
+   * Récupère les sessions de l'utilisateur
+   * GET /dashboard/sessions
+   */
+  async getUserSessions(includeInactive: boolean = false): Promise<UserSessionsResponse> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/sessions`, {
+        headers: this.getHeaders(),
+        params: { include_inactive: includeInactive, t: Date.now() },
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getUserSessions');
+    }
+  }
+
+  /**
+   * Récupère les ventes d'une session spécifique
+   * GET /dashboard/sessions/{session_id}/sales
+   */
+  async getSessionSales(
+    sessionId: string,
+    startDate?: string,
+    endDate?: string
+  ): Promise<{ session: any; sales: any[]; summary: any }> {
+    try {
+      const response = await axios.get(`${this.baseURL}/dashboard/sessions/${sessionId}/sales`, {
+        headers: this.getHeaders(),
+        params: { start_date: startDate, end_date: endDate, t: Date.now() },
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getSessionSales');
+    }
+  }
+
+  /**
+   * Déconnecte une session
+   * POST /dashboard/session/logout
+   */
+  async logoutSession(sessionId?: string): Promise<{ message: string; sessions_count: number }> {
+    try {
+      const response = await axios.post(`${this.baseURL}/dashboard/session/logout`, null, {
+        headers: this.getHeaders(),
+        params: sessionId ? { session_id: sessionId } : {},
+        timeout: this.timeout
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'logoutSession');
+    }
+  }
+
+  /**
+   * Met à jour l'activité d'une session
+   * POST /dashboard/session/{session_id}/activity
+   */
+  async updateSessionActivity(sessionId: string): Promise<{ message: string }> {
+    try {
+      const response = await axios.post(
+        `${this.baseURL}/dashboard/session/${sessionId}/activity`,
+        {},
+        { headers: this.getHeaders(), timeout: this.timeout }
+      );
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'updateSessionActivity');
     }
   }
 }
 
+// ===================================================================
+// EXPORT
+// ===================================================================
+
 export const dashboardService = new DashboardService();
+export default dashboardService;

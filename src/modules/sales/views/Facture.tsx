@@ -1,3 +1,4 @@
+// Facture.tsx
 import { useEffect, useMemo, useState } from 'react';
 import {
   Search,
@@ -10,38 +11,34 @@ import {
   Receipt,
   Calendar,
   X,
+  Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { db } from '@/db/offlineDb';
-
-interface InvoiceItem {
-  productId?: string;
-  quantity: number;
-  price: number;
-  name: string;
-  barcode?: string;
-  code?: string;
-}
+import { saleService, type SaleResponse } from '@/services/saleService';
+import { useToast } from '@/hooks/useToast';
 
 interface Invoice {
-  id?: string;
-  localId?: number;
-  items: InvoiceItem[];
-  total: number;
-  paymentMethod: 'cash' | 'mobile' | 'account' | string;
-  timestamp: number;
-  cashierId?: string;
-  cashierName?: string;
-  posId?: string;
-  posName?: string;
-  sessionId?: string;
+  id: string;
   receiptNumber?: string;
-  clientType?: string;
-  synced?: boolean;
-  status?: 'pending' | 'synced' | 'failed';
+  items: Array<{
+    id: string;
+    name: string;
+    price: number;
+    quantity: number;
+    code?: string;
+  }>;
+  total: number;
+  paymentMethod: string;
+  timestamp: number;
+  cashierName?: string;
+  posName?: string;
+  sessionNumber?: string;
+  clientName?: string;
+  status?: string;
 }
 
 export default function Facture() {
+  const { toast } = useToast();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
@@ -55,21 +52,51 @@ export default function Facture() {
   async function loadInvoices() {
     setLoading(true);
     try {
-      const localInvoices = await db.sales.toArray();
-      const normalized = (localInvoices as Invoice[]).sort(
-        (a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0),
-      );
+      const response = await saleService.getSales({
+        limit: 100,
+        sort_by: 'created_at',
+        sort_order: 'desc',
+      });
+
+      const normalized = (response.items || []).map(normalizeSaleToInvoice);
       setInvoices(normalized);
     } catch (error) {
       console.error('Erreur chargement factures:', error);
+      toast({
+        title: "Erreur",
+        description: "Impossible de charger les factures",
+        variant: "destructive",
+      });
       setInvoices([]);
     } finally {
       setLoading(false);
     }
   }
 
+  function normalizeSaleToInvoice(sale: SaleResponse): Invoice {
+    return {
+      id: sale.id,
+      receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
+      items: (sale.items || []).map(item => ({
+        id: item.product_id,
+        name: item.product_name,
+        price: item.unit_price,
+        quantity: item.quantity,
+        code: item.product_code,
+      })),
+      total: sale.total_amount,
+      paymentMethod: sale.payment_method,
+      timestamp: new Date(sale.created_at).getTime(),
+      cashierName: sale.seller_name,
+      posName: sale.pharmacy_id,
+      sessionNumber: sale.reference?.slice(0, 8),
+      clientName: sale.client_name || 'Passager',
+      status: sale.status,
+    };
+  }
+
   function getInvoiceNumber(invoice: Invoice): string {
-    return String(invoice.receiptNumber || invoice.id || invoice.localId || 'N/A');
+    return invoice.receiptNumber || invoice.id.slice(0, 8) || 'N/A';
   }
 
   function getCashierName(invoice: Invoice): string {
@@ -77,17 +104,18 @@ export default function Facture() {
   }
 
   function getPosName(invoice: Invoice): string {
-    return invoice.posName || invoice.posId || 'POS-01';
+    return invoice.posName || 'POS-01';
   }
 
   function getClientName(invoice: Invoice): string {
-    return invoice.clientType || 'Passager';
+    return invoice.clientName || 'Passager';
   }
 
   function getPaymentLabel(method: string): string {
     switch (method) {
       case 'cash':
         return 'Espèces';
+      case 'mobile_money':
       case 'mobile':
         return 'Mobile Money';
       case 'account':
@@ -95,6 +123,16 @@ export default function Facture() {
       default:
         return method || 'Non défini';
     }
+  }
+
+  function formatDate(timestamp: number): string {
+    return new Date(timestamp).toLocaleString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   const filteredInvoices = useMemo(() => {
@@ -109,18 +147,14 @@ export default function Facture() {
 
     if (search.trim()) {
       const term = search.trim().toLowerCase();
-
       result = result.filter((invoice) => {
         const invoiceNumber = getInvoiceNumber(invoice).toLowerCase();
         const client = getClientName(invoice).toLowerCase();
         const cashier = getCashierName(invoice).toLowerCase();
-        const receipt = String(invoice.receiptNumber || '').toLowerCase();
-
         return (
           invoiceNumber.includes(term) ||
           client.includes(term) ||
-          cashier.includes(term) ||
-          receipt.includes(term)
+          cashier.includes(term)
         );
       });
     }
@@ -130,19 +164,21 @@ export default function Facture() {
 
   function printInvoice(invoice: Invoice) {
     const printWindow = window.open('', '_blank', 'width=420,height=720');
-
     if (!printWindow) return;
 
     const html = `
+      <!DOCTYPE html>
       <html>
         <head>
           <title>Facture #${getInvoiceNumber(invoice)}</title>
+          <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-              font-family: Arial, sans-serif;
+              font-family: 'Courier New', monospace;
               padding: 20px;
-              color: #0f172a;
+              background: white;
             }
             .invoice {
               max-width: 320px;
@@ -151,50 +187,60 @@ export default function Facture() {
             .header {
               text-align: center;
               margin-bottom: 20px;
-              border-bottom: 1px dashed #cbd5e1;
+              border-bottom: 1px dashed #ccc;
               padding-bottom: 12px;
             }
             .header h2 {
               margin: 0 0 8px 0;
+              font-size: 18px;
             }
             .meta {
-              font-size: 12px;
-              color: #475569;
+              font-size: 11px;
+              color: #666;
               margin: 2px 0;
             }
             .items {
-              margin: 20px 0;
+              margin: 16px 0;
             }
             .item {
               display: flex;
               justify-content: space-between;
               gap: 12px;
-              margin-bottom: 8px;
-              font-size: 13px;
+              margin-bottom: 6px;
+              font-size: 12px;
             }
             .item-name {
               flex: 1;
+              word-break: break-word;
             }
             .total {
               font-weight: bold;
-              border-top: 1px solid #0f172a;
-              padding-top: 10px;
-              margin-top: 10px;
+              border-top: 1px solid #000;
+              padding-top: 8px;
+              margin-top: 8px;
+              font-size: 14px;
             }
             .footer {
               text-align: center;
-              font-size: 12px;
-              color: #475569;
-              margin-top: 24px;
+              font-size: 10px;
+              color: #666;
+              margin-top: 20px;
+              border-top: 1px dashed #ccc;
+              padding-top: 12px;
+            }
+            .payment {
+              margin-top: 12px;
+              text-align: center;
+              font-size: 11px;
             }
           </style>
         </head>
         <body>
           <div class="invoice">
             <div class="header">
-              <h2>GoApp</h2>
+              <h2>GoApp Pharmacie</h2>
               <div class="meta">Facture #${getInvoiceNumber(invoice)}</div>
-              <div class="meta">${new Date(invoice.timestamp).toLocaleString('fr-FR')}</div>
+              <div class="meta">${formatDate(invoice.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(invoice)}</div>
               <div class="meta">Caisse: ${getPosName(invoice)}</div>
               <div class="meta">Client: ${getClientName(invoice)}</div>
@@ -214,12 +260,17 @@ export default function Facture() {
             </div>
 
             <div class="item total">
-              <span>Total</span>
+              <span>TOTAL</span>
               <span>${Number(invoice.total).toFixed(2)} $</span>
             </div>
 
-            <div class="footer">
+            <div class="payment">
               Paiement: ${getPaymentLabel(invoice.paymentMethod)}
+            </div>
+
+            <div class="footer">
+              Merci de votre visite<br />
+              Retrouvez-nous sur GoApp
             </div>
           </div>
         </body>
@@ -233,38 +284,39 @@ export default function Facture() {
   }
 
   function downloadInvoice(invoice: Invoice) {
-    const content = `
+    const content = `========================================
 FACTURE #${getInvoiceNumber(invoice)}
-Date: ${new Date(invoice.timestamp).toLocaleString('fr-FR')}
+========================================
+Date: ${formatDate(invoice.timestamp)}
 Caissier: ${getCashierName(invoice)}
 Caisse: ${getPosName(invoice)}
 Client: ${getClientName(invoice)}
 Paiement: ${getPaymentLabel(invoice.paymentMethod)}
-
-Articles:
+----------------------------------------
+ARTICLES:
 ${invoice.items
-  .map((item) => `- ${item.quantity} x ${item.name} = ${(item.quantity * item.price).toFixed(2)} $`)
+  .map((item) => `  ${item.quantity} x ${item.name} = ${(item.quantity * item.price).toFixed(2)} $`)
   .join('\n')}
-
+----------------------------------------
 TOTAL: ${Number(invoice.total).toFixed(2)} $
-`;
+========================================
+Merci de votre visite
+    `;
 
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-
     const a = document.createElement('a');
     a.href = url;
     a.download = `facture-${getInvoiceNumber(invoice)}.txt`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-
     URL.revokeObjectURL(url);
   }
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6">
+      <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6 sticky top-0 z-10">
         <div className="flex items-center gap-4">
           <Link
             to="/pos"
@@ -331,7 +383,10 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
           </div>
 
           {loading ? (
-            <div className="p-10 text-center text-slate-400">Chargement...</div>
+            <div className="flex items-center justify-center p-10 text-slate-400">
+              <Loader2 className="mr-2 animate-spin" size={20} />
+              Chargement...
+            </div>
           ) : filteredInvoices.length === 0 ? (
             <div className="p-10 text-center text-slate-400">
               Aucune facture trouvée
@@ -340,7 +395,7 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
             <div className="divide-y divide-slate-100">
               {filteredInvoices.map((invoice) => (
                 <div
-                  key={`${invoice.localId || ''}-${invoice.id || ''}-${invoice.timestamp}`}
+                  key={invoice.id}
                   className="p-4 transition-colors hover:bg-slate-50 md:p-5"
                 >
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -350,30 +405,30 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
                           #{getInvoiceNumber(invoice)}
                         </span>
 
-                        {invoice.status && (
+                        {invoice.status && invoice.status !== 'completed' && (
                           <span
                             className={`rounded-lg px-2.5 py-1 text-xs font-bold ${
-                              invoice.status === 'synced'
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : invoice.status === 'failed'
-                                  ? 'bg-red-100 text-red-700'
-                                  : 'bg-amber-100 text-amber-700'
+                              invoice.status === 'cancelled'
+                                ? 'bg-red-100 text-red-700'
+                                : invoice.status === 'pending'
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : 'bg-emerald-100 text-emerald-700'
                             }`}
                           >
-                            {invoice.status === 'synced'
-                              ? 'Synchronisée'
-                              : invoice.status === 'failed'
-                                ? 'Échec sync'
-                                : 'En attente'}
+                            {invoice.status === 'cancelled'
+                              ? 'Annulée'
+                              : invoice.status === 'pending'
+                                ? 'En attente'
+                                : 'Terminée'}
                           </span>
                         )}
 
                         <span className="text-sm text-slate-400">
-                          {new Date(invoice.timestamp).toLocaleString('fr-FR')}
+                          {formatDate(invoice.timestamp)}
                         </span>
                       </div>
 
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div>
                           <p className="text-xs text-slate-400">Client</p>
                           <p className="font-semibold text-slate-800">
@@ -385,13 +440,6 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
                           <p className="text-xs text-slate-400">Caissier</p>
                           <p className="font-semibold text-slate-800">
                             {getCashierName(invoice)}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400">Caisse</p>
-                          <p className="font-semibold text-slate-800">
-                            {getPosName(invoice)}
                           </p>
                         </div>
 
@@ -458,7 +506,7 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
                       Détails facture #{getInvoiceNumber(selectedInvoice)}
                     </h3>
                     <p className="text-sm text-slate-400">
-                      {new Date(selectedInvoice.timestamp).toLocaleString('fr-FR')}
+                      {formatDate(selectedInvoice.timestamp)}
                     </p>
                   </div>
                 </div>
@@ -505,7 +553,7 @@ TOTAL: ${Number(invoice.total).toFixed(2)} $
                 <div className="divide-y divide-slate-100">
                   {selectedInvoice.items.map((item, idx) => (
                     <div
-                      key={`${item.productId || item.code || idx}`}
+                      key={`${item.id || idx}`}
                       className="flex items-center justify-between gap-4 px-4 py-3"
                     >
                       <div className="min-w-0">

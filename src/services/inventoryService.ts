@@ -32,7 +32,10 @@ import type {
   ReorderSuggestion,
   SalesImpactResponse,
   StockMovementResponse,
-  ProductSalesStats
+  ProductSalesStats,
+  ImportPreviewResponse,
+  ImportPreviewProduct,
+  PharmacyConfig
 } from '@/types/inventory.types';
 
 // =========================================================
@@ -239,7 +242,7 @@ class InventoryService {
   }
 
   // =========================================================
-  // CATÉGORIES - Utilisation du type Category
+  // CATÉGORIES
   // =========================================================
 
   async getCategories(params?: { skip?: number; limit?: number; parent_id?: string }): Promise<CategoryListResponse> {
@@ -249,7 +252,6 @@ class InventoryService {
       });
       const data = response.data as CategoryListResponse;
       
-      // Mettre en cache les catégories pour utilisation ultérieure
       this.categoriesCache = data.categories;
       
       return data;
@@ -282,7 +284,6 @@ class InventoryService {
   async createCategory(data: CategoryCreate): Promise<CategoryResponse> {
     try {
       const response = await api.post(`${this.categoriesUrl}`, data);
-      // Invalider le cache
       this.categoriesCache = null;
       return response.data;
     } catch (error) {
@@ -294,7 +295,6 @@ class InventoryService {
   async updateCategory(id: string, data: CategoryUpdate): Promise<CategoryResponse> {
     try {
       const response = await api.put(`${this.categoriesUrl}/${id}`, data);
-      // Invalider le cache
       this.categoriesCache = null;
       return response.data;
     } catch (error) {
@@ -306,7 +306,6 @@ class InventoryService {
   async deleteCategory(id: string): Promise<DeleteResponse> {
     try {
       const response = await api.delete(`${this.categoriesUrl}/${id}`);
-      // Invalider le cache
       this.categoriesCache = null;
       return response.data;
     } catch (error) {
@@ -315,9 +314,6 @@ class InventoryService {
     }
   }
 
-  /**
-   * Récupère les catégories depuis le cache ou l'API
-   */
   async getCachedCategories(): Promise<Category[]> {
     if (this.categoriesCache) {
       return this.categoriesCache;
@@ -374,7 +370,6 @@ class InventoryService {
           reason,
         },
       });
-      // Invalider le cache des transferts
       this.transfersCache = null;
       return response.data;
     } catch (error) {
@@ -394,7 +389,7 @@ class InventoryService {
   }
 
   // =========================================================
-  // STATISTIQUES ET ALERTES - Utilisation des types StockAlert et ExpiryAlert
+  // STATISTIQUES ET ALERTES
   // =========================================================
 
   async getStats(): Promise<StockStats> {
@@ -422,7 +417,6 @@ class InventoryService {
       const response = await api.get(`${this.baseUrl}/alerts/stock`);
       const data = response.data;
       
-      // Transformer les données en type StockAlert
       const outOfStockAlerts: StockAlert[] = (data.out_of_stock || []).map((alert: any) => ({
         product_id: alert.id,
         product_name: alert.name,
@@ -479,7 +473,6 @@ class InventoryService {
       });
       const data = response.data;
       
-      // Transformer les données en type ExpiryAlert
       const expiredAlerts: ExpiryAlert[] = (data.expired || []).map((alert: any) => ({
         product_id: alert.id,
         product_name: alert.name,
@@ -722,12 +715,9 @@ class InventoryService {
   }
 
   // =========================================================
-  // TRANSFERTS - Utilisation du type Transfers
+  // TRANSFERTS
   // =========================================================
 
-  /**
-   * Récupère la liste des transferts
-   */
   async getTransfers(params?: {
     skip?: number;
     limit?: number;
@@ -742,7 +732,6 @@ class InventoryService {
       });
       const data = response.data;
       
-      // Normaliser la réponse en tableau de Transfers
       let transfers: Transfers[] = [];
       if (Array.isArray(data)) {
         transfers = data;
@@ -757,7 +746,6 @@ class InventoryService {
         }
       }
       
-      // Mettre en cache
       this.transfersCache = transfers;
       return transfers;
     } catch (error) {
@@ -766,9 +754,6 @@ class InventoryService {
     }
   }
 
-  /**
-   * Récupère les transferts depuis le cache
-   */
   async getCachedTransfers(): Promise<Transfers[]> {
     if (this.transfersCache) {
       return this.transfersCache;
@@ -776,9 +761,6 @@ class InventoryService {
     return this.getTransfers();
   }
 
-  /**
-   * Récupère les transferts avec pagination
-   */
   async getTransfersPaginated(params?: {
     page?: number;
     limit?: number;
@@ -817,13 +799,26 @@ class InventoryService {
   }
 
   // =========================================================
-  // EXPORT / IMPORT
+  // EXPORT / IMPORT - CORRIGÉS
   // =========================================================
 
-  async exportStock(format: ExportFormat = 'csv', pharmacy_id?: string, category_id?: string): Promise<Blob> {
+  async exportStock(format: ExportFormat = 'excel', filters?: {
+    pharmacy_id?: string;
+    category_id?: string;
+    category?: string;
+    search?: string;
+    stock_status?: string;
+    expiry_status?: string;
+    include_sales_stats?: boolean;
+  }): Promise<Blob> {
     try {
+      const params = this.cleanParams({
+        format,
+        ...filters
+      });
+      
       const response = await api.get(`${this.baseUrl}/export`, {
-        params: this.cleanParams({ format, pharmacy_id, category_id }),
+        params,
         responseType: 'blob',
       });
       return response.data;
@@ -833,27 +828,133 @@ class InventoryService {
     }
   }
 
-  async getImportTemplate(): Promise<{ template: string[] }> {
+  async getImportTemplate(format: 'excel' | 'csv' = 'excel'): Promise<Blob> {
     try {
-      const response = await api.get(`${this.baseUrl}/template`);
+      const response = await api.get(`${this.baseUrl}/import/template`, {
+        params: { format },
+        responseType: 'blob',
+      });
       return response.data;
     } catch (error) {
       console.error('Erreur récupération template import:', error);
-      return { template: [] };
+      throw error;
     }
   }
 
-  async importProducts(file: File, mode: 'add' | 'replace' | 'update' = 'add'): Promise<BulkImportResult> {
+  async previewImport(file: File): Promise<ImportPreviewResponse> {
     try {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.post(`${this.baseUrl}/import`, formData, {
-        params: { import_mode: mode },
+      const response = await api.post(`${this.baseUrl}/import/preview`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      return response.data;
+      const data = response.data;
+      
+      // Normaliser la réponse du backend
+      const products: ImportPreviewProduct[] = (data.products || []).map((p: any) => ({
+        name: p.name,
+        code: p.code,
+        barcode: p.barcode,
+        quantity: p.quantity,
+        purchase_price: p.purchase_price,
+        selling_price: p.selling_price,
+        expiry_date: p.expiry_date,
+        category: p.category,
+        location: p.location,
+        supplier: p.supplier,
+        batch_number: p.batch_number,
+        existingProduct: p.existing_product,
+        action: p.action || 'update'
+      }));
+
+      const duplicates: ImportPreviewProduct[] = (data.duplicates || []).map((p: any) => ({
+        name: p.name,
+        code: p.code,
+        barcode: p.barcode,
+        quantity: p.quantity,
+        purchase_price: p.purchase_price,
+        selling_price: p.selling_price,
+        expiry_date: p.expiry_date,
+        category: p.category,
+        location: p.location,
+        supplier: p.supplier,
+        batch_number: p.batch_number,
+        existingProduct: p.existing_product,
+        action: p.action || 'update'
+      }));
+
+      const newProducts: ImportPreviewProduct[] = (data.new_products || []).map((p: any) => ({
+        name: p.name,
+        code: p.code,
+        barcode: p.barcode,
+        quantity: p.quantity,
+        purchase_price: p.purchase_price,
+        selling_price: p.selling_price,
+        expiry_date: p.expiry_date,
+        category: p.category,
+        location: p.location,
+        supplier: p.supplier,
+        batch_number: p.batch_number,
+        existingProduct: null,
+        action: 'create'
+      }));
+
+      return {
+        products,
+        duplicates,
+        newProducts,
+        summary: {
+          total_products: products.length,
+          new_products_count: newProducts.length,
+          duplicates_count: duplicates.length,
+          errors_count: data.skipped_rows || 0,
+          categories_missing: data.categories_missing || [],
+          manufacturers_missing: data.manufacturers_missing || [],
+          suppliers_missing: data.suppliers_missing || []
+        },
+        headers: data.columns_used || [],
+        template_version: data.template_version || '1.0'
+      };
+    } catch (error) {
+      console.error('Erreur preview import:', error);
+      throw error;
+    }
+  }
+
+  async importProducts(
+    file: File, 
+    mode: 'add' | 'replace' | 'update' = 'add',
+    duplicateActions?: Record<string, string>
+  ): Promise<BulkImportResult> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const params: Record<string, string> = { mode };
+      if (duplicateActions) {
+        params.duplicate_actions = JSON.stringify(duplicateActions);
+      }
+
+      const response = await api.post(`${this.baseUrl}/import`, formData, {
+        params,
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const data = response.data;
+      
+      return {
+        success: data.success ?? true,
+        message: data.message || 'Import terminé',
+        imported_count: data.created || data.imported_count || 0,
+        updated_count: data.updated || data.updated_count || 0,
+        created: data.created || 0,
+        updated: data.updated || 0,
+        skipped: data.skipped || 0,
+        failed_count: data.skipped || data.failed_count || 0,
+        errors: data.errors || []
+      };
     } catch (error) {
       console.error('Erreur import produits:', error);
       throw error;
@@ -954,32 +1055,21 @@ class InventoryService {
   // CONFIGURATION ET PARAMÈTRES
   // =========================================================
 
-  /**
-   * Récupère la configuration d'une pharmacie pour les calculs de prix
-   */
-  async getPharmacyConfig(pharmacy_id?: string): Promise<{
-    calcul_auto_prix: boolean;
-    marge_par_defaut: number;
-    taux_tva: number;
-    lock_stock_modification: boolean;
-  }> {
+  async getPharmacyConfig(pharmacy_id?: string): Promise<PharmacyConfig> {
     try {
-      // Utiliser pharmacy_id pour récupérer la configuration spécifique
-      console.log(`Récupération configuration pour pharmacie: ${pharmacy_id || 'par défaut'}`);
-      
-      return {
-        calcul_auto_prix: true,
-        marge_par_defaut: 30,
-        taux_tva: 0,
-        lock_stock_modification: false,
-      };
+      const response = await api.get(`/pharmacies/${pharmacy_id || 'current'}/config`);
+      return response.data;
     } catch (error) {
       console.error('Erreur récupération configuration:', error);
       return {
+        primaryCurrency: 'CDF',
+        taxRate: 0,
+        lowStockThreshold: 10,
+        expiryWarningDays: 30,
         calcul_auto_prix: true,
         marge_par_defaut: 30,
         taux_tva: 0,
-        lock_stock_modification: false,
+        lock_stock_modification: false
       };
     }
   }

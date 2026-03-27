@@ -80,6 +80,7 @@ export interface SaleResponse {
   total_amount: number;
   status: 'pending' | 'completed' | 'cancelled' | 'refunded';
   invoice_number?: string;
+  receipt_number?: string;
   receipt_path?: string;
   validated_by?: string;
   validated_at?: string;
@@ -184,6 +185,7 @@ export interface ApiResponse<T = any> {
   sale?: T;
   receipt_available?: boolean;
   receipt_url?: string;
+  receipt_number?: string;
   pharmacy?: {
     id: string;
     name: string;
@@ -204,7 +206,28 @@ class SaleService {
   async createSale(data: SaleCreate): Promise<ApiResponse<SaleResponse>> {
     try {
       const response = await api.post(`${this.baseUrl}/`, data);
-      return response.data;
+      const responseData = response.data;
+      
+      // Normaliser la réponse pour avoir toujours receipt_number
+      if (responseData && typeof responseData === 'object') {
+        // Vérifier si la réponse a un champ sale
+        if (responseData.sale && !responseData.receipt_number) {
+          // Accéder directement à receipt_number avec une assertion de type
+          const saleData = responseData.sale as Record<string, unknown>;
+          if (saleData.receipt_number) {
+            responseData.receipt_number = saleData.receipt_number as string;
+          }
+        }
+        // Vérifier si la réponse a un champ data
+        if (responseData.data && !responseData.receipt_number) {
+          const dataObj = responseData.data as Record<string, unknown>;
+          if (dataObj.receipt_number) {
+            responseData.receipt_number = dataObj.receipt_number as string;
+          }
+        }
+      }
+      
+      return responseData;
     } catch (error: any) {
       console.error('Erreur création vente:', error);
       throw this.handleError(error);
@@ -244,7 +267,15 @@ class SaleService {
   async getSale(id: string): Promise<SaleResponse> {
     try {
       const response = await api.get(`${this.baseUrl}/${id}`);
-      return response.data.sale || response.data;
+      const data = response.data;
+      
+      // La réponse peut être directement l'objet vente ou avoir une propriété sale
+      if (data && typeof data === 'object' && 'sale' in data) {
+        return data.sale as SaleResponse;
+      }
+      
+      // Sinon, retourner directement les données
+      return data as SaleResponse;
     } catch (error: any) {
       console.error('Erreur récupération vente:', error);
       throw this.handleError(error);
@@ -550,6 +581,32 @@ class SaleService {
       console.error('Erreur enregistrement paiement crédit:', error);
       throw this.handleError(error);
     }
+  }
+
+  /**
+   * Extrait le numéro de reçu d'une réponse API
+   */
+  extractReceiptNumber(response: ApiResponse<SaleResponse>): string | undefined {
+    if (!response) return undefined;
+    
+    // Vérifier dans receipt_number direct
+    if (response.receipt_number) return response.receipt_number;
+    
+    // Vérifier dans sale (si c'est un ApiResponse)
+    if (response.sale?.receipt_number) return response.sale.receipt_number;
+    
+    // Vérifier dans data
+    if (response.data?.receipt_number) return response.data.receipt_number;
+    
+    // Vérifier si data a une propriété sale
+    if (response.data && typeof response.data === 'object' && 'sale' in response.data) {
+      const dataWithSale = response.data as { sale: SaleResponse };
+      if (dataWithSale.sale.receipt_number) {
+        return dataWithSale.sale.receipt_number;
+      }
+    }
+    
+    return undefined;
   }
 
   /**

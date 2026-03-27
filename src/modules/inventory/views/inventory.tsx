@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect} from 'react';
 import {
   ClipboardList,
   Search,
@@ -19,8 +19,9 @@ import {
 import api from '@/api/client';
 import { formatCurrency, formatDate } from '@/utils/formatters';
 
-// Définition des types
+// Définition des types correspondant au serveur
 type InventoryStatus = 'pending' | 'counted' | 'verified';
+type InventorySessionStatus = 'draft' | 'in_progress' | 'counting' | 'completed' | 'cancelled';
 
 interface InventoryItem {
   id: string;
@@ -58,7 +59,7 @@ interface InventorySession {
   pharmacyId: string;
   pharmacyName: string;
   date: string;
-  status: 'in_progress' | 'completed' | 'cancelled';
+  status: InventorySessionStatus;
   items: InventoryItem[];
   startedBy: string;
   completedBy?: string;
@@ -71,8 +72,58 @@ interface InventoryProps {
   sessionId?: string;
 }
 
+// Interface pour la réponse du serveur
+interface ServerInventoryResponse {
+  inventory: {
+    id: string;
+    inventory_number: string;
+    inventory_type: string;
+    status: string;
+    created_at: string;
+    start_date: string | null;
+    end_date: string | null;
+    total_items: number;
+    items_counted: number;
+    items_missing: number;
+    items_excess: number;
+    system_value: number;
+    counted_value: number;
+    variance_value: number;
+    variance_percentage: number;
+  };
+  items: Array<{
+    id: string;
+    product_id: string;
+    product_name: string;
+    product_code: string;
+    expected_quantity: number;
+    counted_quantity: number;
+    variance: number;
+    variance_percentage: number;
+    batch_number: string;
+    expiry_date: string;
+    location: string;
+    notes: string;
+    status: string;
+    counted_at: string;
+  }>;
+  summary: {
+    total_items: number;
+    items_counted: number;
+    items_missing: number;
+    items_excess: number;
+    completion_rate: number;
+    system_value: number;
+    counted_value: number;
+    variance_value: number;
+    variance_percentage: number;
+  };
+  recommendations: string[];
+}
+
 const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [session, setSession] = useState<InventorySession | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -81,6 +132,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
   const [scanValue, setScanValue] = useState('');
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<number>(0);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (sessionId) {
@@ -90,58 +142,152 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
     }
   }, [pharmacyId, sessionId]);
 
+  // Transforme la réponse du serveur en format frontend
+  const transformServerResponse = (data: ServerInventoryResponse): InventorySession => {
+    const items: InventoryItem[] = data.items.map(item => ({
+      id: item.id,
+      productId: item.product_id,
+      productName: item.product_name,
+      productCode: item.product_code || '',
+      category: 'Général',
+      theoreticalStock: item.expected_quantity,
+      actualStock: item.counted_quantity || 0,
+      difference: item.variance,
+      differenceValue: item.variance * (item.expected_quantity > 0 ? (item.variance / item.expected_quantity) : 0),
+      unitPrice: 0,
+      batchNumber: item.batch_number || '',
+      expiryDate: item.expiry_date || '',
+      location: item.location || '',
+      lastCount: item.counted_at || '',
+      countedBy: '',
+      notes: item.notes || '',
+      status: (item.status as InventoryStatus) || 'pending'
+    }));
+
+    const positiveDifferences = items.filter(i => i.difference > 0);
+    const negativeDifferences = items.filter(i => i.difference < 0);
+    const positiveDifferenceValue = positiveDifferences.reduce((sum, i) => sum + i.differenceValue, 0);
+    const negativeDifferenceValue = negativeDifferences.reduce((sum, i) => sum + i.differenceValue, 0);
+
+    return {
+      id: data.inventory.id,
+      pharmacyId: pharmacyId,
+      pharmacyName: 'Pharmacie',
+      date: data.inventory.created_at,
+      status: data.inventory.status as InventorySessionStatus,
+      items,
+      startedBy: '',
+      completedBy: '',
+      completedAt: data.inventory.end_date || undefined,
+      summary: {
+        totalItems: data.summary.total_items,
+        countedItems: data.summary.items_counted,
+        verifiedItems: 0,
+        positiveDifferences: positiveDifferences.length,
+        positiveDifferenceValue,
+        negativeDifferences: negativeDifferences.length,
+        negativeDifferenceValue,
+        totalDifferenceValue: data.summary.variance_value
+      }
+    };
+  };
+
   const loadInventorySession = async () => {
     setLoading(true);
+    setError(null);
     try {
       const response = await api.get(`/inventory/${sessionId}`);
-      setSession(response.data);
+      const transformedData = transformServerResponse(response.data);
+      setSession(transformedData);
     } catch (error) {
       console.error('Erreur lors du chargement de l\'inventaire:', error);
+      setError('Erreur de chargement de l\'inventaire');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshInventory = async () => {
+    if (!session) return;
+    
+    setRefreshing(true);
+    setError(null);
+    try {
+      const response = await api.get(`/inventory/${session.id}`);
+      const transformedData = transformServerResponse(response.data);
+      setSession(transformedData);
+    } catch (error) {
+      console.error('Erreur lors de l\'actualisation:', error);
+      setError('Erreur lors de l\'actualisation');
+    } finally {
+      setRefreshing(false);
     }
   };
 
   const startNewSession = async () => {
     setLoading(true);
+    setError(null);
     try {
+      // Appel direct au endpoint /inventory/start
       const response = await api.post('/inventory/start', {
-        pharmacyId,
+        pharmacyId: pharmacyId,
         date: new Date().toISOString()
       });
-      setSession(response.data);
-    } catch (error) {
+      
+      if (response.data && response.data.id) {
+        setSession(response.data);
+      } else {
+        throw new Error('Réponse invalide du serveur');
+      }
+      
+    } catch (error: any) {
       console.error('Erreur lors du démarrage de l\'inventaire:', error);
+      setError(error?.response?.data?.detail || 'Erreur lors du démarrage de l\'inventaire');
     } finally {
       setLoading(false);
     }
   };
 
-  const updateStock = (productId: string, newStock: number) => {
+  const updateStock = async (productId: string, newStock: number) => {
     if (!session) return;
 
-    const updatedItems: InventoryItem[] = session.items.map(item => {
-      if (item.productId === productId) {
-        const difference = newStock - item.theoreticalStock;
-        const differenceValue = difference * item.unitPrice;
-        
-        return {
-          ...item,
-          actualStock: newStock,
-          difference,
-          differenceValue,
-          status: newStock !== item.theoreticalStock ? 'counted' as InventoryStatus : 'verified' as InventoryStatus,
-          lastCount: new Date().toISOString()
-        };
-      }
-      return item;
-    });
+    try {
+      await api.post(`/inventory/${session.id}/items`, {
+        product_id: productId,
+        counted_quantity: newStock,
+        batch_number: '',
+        expiry_date: null,
+        location: '',
+        notes: ''
+      });
 
-    setSession({
-      ...session,
-      items: updatedItems,
-      summary: calculateSummary(updatedItems)
-    });
+      // Mise à jour locale après succès
+      const updatedItems: InventoryItem[] = session.items.map(item => {
+        if (item.productId === productId) {
+          const difference = newStock - item.theoreticalStock;
+          const differenceValue = difference * item.unitPrice;
+          
+          return {
+            ...item,
+            actualStock: newStock,
+            difference,
+            differenceValue,
+            status: newStock !== item.theoreticalStock ? 'counted' as InventoryStatus : 'verified' as InventoryStatus,
+            lastCount: new Date().toISOString()
+          };
+        }
+        return item;
+      });
+
+      setSession({
+        ...session,
+        items: updatedItems,
+        summary: calculateSummary(updatedItems)
+      });
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour du stock:', error);
+      alert('Erreur lors de l\'enregistrement du comptage');
+    }
   };
 
   const verifyItem = (productId: string) => {
@@ -207,16 +353,31 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
     
     setSaving(true);
     try {
-      await api.post(`/inventory/${session.id}/complete`, {
-        items: session.items
-      });
-      
-      // Redirection ou notification
+      await api.post(`/inventory/${session.id}/complete`);
       alert('Inventaire finalisé avec succès !');
+      await refreshInventory();
     } catch (error) {
       console.error('Erreur lors de la finalisation:', error);
+      alert('Erreur lors de la finalisation de l\'inventaire');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const exportInventory = async () => {
+    if (!session) return;
+    
+    try {
+      const response = await api.get(`/inventory/${session.id}/export?export_format=excel`);
+      
+      if (response.data.success) {
+        alert(`Export démarré en arrière-plan au format ${response.data.format}`);
+      } else {
+        alert('Erreur lors du démarrage de l\'export');
+      }
+    } catch (error) {
+      console.error('Erreur lors de l\'export:', error);
+      alert('Erreur lors de l\'export de l\'inventaire');
     }
   };
 
@@ -230,11 +391,33 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
 
   const categories = [...new Set(session?.items.map(i => i.category))];
 
+  // Affichage du chargement
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
         <RefreshCcw className="w-8 h-8 text-blue-600 animate-spin" />
-        <p className="text-slate-600">Chargement de l'inventaire...</p>
+        <p className="text-slate-600">Ouverture de l'inventaire...</p>
+      </div>
+    );
+  }
+
+  // Affichage de l'erreur
+  if (error && !session) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center max-w-md mx-auto p-6">
+          <AlertTriangle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Erreur</h2>
+          <p className="text-slate-600 mb-4">{error}</p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={startNewSession}
+              className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+            >
+              Réessayer
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -243,9 +426,9 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <AlertTriangle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-slate-800 mb-2">Erreur de chargement</h2>
-          <p className="text-slate-600 mb-4">Impossible de charger la session d'inventaire</p>
+          <AlertTriangle className="w-16 h-16 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-800 mb-2">Aucune session</h2>
+          <p className="text-slate-600 mb-4">Démarrez un nouvel inventaire</p>
           <button
             onClick={startNewSession}
             className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
@@ -256,6 +439,9 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
       </div>
     );
   }
+
+  const isEditable = session.status === 'in_progress' || session.status === 'counting' || session.status === 'draft';
+  const isCompleted = session.status === 'completed';
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -269,11 +455,24 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
                 Inventaire - {session.pharmacyName}
               </h1>
               <p className="text-sm text-slate-500 mt-1">
-                Session du {formatDate(session.date)} • {session.status === 'in_progress' ? 'En cours' : 'Terminé'}
+                Session du {formatDate(session.date)} • 
+                {session.status === 'in_progress' ? 'En cours' : 
+                 session.status === 'completed' ? 'Terminé' : 
+                 session.status === 'draft' ? 'Brouillon' : session.status}
               </p>
             </div>
             
             <div className="flex items-center gap-3">
+              {/* Bouton Actualiser */}
+              <button
+                onClick={refreshInventory}
+                disabled={refreshing}
+                className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50"
+              >
+                <RefreshCcw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                {refreshing ? 'Actualisation...' : 'Actualiser'}
+              </button>
+              
               <button
                 onClick={() => window.print()}
                 className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-xl hover:bg-slate-50"
@@ -283,14 +482,14 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
               </button>
               
               <button
-                onClick={() => {/* Exporter */}}
+                onClick={exportInventory}
                 className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-xl hover:bg-slate-50"
               >
                 <Download className="w-4 h-4" />
                 Exporter
               </button>
               
-              {session.status === 'in_progress' && (
+              {isEditable && !isCompleted && (
                 <button
                   onClick={completeInventory}
                   disabled={saving}
@@ -314,7 +513,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
               <p className="text-xl font-bold text-blue-600">{session.summary.countedItems}</p>
               <div className="w-full h-1 bg-slate-200 rounded-full mt-2">
                 <div
-                  className="h-full bg-blue-600 rounded-full"
+                  className="h-full bg-blue-600 rounded-full transition-all duration-300"
                   style={{ width: `${(session.summary.countedItems / session.summary.totalItems) * 100}%` }}
                 />
               </div>
@@ -339,6 +538,13 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
 
       {/* Contenu principal */}
       <div className="p-6">
+        {/* Message d'erreur temporaire */}
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+
         {/* Barre d'outils */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6">
           <div className="flex items-center gap-4">
@@ -350,6 +556,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Rechercher par nom, code ou lot..."
                 className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg"
+                disabled={!isEditable}
               />
             </div>
             
@@ -357,6 +564,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg"
+              disabled={!isEditable}
             >
               <option value="all">Toutes catégories</option>
               {categories.map(cat => (
@@ -364,13 +572,15 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
               ))}
             </select>
             
-            <button
-              onClick={() => setShowScanner(!showScanner)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              <QrCode className="w-4 h-4" />
-              Scanner
-            </button>
+            {isEditable && (
+              <button
+                onClick={() => setShowScanner(!showScanner)}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                <QrCode className="w-4 h-4" />
+                Scanner
+              </button>
+            )}
           </div>
           
           {showScanner && (
@@ -432,14 +642,14 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
                         new Date(item.expiryDate) < new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) ? 'text-orange-600' :
                         'text-slate-600'
                       }`}>
-                        {formatDate(item.expiryDate)}
+                        {item.expiryDate ? formatDate(item.expiryDate) : '-'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-800 font-medium">
                       {item.theoreticalStock}
                     </td>
                     <td className="px-6 py-4">
-                      {editingItem === item.productId ? (
+                      {editingItem === item.productId && isEditable ? (
                         <input
                           type="number"
                           value={editValue}
@@ -455,10 +665,12 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
                       ) : (
                         <span
                           onClick={() => {
-                            setEditingItem(item.productId);
-                            setEditValue(item.actualStock);
+                            if (isEditable) {
+                              setEditingItem(item.productId);
+                              setEditValue(item.actualStock);
+                            }
                           }}
-                          className="cursor-pointer hover:bg-blue-50 px-2 py-1 rounded"
+                          className={`${isEditable ? 'cursor-pointer hover:bg-blue-50' : ''} px-2 py-1 rounded`}
                         >
                           {item.actualStock}
                         </span>
@@ -491,7 +703,7 @@ const Inventory = ({ pharmacyId, sessionId }: InventoryProps) => {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      {item.status !== 'verified' && (
+                      {isEditable && item.status !== 'verified' && (
                         <button
                           onClick={() => verifyItem(item.productId)}
                           className="text-green-600 hover:text-green-700"

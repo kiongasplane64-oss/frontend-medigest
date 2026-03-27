@@ -1,6 +1,8 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+// routes/AppRoutes.tsx
+import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { PrivateRoute, PublicRoute, RoleBasedRoute } from '@/components/auth/AuthGuards';
 import { useAuthRedirect } from '@/hooks/useAuthRedirect';
+import { useSubscription } from '@/hooks/useSubscription';
 
 // SuperAdmins
 import SuperAdminDashboard from '@/pages/superadmin/SuperAdminDashboard';
@@ -13,13 +15,16 @@ import Login from '@/modules/auth/views/Login';
 import Register from '@/pages/Register';
 import VerifyOtp from '@/pages/VerifyOtp';
 import ActivationCodePage from '@/pages/ActivationCodePage';
+// CORRECTION: Utiliser le bon nom de fichier (casing)
+import { NoSubscriptionGuard } from '@/components/NoSubscriptionGuard';
+import { ExpiryWarningBanner } from '@/components/ExpiryWarningBanner';
 
 // Layouts
 import Sidebar from '@/layouts/Sidebar';
 
 // Vues du Dashboard
 import Dashboard from '@/modules/stats/views/Dashboard';
-import InventoryList from '@/modules/inventory/views/InventoryList';
+import InventoryListView from '@/modules/inventory/views/inventoryListView';
 import POS from '@/modules/sales/views/POS';
 import TransferList from '@/modules/inventory/views/TransferList';
 import ProfitAnalysis from '@/modules/benefice/views/benefice';
@@ -97,6 +102,81 @@ const NotFoundPage = () => (
   </div>
 );
 
+// ========== COMPOSANT LAYOUT AVEC PROTECTION ABONNEMENT ==========
+
+/**
+ * Layout principal avec Sidebar et protection d'abonnement
+ * Affiche la bannière d'alerte d'expiration
+ * Protège l'accès aux routes avec NoSubscriptionGuard
+ */
+const ProtectedLayout = () => {
+  const { isLoading } = useSubscription();
+  
+  // Ne pas afficher pendant le chargement
+  if (isLoading) {
+    return (
+      <div className="flex h-screen">
+        <Sidebar />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+            <p className="text-slate-500">Chargement de votre abonnement...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* Bannière d'alerte d'expiration */}
+          <ExpiryWarningBanner />
+          
+          {/* Protection d'abonnement - bloque l'accès si abonnement expiré */}
+          <NoSubscriptionGuard>
+            {/* Les routes enfants seront rendues ici */}
+            <div className="space-y-6">
+              <Outlet />
+            </div>
+          </NoSubscriptionGuard>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ========== COMPOSANT LAYOUT SUPER ADMIN ==========
+
+/**
+ * Layout Super Admin sans Sidebar
+ * Les super admins n'ont pas de restriction d'abonnement
+ */
+const SuperAdminLayout = () => {
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <Outlet />
+    </div>
+  );
+};
+
+// ========== COMPOSANT LAYOUT PUBLIC ==========
+
+/**
+ * Layout public pour les pages d'authentification
+ */
+const PublicLayout = () => {
+  return (
+    <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100">
+      <Outlet />
+    </div>
+  );
+};
+
+// ========== ROUTES PRINCIPALES ==========
+
 export default function AppRoutes() {
   // 🔥 HOOK DE REDIRECTION CENTRALISÉ AU NIVEAU RACINE
   useAuthRedirect();
@@ -107,19 +187,22 @@ export default function AppRoutes() {
       <Route path="/super-admin/register" element={<SuperAdminRegister />} />
       <Route path="/superadmin-welcome" element={<SuperAdminWelcome />} />
       
-      {/* ========== ROUTES PUBLIQUES ========== */}
+      {/* ========== ROUTES PUBLIQUES (AUTH) ========== */}
       <Route element={<PublicRoute />}>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route element={<PublicLayout />}>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+        </Route>
       </Route>
       
-      <Route path="/verify-otp" element={<VerifyOtp />} />
-      <Route path="/out-of-service" element={<OutOfService />} />
+      <Route element={<PublicLayout />}>
+        <Route path="/verify-otp" element={<VerifyOtp />} />
+        <Route path="/out-of-service" element={<OutOfService />} />
+      </Route>
       
-      {/* ========== ROUTES PRIVÉES AVEC SIDEBAR ========== */}
-      {/* Ces routes sont UNIQUEMENT pour les utilisateurs STANDARDS */}
+      {/* ========== ROUTES PRIVÉES AVEC PROTECTION ABONNEMENT ========== */}
       <Route element={<PrivateRoute />}>
-        <Route element={<Sidebar />}>
+        <Route element={<ProtectedLayout />}>
           {/* Dashboard */}
           <Route path="/dashboard" element={<Dashboard />} />
           
@@ -131,7 +214,7 @@ export default function AppRoutes() {
           <Route path="/rapports" element={<Rapports />} />
           
           {/* Gestion des stocks */}
-          <Route path="/stock" element={<InventoryList />} />
+          <Route path="/stock" element={<InventoryListView />} />
           <Route path="/inventaire" element={<InventoryWrapper />} />
           <Route path="/transfers" element={<TransferList />} />
           <Route path="/returns" element={<ReturnsManager />} />
@@ -151,12 +234,18 @@ export default function AppRoutes() {
           {/* Administration */}
           <Route path="/users" element={<UsersPage />} />
           <Route path="/reports" element={<PlaceholderPage title="Rapports & Statistiques" />} />
+          
+          {/* Abonnement - Toujours accessible même en lecture seule */}
           <Route path="/subscription" element={<SubscriptionPage />} />
           <Route path="/payment" element={<PaymentPage />} />
           <Route path="/payment-success" element={<PaymentSuccessPage />} />
+          <Route path="/activate-code" element={<ActivationCodePage />} />
+          
+          {/* Configuration */}
           <Route path="/settings" element={<ConfigViewWrapper />} />
           <Route path="/settings/:pharmacyId" element={<ConfigViewWrapper />} />
-          <Route path="/activate-code" element={<ActivationCodePage />} />
+          
+          {/* Super admin - Génération de codes (accessible aux admins aussi) */}
           <Route path="/generate-code" element={<AdminGenerateCodePage />} />
           
           {/* Redirection par défaut */}
@@ -164,37 +253,24 @@ export default function AppRoutes() {
         </Route>
       </Route>
       
-      {/* ========== ROUTES SUPER ADMIN PROTÉGÉES ========== */}
-      {/* Ces routes n'ont PAS de Sidebar */}
+      {/* ========== ROUTES SUPER ADMIN PROTÉGÉES (SANS SIDEBAR) ========== */}
       <Route
         path="/super-admin"
         element={
           <RoleBasedRoute allowedRoles={['super_admin']}>
-            <SuperAdminDashboard />
+            <SuperAdminLayout />
           </RoleBasedRoute>
         }
-      />
-      <Route
-        path="/super-admin/tenant/:tenantId"
-        element={
-          <RoleBasedRoute allowedRoles={['super_admin']}>
-            <SuperAdminDashboard />
-          </RoleBasedRoute>
-        }
-      />
-      <Route
-        path="/super-admin/tenant"
-        element={
-          <RoleBasedRoute allowedRoles={['super_admin']}>
-            <Navigate to="/super-admin" replace />
-          </RoleBasedRoute>
-        }
-      />
+      >
+        <Route index element={<SuperAdminDashboard />} />
+        <Route path="tenant/:tenantId" element={<SuperAdminDashboard />} />
+        <Route path="tenant" element={<Navigate to="/super-admin" replace />} />
+      </Route>
       
-      {/* Redirection pour compatibilité */}
+      {/* ========== REDIRECTIONS POUR COMPATIBILITÉ ========== */}
       <Route path="/inventory" element={<Navigate to="/stock" replace />} />
       
-      {/* 404 */}
+      {/* ========== 404 NOT FOUND ========== */}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

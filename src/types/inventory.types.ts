@@ -4,7 +4,7 @@
 // TYPES DE BASE
 // =========================================================
 
-export type ID = string | number;
+export type ID = string; // Utiliser string uniquement pour éviter les incohérences
 
 export type StockStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'over_stock';
 export type ExpiryStatus = 'valid' | 'warning' | 'critical' | 'expired';
@@ -17,12 +17,15 @@ export type MovementType =
   | 'return'
   | 'damage'
   | 'loss'
-  | 'manual_adjustment';
+  | 'manual_adjustment'
+  | 'initial'
+  | 'import';
 
 export type TransferStatus = 'pending' | 'shipped' | 'received' | 'cancelled' | 'in_transit' | 'completed';
 
 export type BillingCurrency = 'CDF' | 'USD' | 'EUR';
 export type InventoryViewMode = 'grid' | 'list';
+export type SalesType = 'wholesale' | 'retail' | 'both';
 
 // =========================================================
 // FORMATS D'EXPORT
@@ -155,6 +158,8 @@ export interface Product {
 
   purchase_price: number;
   selling_price: number;
+  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
+  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
 
   quantity: number;
   available_quantity: number;
@@ -178,6 +183,7 @@ export interface Product {
   dci?: string;
   active_ingredient?: string;
   unit?: string;
+  batch_number?: string;  // AJOUTÉ : numéro de lot
 
   has_tva: boolean;
   tva_rate: number;
@@ -204,6 +210,9 @@ export interface Product {
 
   image_url?: string | null;
   notes?: string | null;
+  
+  pharmacy_id?: string;  // AJOUTÉ : ID de la pharmacie
+  branch_id?: string;    // AJOUTÉ : ID de la succursale
 }
 
 export interface ProductCreate {
@@ -214,7 +223,9 @@ export interface ProductCreate {
   category?: string;
   category_id?: ID;
   purchase_price: number;
-  selling_price: number;
+  selling_price?: number;
+  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
+  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
@@ -232,6 +243,7 @@ export interface ProductCreate {
   dci?: string;
   active_ingredient?: string;
   unit?: string;
+  batch_number?: string;  // AJOUTÉ : numéro de lot
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
@@ -251,6 +263,8 @@ export interface ProductUpdate {
   category_id?: ID;
   purchase_price?: number;
   selling_price?: number;
+  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
+  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
@@ -268,12 +282,15 @@ export interface ProductUpdate {
   dci?: string;
   active_ingredient?: string;
   unit?: string;
+  batch_number?: string;  // AJOUTÉ : numéro de lot
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
   is_available?: boolean;
   image_url?: string | null;
   notes?: string | null;
+  pharmacy_id?: string;
+  branch_id?: string;
 }
 
 export interface ProductFormInitialValues {
@@ -288,9 +305,12 @@ export interface ProductFormInitialValues {
   laboratory?: string;
   purchase_price?: number;
   selling_price?: number;
+  selling_price_wholesale?: number;  // AJOUTÉ
+  selling_price_retail?: number;     // AJOUTÉ
   quantity?: number;
   alert_threshold?: number;
   expiry_date?: string;
+  pharmacy_id?: string;  // AJOUTÉ
 }
 
 export interface ProductSearch {
@@ -321,6 +341,7 @@ export interface ProductSearch {
   branch_id?: string;
   pharmacy_id?: string;
   include_sales_stats?: boolean;
+  location?: string;  // AJOUTÉ : filtre par emplacement
 }
 
 export interface ProductListResponse {
@@ -428,6 +449,9 @@ export interface StockAlert {
   threshold: number;
   type: 'low_stock' | 'out_of_stock';
   created_at: string;
+  unit?: string; 
+  branch_id?: string;
+  pharmacy_id?: string; 
 }
 
 export interface ExpiryAlert {
@@ -435,8 +459,11 @@ export interface ExpiryAlert {
   product_name: string;
   expiry_date: string;
   days_remaining: number;
+  days_until_expiry?: number; 
   type: 'expiring_soon' | 'expired';
   created_at: string;
+  branch_id?: string;
+  pharmacy_id?: string;
 }
 
 // =========================================================
@@ -857,6 +884,123 @@ export interface ExportResponse {
 }
 
 // =========================================================
+// TYPES POUR L'IMPORT AVEC PRÉVISUALISATION
+// =========================================================
+
+export interface ImportPreviewProduct {
+  // Identifiants
+  id?: string;
+  code?: string;
+  barcode?: string;
+  
+  // Informations de base
+  name: string;
+  generic_name?: string;
+  description?: string;
+  
+  // Catégorie
+  category_id?: string;
+  category_name?: string;
+  location?: string;
+  
+  // Prix et coûts
+  purchase_price: number;
+  selling_price: number;
+  selling_price_wholesale?: number;  // AJOUTÉ
+  selling_price_retail?: number;     // AJOUTÉ
+  wholesale_price?: number;
+  
+  // Stock
+  current_stock: number;
+  min_stock: number;
+  max_stock?: number;
+  reorder_point?: number;
+  reorder_quantity?: number;
+  
+  // Informations pharmaceutiques
+  manufacturer?: string;
+  supplier?: string;
+  dosage_form?: string;
+  strength?: string;
+  prescription_required?: boolean;
+  
+  // Dates
+  expiry_date?: string;
+  manufacturing_date?: string;
+  
+  // Statut
+  status?: 'active' | 'inactive' | 'discontinued';
+  is_active?: boolean;
+  
+  // Métadonnées d'import
+  row_index?: number;
+  validation_errors?: string[];
+  is_duplicate?: boolean;
+  duplicate_reason?: string;
+  existing_product_id?: string;
+  existing_product_code?: string;
+  changes_detected?: {
+    field: string;
+    old_value: any;
+    new_value: any;
+  }[];
+  
+  // Pour compatibilité avec l'ancien type
+  existingProduct?: Product | null;
+  action?: 'update' | 'merge_quantity' | 'keep_both' | 'skip';
+}
+
+export interface ImportPreviewResponse {
+  // Produits à importer
+  products: ImportPreviewProduct[];
+  
+  // Doublons détectés
+  duplicates: ImportPreviewProduct[];
+  
+  // Nouveaux produits (non existants)
+  newProducts: ImportPreviewProduct[];
+  
+  // Résumé de la prévisualisation
+  summary: {
+    total_products: number;
+    new_products_count: number;
+    duplicates_count: number;
+    errors_count: number;
+    categories_missing: string[];
+    manufacturers_missing: string[];
+    suppliers_missing: string[];
+  };
+  
+  // En-têtes du fichier importé
+  headers?: string[];
+  
+  // Version du template
+  template_version?: string;
+}
+
+export interface ImportValidationResult {
+  valid: boolean;
+  errors: Array<{
+    row: number;
+    field: string;
+    message: string;
+    value: any;
+  }>;
+  warnings: Array<{
+    row: number;
+    field: string;
+    message: string;
+    value: any;
+  }>;
+  summary: {
+    total_rows: number;
+    valid_rows: number;
+    error_rows: number;
+    warning_rows: number;
+  };
+}
+
+// =========================================================
 // RÉPONSES API
 // =========================================================
 
@@ -913,7 +1057,9 @@ export enum MovementTypeEnum {
   RETURN = 'return',
   DAMAGE = 'damage',
   LOSS = 'loss',
-  MANUAL_ADJUSTMENT = 'manual_adjustment'
+  MANUAL_ADJUSTMENT = 'manual_adjustment',
+  INITIAL = 'initial',
+  IMPORT = 'import'
 }
 
 // =========================================================
@@ -932,6 +1078,10 @@ export interface PharmacyConfig {
   lowStockThreshold?: number;
   expiryWarningDays?: number;
   allowNegativeStock?: boolean;
+  
+  // AJOUTÉ : type de vente configuré pour la pharmacie
+  salesType?: SalesType;
+  
   workingHours?: {
     enabled: boolean;
     startTime: string;
@@ -947,7 +1097,7 @@ export interface PharmacyConfig {
   };
   automaticPricing?: {
     enabled: boolean;
-    method: 'percentage' | 'fixed';
+    method: 'percentage' | 'coefficient' | 'margin';
     value: number;
   };
   productReturnDays?: number;

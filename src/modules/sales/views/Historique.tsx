@@ -1,3 +1,4 @@
+// Historique.tsx
 import { useEffect, useMemo, useState } from 'react';
 import {
   Search,
@@ -16,53 +17,45 @@ import {
   Receipt,
   Calendar,
   RefreshCw,
+  WifiOff,
+  Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { db } from '@/db/offlineDb';
+import { saleService, type SaleResponse, type DailyStatsResponse } from '@/services/saleService';
 import { useAuthStore } from '@/store/useAuthStore';
-import api from '@/api/client';
+import { useOnline } from '@/hooks/useOnline';
+import { useToast } from '@/hooks/useToast';
 
 interface SaleItem {
   productId?: string;
-  id?: number | string;
+  id?: string;
   name: string;
   price: number;
   quantity: number;
   code?: string;
-  barcode?: string;
 }
 
 interface Sale {
-  id?: string | number;
-  localId?: number;
+  id: string;
   items: SaleItem[];
   total: number;
   paymentMethod: string;
   timestamp: number;
   cashierName?: string;
-  cashierId?: string;
   posName?: string;
-  posId?: string;
-  sessionId?: string;
+  sessionNumber?: string;
   receiptNumber?: string;
-  clientType?: string;
-  client?: string;
-  clientId?: string;
-  status?: 'completed' | 'pending' | 'cancelled' | 'synced' | 'failed';
+  clientName?: string;
+  status?: 'completed' | 'pending' | 'cancelled';
   synced?: boolean;
-}
-
-interface ApiResponse {
-  data: Sale[];
-  total: number;
-  page: number;
-  limit: number;
 }
 
 type DateRange = 'today' | 'week' | 'month' | 'custom';
 
 export default function Historique() {
   const { user } = useAuthStore();
+  const isOnline = useOnline();
+  const { toast } = useToast();
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
@@ -79,8 +72,11 @@ export default function Historique() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  
+  // CORRECTION ICI: useState retourne [value, setter] - nous devons déstructurer correctement
+  const [setDailyStats] = useState<DailyStatsResponse | null>(null);
 
-  const itemsPerPage = 10;
+  const itemsPerPage = 20;
 
   useEffect(() => {
     void loadSales();
@@ -90,135 +86,112 @@ export default function Historique() {
     filterSales();
   }, [sales, search]);
 
-  function getSaleNumber(sale: Sale): string {
-    return String(sale.receiptNumber || sale.id || sale.localId || 'N/A');
+  useEffect(() => {
+    void loadDailyStats();
+  }, []);
+
+  async function loadDailyStats() {
+    try {
+      const stats = await saleService.getDailyStats();
+      setDailyStats(stats); // Maintenant setDailyStats est bien une fonction
+    } catch (error) {
+      console.error('Erreur chargement stats journalières:', error);
+    }
   }
 
-  function getCashierName(sale: Sale): string {
-    return sale.cashierName || user?.nom_complet || user?.email || 'Inconnu';
-  }
-
-  function getClientName(sale: Sale): string {
-    return sale.client || sale.clientType || 'Passager';
-  }
-
-  function getPosName(sale: Sale): string {
-    return sale.posName || sale.posId || 'POS-01';
-  }
-
-  function getSessionName(sale: Sale): string {
-    return sale.sessionId || '001';
-  }
-
-  function normalizeSale(raw: any): Sale {
+  function normalizeSale(sale: SaleResponse): Sale {
     return {
-      id: raw.id,
-      localId: raw.localId,
-      items: Array.isArray(raw.items) ? raw.items : [],
-      total: Number(raw.total || 0),
-      paymentMethod: raw.paymentMethod || 'cash',
-      timestamp: Number(raw.timestamp || Date.now()),
-      cashierName: raw.cashierName || raw.cashier || user?.nom_complet || 'Inconnu',
-      cashierId: raw.cashierId || user?.id || '',
-      posName: raw.posName || raw.pos || 'POS-01',
-      posId: raw.posId || '',
-      sessionId: raw.sessionId || raw.session || '001',
-      receiptNumber: raw.receiptNumber || undefined,
-      clientType: raw.clientType || undefined,
-      client: raw.client || raw.clientType || 'Passager',
-      clientId: raw.clientId || undefined,
-      status: raw.status || (raw.synced ? 'synced' : 'completed'),
-      synced: typeof raw.synced === 'boolean' ? raw.synced : true,
+      id: sale.id,
+      items: (sale.items || []).map(item => ({
+        id: item.product_id,
+        name: item.product_name,
+        price: item.unit_price,
+        quantity: item.quantity,
+        code: item.product_code,
+      })),
+      total: sale.total_amount,
+      paymentMethod: sale.payment_method,
+      timestamp: new Date(sale.created_at).getTime(),
+      cashierName: sale.seller_name,
+      posName: sale.pharmacy_id,
+      sessionNumber: sale.reference?.slice(0, 8),
+      receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
+      clientName: sale.client_name || 'Passager',
+      status: sale.status as 'completed' | 'pending' | 'cancelled',
+      synced: true,
     };
   }
 
   function buildDateParams() {
-    const params: Record<string, string | number | undefined> = {
-      page: currentPage,
-      limit: itemsPerPage,
-      paymentMethod: paymentFilter !== 'all' ? paymentFilter : undefined,
-    };
-
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
     switch (dateRange) {
       case 'today': {
-        params.startDate = today.toISOString();
-        params.endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
-        break;
+        const startDate = today.toISOString();
+        const endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
+        return { start_date: startDate, end_date: endDate };
       }
       case 'week': {
         const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-        params.startDate = weekAgo.toISOString();
-        params.endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
-        break;
+        return {
+          start_date: weekAgo.toISOString(),
+          end_date: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
+        };
       }
       case 'month': {
         const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-        params.startDate = monthAgo.toISOString();
-        params.endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
-        break;
+        return {
+          start_date: monthAgo.toISOString(),
+          end_date: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
+        };
       }
       case 'custom': {
+        const params: { start_date?: string; end_date?: string } = {};
         if (customStartDate) {
-          params.startDate = new Date(customStartDate).toISOString();
+          params.start_date = new Date(customStartDate).toISOString();
         }
         if (customEndDate) {
-          params.endDate = new Date(
+          params.end_date = new Date(
             new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1,
           ).toISOString();
         }
-        break;
+        return params;
       }
+      default:
+        return {};
     }
-
-    return params;
   }
 
   async function loadSales() {
     setLoading(true);
-
     try {
-      const params = buildDateParams();
+      const dateParams = buildDateParams();
+      const params: any = {
+        page: currentPage,
+        limit: itemsPerPage,
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        ...dateParams,
+      };
 
-      try {
-        const response = await api.get<ApiResponse>('/sales', { params });
-
-        const remoteSales = (response.data?.data || []).map(normalizeSale);
-
-        setSales(remoteSales);
-        setTotalPages(Math.max(1, Math.ceil((response.data?.total || 0) / itemsPerPage)));
-        setTotalCount(response.data?.total || remoteSales.length);
-      } catch (apiError) {
-        console.warn('Mode hors-ligne: chargement depuis IndexedDB', apiError);
-
-        let localSales = (await db.sales.toArray()).map(normalizeSale);
-
-        if (params.startDate) {
-          const start = new Date(String(params.startDate)).getTime();
-          const end = params.endDate ? new Date(String(params.endDate)).getTime() : Date.now();
-
-          localSales = localSales.filter(
-            (sale) => sale.timestamp >= start && sale.timestamp <= end,
-          );
-        }
-
-        if (paymentFilter !== 'all') {
-          localSales = localSales.filter((sale) => sale.paymentMethod === paymentFilter);
-        }
-
-        const sorted = [...localSales].sort((a, b) => b.timestamp - a.timestamp);
-
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        const paginated = sorted.slice(startIndex, startIndex + itemsPerPage);
-
-        setSales(paginated);
-        setTotalPages(Math.max(1, Math.ceil(sorted.length / itemsPerPage)));
-        setTotalCount(sorted.length);
+      if (paymentFilter !== 'all') {
+        params.payment_method = paymentFilter;
       }
+
+      const response = await saleService.getSales(params);
+
+      const normalizedSales = (response.items || []).map(normalizeSale);
+      setSales(normalizedSales);
+      setTotalPages(Math.max(1, Math.ceil((response.total || 0) / itemsPerPage)));
+      setTotalCount(response.total || normalizedSales.length);
     } catch (error) {
       console.error('Erreur chargement historique:', error);
+      toast({
+        title: "Erreur",
+        description: "Impossible de charger l'historique",
+        variant: "destructive",
+      });
       setSales([]);
       setTotalPages(1);
       setTotalCount(0);
@@ -234,13 +207,14 @@ export default function Historique() {
     }
 
     const searchLower = search.toLowerCase().trim();
-
     const filtered = sales.filter((sale) => {
+      const saleNumber = getSaleNumber(sale).toLowerCase();
+      const client = getClientName(sale).toLowerCase();
+      const cashier = getCashierName(sale).toLowerCase();
       return (
-        getSaleNumber(sale).toLowerCase().includes(searchLower) ||
-        getClientName(sale).toLowerCase().includes(searchLower) ||
-        getCashierName(sale).toLowerCase().includes(searchLower) ||
-        getPosName(sale).toLowerCase().includes(searchLower) ||
+        saleNumber.includes(searchLower) ||
+        client.includes(searchLower) ||
+        cashier.includes(searchLower) ||
         sale.items.some((item) => item.name.toLowerCase().includes(searchLower))
       );
     });
@@ -250,26 +224,34 @@ export default function Historique() {
 
   const stats = useMemo(() => {
     const totalAmount = filteredSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-
     const totalItems = filteredSales.reduce(
       (sum, sale) =>
-        sum +
-        sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
+        sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
       0,
     );
-
     const totalSales = filteredSales.length;
     const averageTicket = totalSales > 0 ? totalAmount / totalSales : 0;
 
-    return {
-      totalAmount,
-      totalItems,
-      totalSales,
-      averageTicket,
-    };
+    return { totalAmount, totalItems, totalSales, averageTicket };
   }, [filteredSales]);
 
-  function formatDate(timestamp: number) {
+  function getSaleNumber(sale: Sale): string {
+    return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
+  }
+
+  function getCashierName(sale: Sale): string {
+    return sale.cashierName || user?.nom_complet || user?.email || 'Inconnu';
+  }
+
+  function getClientName(sale: Sale): string {
+    return sale.clientName || 'Passager';
+  }
+
+  function getPosName(sale: Sale): string {
+    return sale.posName || 'POS-01';
+  }
+
+  function formatDate(timestamp: number): string {
     return new Date(timestamp).toLocaleString('fr-FR', {
       day: '2-digit',
       month: '2-digit',
@@ -279,10 +261,11 @@ export default function Historique() {
     });
   }
 
-  function getPaymentMethodLabel(method: string) {
+  function getPaymentMethodLabel(method: string): string {
     switch (method) {
       case 'cash':
         return 'Espèces';
+      case 'mobile_money':
       case 'mobile':
         return 'Mobile Money';
       case 'account':
@@ -292,10 +275,11 @@ export default function Historique() {
     }
   }
 
-  function getPaymentMethodColor(method: string) {
+  function getPaymentMethodColor(method: string): string {
     switch (method) {
       case 'cash':
         return 'bg-emerald-100 text-emerald-700';
+      case 'mobile_money':
       case 'mobile':
         return 'bg-blue-100 text-blue-700';
       case 'account':
@@ -310,13 +294,13 @@ export default function Historique() {
       let exportData = filteredSales;
 
       if (filteredSales.length < totalCount) {
-        try {
-          const response = await api.get<ApiResponse>('/sales/all');
-          exportData = (response.data?.data || []).map(normalizeSale);
-        } catch {
-          const allLocalSales = (await db.sales.toArray()).map(normalizeSale);
-          exportData = allLocalSales;
-        }
+        const dateParams = buildDateParams();
+        const response = await saleService.getSales({
+          limit: 1000,
+          ...dateParams,
+          payment_method: paymentFilter !== 'all' ? paymentFilter : undefined,
+        });
+        exportData = (response.items || []).map(normalizeSale);
       }
 
       const headers = [
@@ -340,17 +324,15 @@ export default function Historique() {
         sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
         Number(sale.total).toFixed(2),
         getPaymentMethodLabel(sale.paymentMethod),
-        sale.synced === false ? 'Non synchronisé' : sale.status || 'completed',
+        sale.status === 'cancelled' ? 'Annulée' : sale.status === 'pending' ? 'En attente' : 'Terminée',
       ]);
 
-      const escapeCell = (value: string | number) =>
-        `"${String(value).replace(/"/g, '""')}"`;
-
+      const escapeCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
       const csv = [headers, ...csvData]
         .map((row) => row.map(escapeCell).join(','))
         .join('\n');
 
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -359,8 +341,18 @@ export default function Historique() {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
+
+      toast({
+        title: "Export réussi",
+        description: "Le fichier CSV a été téléchargé",
+      });
     } catch (error) {
       console.error('Erreur export CSV:', error);
+      toast({
+        title: "Erreur",
+        description: "Impossible d'exporter les données",
+        variant: "destructive",
+      });
     }
   }
 
@@ -369,15 +361,18 @@ export default function Historique() {
     if (!printWindow) return;
 
     printWindow.document.write(`
+      <!DOCTYPE html>
       <html>
         <head>
           <title>Vente #${getSaleNumber(sale)}</title>
+          <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
           <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-              font-family: Arial, sans-serif;
+              font-family: 'Courier New', monospace;
               padding: 20px;
-              color: #0f172a;
+              background: white;
             }
             .receipt {
               max-width: 320px;
@@ -385,7 +380,7 @@ export default function Historique() {
             }
             .header {
               text-align: center;
-              border-bottom: 1px dashed #cbd5e1;
+              border-bottom: 1px dashed #ccc;
               padding-bottom: 12px;
               margin-bottom: 16px;
             }
@@ -393,18 +388,18 @@ export default function Historique() {
               display: flex;
               justify-content: space-between;
               gap: 12px;
-              margin-bottom: 8px;
-              font-size: 13px;
+              margin-bottom: 6px;
+              font-size: 12px;
             }
             .total {
-              border-top: 1px solid #0f172a;
-              padding-top: 10px;
-              margin-top: 10px;
+              border-top: 1px solid #000;
+              padding-top: 8px;
+              margin-top: 8px;
               font-weight: bold;
             }
             .meta {
-              font-size: 12px;
-              color: #475569;
+              font-size: 11px;
+              color: #666;
               margin: 2px 0;
             }
           </style>
@@ -412,7 +407,7 @@ export default function Historique() {
         <body>
           <div class="receipt">
             <div class="header">
-              <h2>GoApp</h2>
+              <h2>GoApp Pharmacie</h2>
               <div class="meta">Vente #${getSaleNumber(sale)}</div>
               <div class="meta">${formatDate(sale.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(sale)}</div>
@@ -459,15 +454,6 @@ export default function Historique() {
     setCurrentPage(1);
   }
 
-  function handleCustomDateChange(type: 'start' | 'end', value: string) {
-    if (type === 'start') {
-      setCustomStartDate(value);
-    } else {
-      setCustomEndDate(value);
-    }
-    setCurrentPage(1);
-  }
-
   function resetFilters() {
     setSearch('');
     setDateRange('today');
@@ -499,6 +485,13 @@ export default function Historique() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {!isOnline && (
+              <span className="inline-flex items-center gap-2 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-700">
+                <WifiOff size={14} />
+                Mode hors-ligne
+              </span>
+            )}
+
             {(search || dateRange !== 'today' || paymentFilter !== 'all') && (
               <button
                 onClick={resetFilters}
@@ -561,7 +554,7 @@ export default function Historique() {
               >
                 <option value="all">Tous les paiements</option>
                 <option value="cash">Espèces</option>
-                <option value="mobile">Mobile Money</option>
+                <option value="mobile_money">Mobile Money</option>
                 <option value="account">Compte Client</option>
               </select>
             </div>
@@ -571,13 +564,13 @@ export default function Historique() {
                 <input
                   type="date"
                   value={customStartDate}
-                  onChange={(e) => handleCustomDateChange('start', e.target.value)}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <input
                   type="date"
                   value={customEndDate}
-                  onChange={(e) => handleCustomDateChange('end', e.target.value)}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
                   className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -654,13 +647,16 @@ export default function Historique() {
 
           <div className="divide-y divide-slate-100">
             {loading ? (
-              <div className="p-10 text-center text-slate-400">Chargement...</div>
+              <div className="flex items-center justify-center p-10 text-slate-400">
+                <Loader2 className="mr-2 animate-spin" size={20} />
+                Chargement...
+              </div>
             ) : filteredSales.length === 0 ? (
               <div className="p-10 text-center text-slate-400">Aucune vente trouvée</div>
             ) : (
               filteredSales.map((sale) => (
                 <div
-                  key={`${sale.localId || ''}-${sale.id || ''}-${sale.timestamp}`}
+                  key={sale.id}
                   className="p-4 transition-colors hover:bg-slate-50 md:p-5"
                 >
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -682,14 +678,14 @@ export default function Historique() {
                           {getPaymentMethodLabel(sale.paymentMethod)}
                         </span>
 
-                        {sale.synced === false && (
-                          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">
-                            Non synchronisé
+                        {sale.status === 'cancelled' && (
+                          <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">
+                            Annulée
                           </span>
                         )}
                       </div>
 
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div>
                           <p className="text-xs text-slate-400">Client</p>
                           <p className="font-semibold text-slate-800">{getClientName(sale)}</p>
@@ -703,10 +699,7 @@ export default function Historique() {
                         <div>
                           <p className="text-xs text-slate-400">Articles</p>
                           <p className="font-semibold text-slate-800">
-                            {sale.items.reduce(
-                              (sum, item) => sum + Number(item.quantity || 0),
-                              0,
-                            )}
+                            {sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)}
                           </p>
                         </div>
 
@@ -715,11 +708,6 @@ export default function Historique() {
                           <p className="text-lg font-black text-blue-600">
                             {Number(sale.total).toFixed(2)} $
                           </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400">POS</p>
-                          <p className="font-semibold text-slate-800">{getPosName(sale)}</p>
                         </div>
                       </div>
                     </div>
@@ -821,16 +809,6 @@ export default function Historique() {
                 </div>
 
                 <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">POS</p>
-                  <p className="font-bold text-slate-800">{getPosName(selectedSale)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">Session</p>
-                  <p className="font-bold text-slate-800">{getSessionName(selectedSale)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="mb-1 text-xs text-slate-400">Client</p>
                   <p className="font-bold text-slate-800">{getClientName(selectedSale)}</p>
                 </div>
@@ -855,7 +833,7 @@ export default function Historique() {
                 <div className="divide-y divide-slate-100">
                   {selectedSale.items.map((item, idx) => (
                     <div
-                      key={`${item.productId || item.id || idx}`}
+                      key={`${item.id || idx}`}
                       className="flex items-center justify-between gap-4 px-4 py-3"
                     >
                       <div className="min-w-0">

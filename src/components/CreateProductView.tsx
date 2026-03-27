@@ -1,7 +1,8 @@
 // components/CreateProductView.tsx
-import { useEffect, useMemo, useState } from 'react';
-import type { Product, ProductCreate } from '@/types/inventory.types';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import type { Product, ProductCreate, Category, SalesType } from '@/types/inventory.types';
 import { inventoryService } from '@/services/inventoryService';
+import usePharmacyConfig from '@/hooks/usePharmacyConfig';
 import {
   X,
   Save,
@@ -24,58 +25,17 @@ import {
   Settings2,
   Type,
   Store,
+  ChevronDown,
+  Check,
+  Camera,
 } from 'lucide-react';
 
 // ============================================================
 // TYPES
 // ============================================================
 
-interface ConfigResponse {
-  config: {
-    pharmacyInfo: {
-      name: string;
-      address: string;
-      phone: string;
-      email: string;
-      licenseNumber: string;
-    };
-    salesType: string;
-    taxRate: number;
-    marginConfig: {
-      defaultMargin: number;
-      minMargin: number;
-      maxMargin: number;
-    };
-    automaticPricing: {
-      enabled: boolean;
-      method: string;
-      value: number;
-    };
-    profitability: {
-      enabled: boolean;
-      rate: number;
-    };
-    primaryCurrency: string;
-    currencies: Array<{
-      code: string;
-      symbol: string;
-      isActive: boolean;
-      exchangeRate: number;
-    }>;
-    workingHours: {
-      enabled: boolean;
-      startTime: string;
-      endTime: string;
-      timezone: string;
-    };
-    allowNegativeStock: boolean;
-    lowStockThreshold: number;
-    expiryWarningDays: number;
-  };
-}
-
 interface ExtendedProduct extends Partial<Product> {
-  pharmacy_id?: string | null;
+  pharmacy_id?: string;
   batch_number?: string;
   category_id?: string;
   selling_price_wholesale?: number;
@@ -92,6 +52,8 @@ interface CreateProductViewInitialValues {
   pharmacy_id?: string;
   purchase_price?: number;
   selling_price?: number;
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
   quantity?: number;
 }
 
@@ -101,9 +63,9 @@ interface CreateProductViewProps {
   product?: ExtendedProduct | null;
   onSuccess?: () => void;
   initialValues?: CreateProductViewInitialValues;
-  pharmacyConfig?: ConfigResponse;
-  pharmacyName?: string;
   pharmacyId?: string;
+  pharmacyName?: string;
+  onBarcodeCapture?: (callback: (code: string) => void) => void;
 }
 
 type FormTab = 'general' | 'pricing' | 'advanced';
@@ -114,6 +76,7 @@ interface FormState {
   name: string;
   description: string;
   category: string;
+  category_id: string;
   supplier: string;
   purchase_price: string;
   selling_price_wholesale: string;
@@ -132,8 +95,8 @@ interface FormState {
 // CONSTANTES
 // ============================================================
 
-const DEFAULT_MARGIN_PERCENT = 25;
 const DEFAULT_TAX_RATE = 16;
+const DEFAULT_SALES_TYPE: SalesType = 'both';
 
 // ============================================================
 // FONCTIONS UTILITAIRES
@@ -158,6 +121,12 @@ function generateProductCode(): string {
   return `PRD-${yy}${mm}${dd}-${random}`;
 }
 
+function generateBarcode(): string {
+  const timestamp = Date.now().toString().slice(-12);
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `${timestamp}${random}`.slice(0, 13);
+}
+
 function buildInitialFormState(
   product?: ExtendedProduct | null,
   initialValues?: CreateProductViewInitialValues,
@@ -168,12 +137,21 @@ function buildInitialFormState(
     name: toInputString(initialValues?.name ?? product?.name ?? ''),
     description: toInputString(product?.description ?? ''),
     category: toInputString(initialValues?.category ?? product?.category ?? ''),
+    category_id: toInputString(product?.category_id ?? ''),
     supplier: toInputString(initialValues?.supplier ?? product?.supplier ?? ''),
     purchase_price: toInputString(initialValues?.purchase_price ?? product?.purchase_price ?? ''),
     selling_price_wholesale: toInputString(
-      initialValues?.selling_price ?? product?.selling_price_wholesale ?? product?.selling_price ?? ''
+      initialValues?.selling_price_wholesale ?? 
+      initialValues?.selling_price ?? 
+      product?.selling_price_wholesale ?? 
+      product?.selling_price ?? 
+      ''
     ),
-    selling_price_retail: toInputString(product?.selling_price_retail ?? ''),
+    selling_price_retail: toInputString(
+      initialValues?.selling_price_retail ?? 
+      product?.selling_price_retail ?? 
+      ''
+    ),
     quantity: toInputString(initialValues?.quantity ?? product?.quantity ?? 0),
     alert_threshold: toInputString(product?.alert_threshold ?? 10),
     minimum_stock: toInputString(product?.minimum_stock ?? ''),
@@ -195,21 +173,52 @@ export default function CreateProductView({
   product,
   onSuccess,
   initialValues,
-  pharmacyConfig,
-  pharmacyName,
-  pharmacyId,
+  pharmacyId: propsPharmacyId,
+  pharmacyName: propsPharmacyName,
+  onBarcodeCapture,
 }: CreateProductViewProps) {
   // États
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<FormTab>('general');
   const [hasTva, setHasTva] = useState<boolean>(product?.has_tva ?? true);
   const [tvaRate, setTvaRate] = useState<number>(product?.tva_rate ?? DEFAULT_TAX_RATE);
-  const [marginPercent, setMarginPercent] = useState<number>(DEFAULT_MARGIN_PERCENT);
-  const [salesType, setSalesType] = useState<string>('both');
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [manualCategoryMode, setManualCategoryMode] = useState(false);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+  
+  // État local pour le type de vente
+  const [salesType, setSalesType] = useState<SalesType>(DEFAULT_SALES_TYPE);
+  
+  // Détermination de l'ID de la pharmacie
+  const effectivePharmacyId = useMemo(() => {
+    return propsPharmacyId || initialValues?.pharmacy_id || null;
+  }, [propsPharmacyId, initialValues?.pharmacy_id]);
+  
+  // Récupération de la configuration de la pharmacie
+  const {
+    config: pharmacyConfig,
+    isLoading: configLoading,
+    primaryCurrency,
+    taxRate: configTaxRate,
+    defaultMargin: configDefaultMargin,
+    isAutomaticPricing: configAutoPricingEnabled,
+    lowStockThreshold: configLowStockThreshold,
+    salesType: configSalesType,
+    automaticPricingMethod: configAutoMethod,
+    automaticPricingValue: configAutoValue,
+    calculAutoPrix,
+  } = usePharmacyConfig(effectivePharmacyId || undefined);
+  
+  // États pour la configuration locale
   const [autoPricingEnabled, setAutoPricingEnabled] = useState<boolean>(false);
   const [autoPricingMethod, setAutoPricingMethod] = useState<string>('percentage');
   const [autoPricingValue, setAutoPricingValue] = useState<number>(25);
+  const [marginPercent, setMarginPercent] = useState<number>(25);
   
   // Formulaire
   const [form, setForm] = useState<FormState>(() =>
@@ -217,47 +226,110 @@ export default function CreateProductView({
   );
 
   // ============================================================
-  // EFFETS
+  // FERMETURE DU DROPDOWN AU CLIC EXTÉRIEUR
   // ============================================================
 
-  // Charger les configurations depuis pharmacyConfig
   useEffect(() => {
-    if (pharmacyConfig?.config) {
-      const cfg = pharmacyConfig.config;
-      
-      if (cfg.salesType) {
-        setSalesType(cfg.salesType);
+    const handleClickOutside = (event: MouseEvent) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(event.target as Node)) {
+        setShowCategoryDropdown(false);
       }
-      
-      if (cfg.automaticPricing?.enabled) {
-        setAutoPricingEnabled(true);
-        setAutoPricingMethod(cfg.automaticPricing.method || 'percentage');
-        setAutoPricingValue(cfg.automaticPricing.value || 25);
-      }
-      
-      if (cfg.marginConfig?.defaultMargin) {
-        setMarginPercent(cfg.marginConfig.defaultMargin);
-      }
-      
-      if (cfg.taxRate) {
-        setTvaRate(cfg.taxRate);
-      }
-    }
-  }, [pharmacyConfig]);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  // Réinitialiser le formulaire quand le modal s'ouvre
+  // ============================================================
+  // CHARGEMENT DES CATÉGORIES
+  // ============================================================
+
+  useEffect(() => {
+    if (!open) return;
+    
+    const loadCategories = async () => {
+      setCategoriesLoading(true);
+      try {
+        const response = await inventoryService.getCategories({ limit: 100 });
+        setCategories(response.categories || []);
+      } catch (err) {
+        console.error('CreateProductView: Erreur chargement catégories:', err);
+      } finally {
+        setCategoriesLoading(false);
+      }
+    };
+    
+    loadCategories();
+  }, [open]);
+
+  // ============================================================
+  // CHARGEMENT DE LA CONFIGURATION
+  // ============================================================
+
+  useEffect(() => {
+    if (pharmacyConfig) {
+      // Type de vente depuis la configuration
+      if (configSalesType) {
+        setSalesType(configSalesType);
+      } else if (pharmacyConfig.salesType) {
+        setSalesType(pharmacyConfig.salesType as SalesType);
+      }
+      
+      // Configuration des prix automatiques
+      if (pharmacyConfig.automaticPricing?.enabled) {
+        setAutoPricingEnabled(true);
+        setAutoPricingMethod(pharmacyConfig.automaticPricing.method || 'percentage');
+        setAutoPricingValue(pharmacyConfig.automaticPricing.value || 25);
+      } else if (configAutoPricingEnabled) {
+        setAutoPricingEnabled(true);
+        setAutoPricingMethod(configAutoMethod || 'percentage');
+        setAutoPricingValue(configAutoValue || 25);
+      } else if (calculAutoPrix) {
+        setAutoPricingEnabled(true);
+      }
+      
+      // Marge par défaut
+      const defaultMargin = pharmacyConfig.marginConfig?.defaultMargin ?? configDefaultMargin ?? 25;
+      setMarginPercent(defaultMargin);
+      
+      // Taux TVA
+      const taxRate = pharmacyConfig.taxRate ?? configTaxRate ?? DEFAULT_TAX_RATE;
+      setTvaRate(taxRate);
+    }
+  }, [pharmacyConfig, configSalesType, configAutoPricingEnabled, configDefaultMargin, configTaxRate, configAutoMethod, configAutoValue, calculAutoPrix]);
+
+  // ============================================================
+  // RÉINITIALISATION DU FORMULAIRE
+  // ============================================================
+
   useEffect(() => {
     if (!open) return;
 
     setForm(buildInitialFormState(product, initialValues));
     setHasTva(product?.has_tva ?? true);
-    setTvaRate(product?.tva_rate ?? (pharmacyConfig?.config?.taxRate || DEFAULT_TAX_RATE));
-    setMarginPercent(pharmacyConfig?.config?.marginConfig?.defaultMargin || DEFAULT_MARGIN_PERCENT);
+    setTvaRate(product?.tva_rate ?? (pharmacyConfig?.taxRate || configTaxRate || DEFAULT_TAX_RATE));
+    setMarginPercent(pharmacyConfig?.marginConfig?.defaultMargin || configDefaultMargin || 25);
     setActiveTab('general');
     setError(null);
-  }, [open, product, initialValues, pharmacyConfig]);
+    setSuccess(null);
+    setCategorySearch('');
+    setManualCategoryMode(false);
+    
+    const existingCategory = product?.category || initialValues?.category;
+    if (existingCategory && categories.length > 0) {
+      const found = categories.find(c => c.name === existingCategory);
+      if (found) {
+        setForm(prev => ({ ...prev, category_id: String(found.id), category: found.name }));
+        setManualCategoryMode(false);
+      } else {
+        setManualCategoryMode(true);
+      }
+    }
+  }, [open, product, initialValues, pharmacyConfig, configTaxRate, configDefaultMargin, categories]);
 
-  // Gestion de la touche Échap
+  // ============================================================
+  // GESTION DE LA TOUCHE ÉCHAP
+  // ============================================================
+
   useEffect(() => {
     if (!open) return;
 
@@ -270,6 +342,23 @@ export default function CreateProductView({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open, loading, onClose]);
+
+  // ============================================================
+  // GESTION DU SCAN DE CODE-BARRES
+  // ============================================================
+
+  useEffect(() => {
+    if (onBarcodeCapture && open) {
+      onBarcodeCapture((scannedCode: string) => {
+        if (scannedCode) {
+          setField('barcode', scannedCode);
+          if (!form.code) {
+            setField('code', scannedCode);
+          }
+        }
+      });
+    }
+  }, [onBarcodeCapture, open, form.code]);
 
   // ============================================================
   // CALCULS DÉRIVÉS
@@ -319,6 +408,13 @@ export default function CreateProductView({
     return price * quantity;
   }, [sellingPriceWholesale, sellingPriceRetail, quantity, salesType]);
 
+  const filteredCategories = useMemo(() => {
+    if (!categorySearch.trim()) return categories;
+    return categories.filter(cat => 
+      cat.name.toLowerCase().includes(categorySearch.toLowerCase())
+    );
+  }, [categories, categorySearch]);
+
   // ============================================================
   // GESTIONNAIRES
   // ============================================================
@@ -327,8 +423,22 @@ export default function CreateProductView({
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleCategorySelect = (category: Category) => {
+    setField('category', category.name);
+    setField('category_id', String(category.id));
+    setCategorySearch('');
+    setShowCategoryDropdown(false);
+    setManualCategoryMode(false);
+  };
+
+  const handleManualCategoryToggle = () => {
+    setManualCategoryMode(true);
+    setShowCategoryDropdown(false);
+    setField('category_id', '');
+  };
+
   const validateForm = (): string | null => {
-    if (!pharmacyId && !initialValues?.pharmacy_id) {
+    if (!effectivePharmacyId) {
       return 'ID de pharmacie manquant. Veuillez sélectionner une pharmacie.';
     }
 
@@ -346,13 +456,13 @@ export default function CreateProductView({
 
     if (salesType === 'wholesale' || salesType === 'both') {
       if (!form.selling_price_wholesale || Number(form.selling_price_wholesale) <= 0) {
-        return 'Le prix de vente en gros doit être supérieur à 0.';
+        return 'Le prix de vente en gros est obligatoire et doit être supérieur à 0.';
       }
     }
 
     if (salesType === 'retail' || salesType === 'both') {
       if (!form.selling_price_retail || Number(form.selling_price_retail) <= 0) {
-        return 'Le prix de vente au détail doit être supérieur à 0.';
+        return 'Le prix de vente au détail est obligatoire et doit être supérieur à 0.';
       }
     }
 
@@ -364,22 +474,6 @@ export default function CreateProductView({
       return "Le seuil d'alerte ne peut pas être négatif.";
     }
 
-    if (form.minimum_stock && Number(form.minimum_stock) < 0) {
-      return 'Le stock minimum ne peut pas être négatif.';
-    }
-
-    if (form.maximum_stock && Number(form.maximum_stock) < 0) {
-      return 'Le stock maximum ne peut pas être négatif.';
-    }
-
-    if (
-      form.minimum_stock &&
-      form.maximum_stock &&
-      Number(form.minimum_stock) > Number(form.maximum_stock)
-    ) {
-      return 'Le stock minimum ne peut pas être supérieur au stock maximum.';
-    }
-
     if (hasTva && tvaRate < 0) {
       return 'Le taux TVA ne peut pas être négatif.';
     }
@@ -388,19 +482,14 @@ export default function CreateProductView({
   };
 
   const buildPayload = (): ProductCreate => {
-    // Déterminer le prix de vente principal selon le type de vente
     let sellingPrice: number;
     if (salesType === 'wholesale') {
       sellingPrice = Number(form.selling_price_wholesale);
     } else if (salesType === 'retail') {
       sellingPrice = Number(form.selling_price_retail);
     } else {
-      // Pour 'both', on utilise le prix de gros par défaut
       sellingPrice = Number(form.selling_price_wholesale);
     }
-
-    // Utiliser pharmacyId de la prop ou initialValues
-    const pharmacy_id = pharmacyId || initialValues?.pharmacy_id || '';
 
     const payload: ProductCreate = {
       code: form.code.trim(),
@@ -408,74 +497,94 @@ export default function CreateProductView({
       name: form.name.trim(),
       description: form.description.trim() || undefined,
       category: form.category.trim() || undefined,
+      category_id: form.category_id || undefined,
       supplier: form.supplier.trim() || undefined,
       purchase_price: Number(form.purchase_price),
       selling_price: sellingPrice,
+      selling_price_wholesale: form.selling_price_wholesale ? Number(form.selling_price_wholesale) : undefined,
+      selling_price_retail: form.selling_price_retail ? Number(form.selling_price_retail) : undefined,
       quantity: Number(form.quantity || 0),
-      alert_threshold: Number(form.alert_threshold || 10),
+      alert_threshold: Number(form.alert_threshold || configLowStockThreshold || 10),
       minimum_stock: form.minimum_stock ? Number(form.minimum_stock) : undefined,
       maximum_stock: form.maximum_stock ? Number(form.maximum_stock) : undefined,
       expiry_date: form.expiry_date || undefined,
       location: form.location.trim() || undefined,
       laboratory: form.laboratory.trim() || undefined,
+      batch_number: form.batch_number.trim() || undefined,
       has_tva: hasTva,
       tva_rate: hasTva ? Number(tvaRate || 0) : 0,
-      pharmacy_id: pharmacy_id,
+      pharmacy_id: effectivePharmacyId || undefined,
     };
 
     return payload;
   };
 
-  const applySuggestedSellingPrice = (type: 'wholesale' | 'retail') => {
-    if (!purchasePrice || purchasePrice <= 0) return;
+  const calculateSuggestedPrice = useCallback((purchasePriceValue: number): number => {
+    if (!purchasePriceValue || purchasePriceValue <= 0) return 0;
 
-    let suggested = purchasePrice;
+    let suggested = purchasePriceValue;
 
     if (autoPricingEnabled) {
       switch (autoPricingMethod) {
         case 'percentage':
-          suggested = purchasePrice * (1 + autoPricingValue / 100);
+          suggested = purchasePriceValue * (1 + autoPricingValue / 100);
           break;
         case 'coefficient':
-          suggested = purchasePrice * autoPricingValue;
+          suggested = purchasePriceValue * autoPricingValue;
           break;
         case 'margin':
-          suggested = purchasePrice / (1 - autoPricingValue / 100);
+          suggested = purchasePriceValue / (1 - autoPricingValue / 100);
           break;
         default:
-          suggested = purchasePrice * (1 + marginPercent / 100);
+          suggested = purchasePriceValue * (1 + marginPercent / 100);
       }
     } else {
-      suggested = purchasePrice * (1 + marginPercent / 100);
+      suggested = purchasePriceValue * (1 + marginPercent / 100);
     }
 
-    const rounded = Number(suggested.toFixed(2));
+    return Number(suggested.toFixed(2));
+  }, [autoPricingEnabled, autoPricingMethod, autoPricingValue, marginPercent]);
+
+  const applySuggestedSellingPrice = useCallback((type: 'wholesale' | 'retail') => {
+    if (!purchasePrice || purchasePrice <= 0) {
+      setError("Veuillez d'abord saisir un prix d'achat.");
+      return;
+    }
+
+    const suggested = calculateSuggestedPrice(purchasePrice);
     
     if (type === 'wholesale') {
-      setField('selling_price_wholesale', String(rounded));
+      setField('selling_price_wholesale', String(suggested));
     } else {
-      setField('selling_price_retail', String(rounded));
+      setField('selling_price_retail', String(suggested));
     }
-  };
+  }, [purchasePrice, calculateSuggestedPrice]);
 
-  const applyRetailPriceFromWholesale = () => {
+  const applyRetailPriceFromWholesale = useCallback(() => {
     if (!sellingPriceWholesale) return;
     const retailPrice = sellingPriceWholesale * 1.2;
     setField('selling_price_retail', String(Number(retailPrice.toFixed(2))));
-  };
+  }, [sellingPriceWholesale]);
 
-  const handleGenerateCode = () => {
-    setField('code', generateProductCode());
-  };
+  const handleGenerateCode = useCallback(() => {
+    const newCode = generateProductCode();
+    setField('code', newCode);
+  }, []);
 
-  const handleCopyBarcodeToCode = () => {
+  const handleGenerateBarcode = useCallback(() => {
+    const newBarcode = generateBarcode();
+    setField('barcode', newBarcode);
+  }, []);
+
+  const handleCopyBarcodeToCode = useCallback(() => {
     if (!form.barcode.trim()) return;
     setField('code', form.barcode.trim());
-  };
+  }, [form.barcode]);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
 
     const validationError = validateForm();
     if (validationError) {
@@ -491,16 +600,19 @@ export default function CreateProductView({
       if (product?.id) {
         const productId = String(product.id);
         await inventoryService.updateProduct(productId, payload);
+        setSuccess('Produit modifié avec succès !');
       } else {
         await inventoryService.createProduct(payload);
+        setSuccess('Produit créé avec succès !');
       }
 
-      onSuccess?.();
-      onClose();
+      setTimeout(() => {
+        onSuccess?.();
+        onClose();
+      }, 1000);
     } catch (err: any) {
-      console.error('Erreur lors de la sauvegarde:', err);
+      console.error('CreateProductView: Erreur lors de la sauvegarde:', err);
 
-      // Afficher les erreurs de validation détaillées
       if (err.response?.data?.detail) {
         const detail = err.response.data.detail;
         if (Array.isArray(detail)) {
@@ -536,12 +648,22 @@ export default function CreateProductView({
     { id: 'advanced', label: 'Avancé', icon: <FileText size={16} /> },
   ];
 
-  // Affichage de la pharmacie (nom ou ID)
-  const pharmacyDisplay = pharmacyName 
-    ? `${pharmacyName}${pharmacyId ? ` (ID: ${pharmacyId.slice(0, 8)}...)` : ''}`
-    : pharmacyId 
-      ? `Pharmacie ID: ${pharmacyId.slice(0, 8)}...` 
+  const pharmacyDisplay = propsPharmacyName 
+    ? `${propsPharmacyName}${effectivePharmacyId ? ` (ID: ${effectivePharmacyId.slice(0, 8)}...)` : ''}`
+    : effectivePharmacyId 
+      ? `Pharmacie ID: ${effectivePharmacyId.slice(0, 8)}...` 
       : 'Pharmacie non spécifiée';
+
+  if (configLoading && !pharmacyConfig && effectivePharmacyId) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+        <div className="flex flex-col items-center gap-4 rounded-3xl bg-white p-8 shadow-2xl">
+          <Loader2 className="h-8 w-8 animate-spin text-sky-600" />
+          <p className="font-bold text-slate-600">Chargement de la configuration...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm md:items-center md:p-4">
@@ -601,7 +723,6 @@ export default function CreateProductView({
         {/* Form */}
         <div className="flex-1 overflow-y-auto bg-slate-50">
           <form onSubmit={handleSubmit} className="space-y-5 p-4 md:p-6">
-            {/* Messages d'erreur */}
             {error && (
               <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
                 <AlertCircle size={18} className="mt-0.5 shrink-0" />
@@ -612,8 +733,18 @@ export default function CreateProductView({
               </div>
             )}
 
+            {success && (
+              <div className="flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50 p-4 text-green-700">
+                <Check size={18} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-black">Succès</p>
+                  <p className="text-sm">{success}</p>
+                </div>
+              </div>
+            )}
+
             {/* Info pharmacie */}
-            {(pharmacyName || pharmacyId) && (
+            {effectivePharmacyId && (
               <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-blue-800">
                 <Store size={18} className="mt-0.5 shrink-0" />
                 <div>
@@ -621,9 +752,11 @@ export default function CreateProductView({
                   <p className="text-sm">
                     Le produit sera créé pour : <span className="font-semibold">{pharmacyDisplay}</span>
                   </p>
-                  <p className="text-xs mt-1 text-blue-600">
-                    Cette information est automatiquement ajoutée lors de la création.
-                  </p>
+                  {pharmacyConfig && (
+                    <p className="mt-1 text-xs text-blue-600">
+                      Configuration chargée depuis la base de données
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -643,19 +776,22 @@ export default function CreateProductView({
             )}
 
             {/* Info type de vente */}
-            {salesType && (
-              <div className="flex items-start gap-3 rounded-2xl border border-purple-200 bg-purple-50 p-4 text-purple-800">
-                <Settings2 size={18} className="mt-0.5 shrink-0" />
-                <div>
-                  <p className="font-black">Type de vente configuré</p>
-                  <p className="text-sm">
-                    {salesType === 'wholesale' && 'Vente en gros uniquement'}
-                    {salesType === 'retail' && 'Vente au détail uniquement'}
-                    {salesType === 'both' && 'Vente en gros et au détail'}
+            <div className="flex items-start gap-3 rounded-2xl border border-purple-200 bg-purple-50 p-4 text-purple-800">
+              <Settings2 size={18} className="mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <p className="font-black">Type de vente configuré</p>
+                <p className="text-sm">
+                  {salesType === 'wholesale' && 'Vente en gros uniquement'}
+                  {salesType === 'retail' && 'Vente au détail uniquement'}
+                  {salesType === 'both' && 'Vente en gros et au détail'}
+                </p>
+                {pharmacyConfig && effectivePharmacyId && (
+                  <p className="mt-1 text-xs text-purple-600">
+                    Configuration chargée depuis la pharmacie
                   </p>
-                </div>
+                )}
               </div>
-            )}
+            </div>
 
             {/* Tab Général */}
             {activeTab === 'general' && (
@@ -671,6 +807,7 @@ export default function CreateProductView({
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
+                    {/* Code produit */}
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Code produit *
@@ -684,14 +821,14 @@ export default function CreateProductView({
                           className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                         />
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
                           onClick={handleGenerateCode}
                           className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
                         >
                           <Sparkles size={14} />
-                          Générer
+                          Générer code
                         </button>
                         <button
                           type="button"
@@ -705,6 +842,7 @@ export default function CreateProductView({
                       </div>
                     </div>
 
+                    {/* Code-barres */}
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Code-barres
@@ -718,8 +856,29 @@ export default function CreateProductView({
                           className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
                         />
                       </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleGenerateBarcode}
+                          className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                        >
+                          <Sparkles size={14} />
+                          Générer code-barres
+                        </button>
+                        {onBarcodeCapture && (
+                          <button
+                            type="button"
+                            onClick={() => onBarcodeCapture((code: string) => setField('barcode', code))}
+                            className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                          >
+                            <Camera size={14} />
+                            Scanner
+                          </button>
+                        )}
+                      </div>
                     </div>
 
+                    {/* Désignation */}
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Désignation *
@@ -732,24 +891,110 @@ export default function CreateProductView({
                       />
                     </div>
 
+                    {/* Catégorie */}
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Catégorie
                       </label>
-                      <div className="relative">
-                        <Type className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input
-                          value={form.category}
-                          onChange={(e) => setField('category', e.target.value)}
-                          placeholder="Médicaments, Parapharmacie, Matériel médical..."
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
-                        />
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Saisissez une catégorie libre (ex: Antidouleurs, Antibiotiques, Vitamines)
-                      </p>
+                      
+                      {!manualCategoryMode ? (
+                        <div className="relative" ref={categoryDropdownRef}>
+                          <div className="relative">
+                            <Type className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <input
+                              value={categorySearch || form.category}
+                              onChange={(e) => {
+                                setCategorySearch(e.target.value);
+                                setShowCategoryDropdown(true);
+                                if (!e.target.value) {
+                                  setField('category', '');
+                                  setField('category_id', '');
+                                }
+                              }}
+                              onFocus={() => setShowCategoryDropdown(true)}
+                              placeholder="Rechercher ou sélectionner une catégorie..."
+                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-10 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
+                              className="absolute right-4 top-1/2 -translate-y-1/2"
+                            >
+                              <ChevronDown size={16} className="text-slate-400" />
+                            </button>
+                          </div>
+                          
+                          {showCategoryDropdown && (
+                            <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                              {categoriesLoading ? (
+                                <div className="p-3 text-center text-sm text-slate-500">
+                                  <Loader2 size={16} className="mx-auto animate-spin" />
+                                  Chargement...
+                                </div>
+                              ) : filteredCategories.length === 0 ? (
+                                <div className="p-3 text-center text-sm text-slate-500">
+                                  Aucune catégorie trouvée
+                                  <button
+                                    type="button"
+                                    onClick={handleManualCategoryToggle}
+                                    className="ml-2 text-sky-600 hover:underline"
+                                  >
+                                    Créer "{categorySearch || 'nouvelle catégorie'}"
+                                  </button>
+                                </div>
+                              ) : (
+                                filteredCategories.map((cat) => (
+                                  <button
+                                    key={cat.id}
+                                    type="button"
+                                    onClick={() => handleCategorySelect(cat)}
+                                    className="flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    <span>{cat.name}</span>
+                                    {form.category_id === String(cat.id) && (
+                                      <Check size={14} className="text-sky-600" />
+                                    )}
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          )}
+                          
+                          <button
+                            type="button"
+                            onClick={handleManualCategoryToggle}
+                            className="mt-2 text-xs text-sky-600 hover:underline"
+                          >
+                            Ou saisir une catégorie personnalisée
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="relative">
+                            <Type className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <input
+                              value={form.category}
+                              onChange={(e) => setField('category', e.target.value)}
+                              placeholder="Saisissez une catégorie personnalisée..."
+                              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-sky-300 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setManualCategoryMode(false);
+                              setField('category', '');
+                              setField('category_id', '');
+                            }}
+                            className="mt-2 text-xs text-sky-600 hover:underline"
+                          >
+                            Sélectionner une catégorie existante
+                          </button>
+                        </div>
+                      )}
                     </div>
 
+                    {/* Description */}
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Description
@@ -763,6 +1008,7 @@ export default function CreateProductView({
                       />
                     </div>
 
+                    {/* Fournisseur */}
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Fournisseur
@@ -778,6 +1024,7 @@ export default function CreateProductView({
                       </div>
                     </div>
 
+                    {/* Laboratoire */}
                     <div className="space-y-2">
                       <label className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
                         Laboratoire
@@ -811,6 +1058,16 @@ export default function CreateProductView({
                         <span className="inline-flex items-center gap-2">
                           <Sparkles size={16} />
                           Générer un code produit
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGenerateBarcode}
+                        className="flex w-full items-center justify-between rounded-2xl bg-slate-100 px-4 py-3 text-left text-sm font-bold text-slate-700 hover:bg-slate-200"
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Sparkles size={16} />
+                          Générer un code-barres
                         </span>
                       </button>
                       <button
@@ -1020,7 +1277,8 @@ export default function CreateProductView({
                         <button
                           type="button"
                           onClick={() => applySuggestedSellingPrice('wholesale')}
-                          className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700"
+                          disabled={!purchasePrice}
+                          className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-bold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Appliquer prix gros
                         </button>
@@ -1029,7 +1287,8 @@ export default function CreateProductView({
                         <button
                           type="button"
                           onClick={() => applySuggestedSellingPrice('retail')}
-                          className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold text-white hover:bg-purple-700"
+                          disabled={!purchasePrice}
+                          className="rounded-xl bg-purple-600 px-4 py-2 text-sm font-bold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Appliquer prix détail
                         </button>
@@ -1044,13 +1303,19 @@ export default function CreateProductView({
                         </button>
                       )}
                     </div>
-                    {autoPricingEnabled && (
+                    {(autoPricingEnabled || marginPercent) && (
                       <div className="mt-3 rounded-xl bg-slate-100 p-3">
                         <p className="text-xs text-slate-600">
-                          Configuration automatique active : 
-                          {autoPricingMethod === 'percentage' && `${autoPricingValue}% de marge`}
-                          {autoPricingMethod === 'coefficient' && `Coefficient ×${autoPricingValue}`}
-                          {autoPricingMethod === 'margin' && `Marge de ${autoPricingValue}%`}
+                          {autoPricingEnabled ? (
+                            <>
+                              Configuration automatique active : 
+                              {autoPricingMethod === 'percentage' && `${autoPricingValue}% de marge`}
+                              {autoPricingMethod === 'coefficient' && `Coefficient ×${autoPricingValue}`}
+                              {autoPricingMethod === 'margin' && `Marge de ${autoPricingValue}%`}
+                            </>
+                          ) : (
+                            <>Marge par défaut : {marginPercent}%</>
+                          )}
                         </p>
                       </div>
                     )}
@@ -1109,7 +1374,7 @@ export default function CreateProductView({
                               Marge brute (gros)
                             </p>
                             <p className="mt-2 text-lg font-black text-emerald-600">
-                              {grossMarginWholesale.toLocaleString()} FG
+                              {grossMarginWholesale.toLocaleString()} {primaryCurrency}
                             </p>
                             <p className="text-sm text-slate-500">
                               {grossMarginPercentWholesale.toFixed(2)}%
@@ -1120,7 +1385,7 @@ export default function CreateProductView({
                               Prix TTC (gros)
                             </p>
                             <p className="mt-2 text-lg font-black text-violet-600">
-                              {sellingPriceWholesaleWithTva.toLocaleString()} FG
+                              {sellingPriceWholesaleWithTva.toLocaleString()} {primaryCurrency}
                             </p>
                           </div>
                         </>
@@ -1132,7 +1397,7 @@ export default function CreateProductView({
                               Marge brute (détail)
                             </p>
                             <p className="mt-2 text-lg font-black text-emerald-600">
-                              {grossMarginRetail.toLocaleString()} FG
+                              {grossMarginRetail.toLocaleString()} {primaryCurrency}
                             </p>
                             <p className="text-sm text-slate-500">
                               {grossMarginPercentRetail.toFixed(2)}%
@@ -1143,7 +1408,7 @@ export default function CreateProductView({
                               Prix TTC (détail)
                             </p>
                             <p className="mt-2 text-lg font-black text-violet-600">
-                              {sellingPriceRetailWithTva.toLocaleString()} FG
+                              {sellingPriceRetailWithTva.toLocaleString()} {primaryCurrency}
                             </p>
                           </div>
                         </>
@@ -1153,7 +1418,7 @@ export default function CreateProductView({
                           Valeur estimée du stock
                         </p>
                         <p className="mt-2 text-lg font-black text-slate-900">
-                          {estimatedStockValue.toLocaleString()} FG
+                          {estimatedStockValue.toLocaleString()} {primaryCurrency}
                         </p>
                       </div>
                     </div>
@@ -1215,7 +1480,7 @@ export default function CreateProductView({
                     <div className="mt-4 space-y-3 text-sm">
                       <div className="rounded-2xl bg-slate-50 p-4">
                         <p className="font-bold text-slate-700">
-                          {pharmacyId ? '✓ Pharmacie ID renseigné' : '• Pharmacie ID manquant'}
+                          {effectivePharmacyId ? '✓ Pharmacie ID renseigné' : '• Pharmacie ID manquant'}
                         </p>
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4">

@@ -1,5 +1,5 @@
-// InventoryList.tsx - Version corrigée
-import { useEffect, useMemo, useState } from 'react';
+// InventoryList.tsx - Version finale avec ID pharmacie obligatoire
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -20,22 +20,28 @@ import {
   List,
   Filter,
   AlertTriangle,
-  FileBarChart2,
-  ClipboardList,
-  Boxes,
   ScanLine,
   Warehouse,
   CircleDollarSign,
   DollarSign,
   Loader2,
-  Settings
+  FileSpreadsheet,
+  FileText,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import Barcode from 'react-barcode';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 
 import { inventoryService } from '@/services/inventoryService';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
-import type { Product, StockStats, Category } from '@/types/inventory.types';
+import type { 
+  Product, 
+  StockStats, 
+  Category, 
+  ImportPreviewResponse,
+  ImportPreviewProduct
+} from '@/types/inventory.types';
 import { SearchInput } from '@/components/SearchInput';
 import { StatCardDetail } from '@/components/StatCardDetail';
 import ProductListView from '@/components/ProductListView';
@@ -49,6 +55,8 @@ import RapportStockView from '@/components/RapportStockView';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 
 type SortDirection = 'asc' | 'desc';
+type ImportMode = 'add' | 'replace' | 'update';
+type DuplicateAction = 'update' | 'keep_both' | 'skip' | 'merge_quantity';
 
 interface SortConfig {
   field: keyof Product;
@@ -73,52 +81,74 @@ interface QuickActionButtonProps {
   loading?: boolean;
 }
 
+// Type pour la prévisualisation d'import (compatible avec ImportPreviewProduct de inventory.types)
+interface ImportPreviewItem {
+  name: string;
+  code?: string;
+  barcode?: string;
+  current_stock: number;
+  purchase_price: number;
+  selling_price: number;
+  expiry_date?: string;
+  category_name?: string;
+  location?: string;
+  supplier?: string;
+  existingProduct?: Product | null;
+  action?: DuplicateAction;
+}
+
+interface ImportPreviewData {
+  products: ImportPreviewItem[];
+  duplicates: ImportPreviewItem[];
+  newProducts: ImportPreviewItem[];
+}
+
 interface InventoryListProps {
-  pharmacyId?: string;
+  pharmacyId: string; // RENDU OBLIGATOIRE - plus de ? optionnel
   tenantId?: string;
 }
 
 // Constantes de configuration
 const DEFAULT_LOW_STOCK_THRESHOLD = 10;
-const DEFAULT_PAGINATION_LIMIT = 100;
+const ITEMS_PER_PAGE = 20;
 
 // Fonctions utilitaires
-function getCategoryName(product: Product): string {
+const getCategoryName = (product: Product): string => {
   if (typeof product.category === 'string') return product.category || 'Sans catégorie';
   if (product.category && typeof product.category === 'object' && 'name' in product.category) {
     return String((product.category as { name?: string }).name ?? 'Sans catégorie');
   }
   return 'Sans catégorie';
-}
+};
 
-function getProductCode(product: Product): string {
+const getProductCode = (product: Product): string => {
   return product.code || product.barcode || 'N/A';
-}
+};
 
-function getBarcodeValue(product: Product): string {
+const getBarcodeValue = (product: Product): string => {
   return product.barcode || product.code || String(product.id);
-}
+};
 
-function isProductExpired(product: Product): boolean {
+const isProductExpired = (product: Product): boolean => {
   if (!product.expiry_date) return false;
   const expiryDate = new Date(product.expiry_date);
   if (isNaN(expiryDate.getTime())) return false;
   return expiryDate < new Date();
-}
+};
 
-function isProductLowStock(product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): boolean {
+const isProductLowStock = (product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): boolean => {
   const quantity = Number(product.quantity ?? 0);
   return quantity > 0 && quantity <= threshold;
-}
+};
 
-function isProductOutOfStock(product: Product): boolean {
+const isProductOutOfStock = (product: Product): boolean => {
   return Number(product.quantity ?? 0) <= 0;
-}
+};
 
-function getStockBadge(product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): {
+const getStockBadge = (product: Product, threshold: number = DEFAULT_LOW_STOCK_THRESHOLD): {
   label: string;
   className: string;
-} {
+} => {
   if (isProductExpired(product)) {
     return {
       label: 'Périmé',
@@ -144,9 +174,9 @@ function getStockBadge(product: Product, threshold: number = DEFAULT_LOW_STOCK_T
     label: 'En stock',
     className: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
   };
-}
+};
 
-function StatCard({ title, value, icon, tone, subtitle, onClick, loading = false }: StatCardProps) {
+const StatCard = ({ title, value, icon, tone, subtitle, onClick, loading = false }: StatCardProps) => {
   const tones = {
     blue: 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-100',
     green: 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-100',
@@ -181,9 +211,9 @@ function StatCard({ title, value, icon, tone, subtitle, onClick, loading = false
       </div>
     </div>
   );
-}
+};
 
-function QuickActionButton({ label, icon, onClick, variant = 'default', loading = false }: QuickActionButtonProps) {
+const QuickActionButton = ({ label, icon, onClick, variant = 'default', loading = false }: QuickActionButtonProps) => {
   const variants = {
     default: 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
     primary: 'bg-sky-600 text-white hover:bg-sky-700 shadow-lg shadow-sky-100',
@@ -203,15 +233,428 @@ function QuickActionButton({ label, icon, onClick, variant = 'default', loading 
       <span className="hidden sm:inline">{label}</span>
     </button>
   );
-}
+};
 
-export default function InventoryList({ pharmacyId, tenantId: _tenantId }: InventoryListProps) {
+// Composant d'import amélioré
+const ImportInventoryModal = ({ 
+  open, 
+  onClose, 
+  onSuccess,
+  pharmacyId 
+}: { 
+  open: boolean; 
+  onClose: () => void; 
+  onSuccess: () => void;
+  pharmacyId: string; // RENDU OBLIGATOIRE
+}) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [importMode, setImportMode] = useState<ImportMode>('add');
+  const [previewData, setPreviewData] = useState<ImportPreviewData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<'select' | 'preview' | 'processing'>('select');
+  const [duplicateAction, setDuplicateAction] = useState<DuplicateAction>('merge_quantity');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = useCallback(async (selectedFile: File) => {
+    setFile(selectedFile);
+    setError(null);
+    setIsLoading(true);
+    
+    try {
+      const response: ImportPreviewResponse = await inventoryService.previewImport(selectedFile);
+      
+      // Convertir la réponse au format attendu par le composant
+      const convertItem = (item: ImportPreviewProduct): ImportPreviewItem => ({
+        name: item.name,
+        code: item.code,
+        barcode: item.barcode,
+        current_stock: item.current_stock ?? 0,
+        purchase_price: item.purchase_price,
+        selling_price: item.selling_price,
+        expiry_date: item.expiry_date,
+        category_name: item.category_name,
+        location: item.location,
+        supplier: item.supplier,
+        existingProduct: item.existingProduct,
+        action: item.action as DuplicateAction | undefined
+      });
+
+      const convertedData: ImportPreviewData = {
+        products: response.products.map(convertItem),
+        duplicates: response.duplicates.map(convertItem),
+        newProducts: response.newProducts.map(convertItem)
+      };
+      
+      setPreviewData(convertedData);
+      setStep('preview');
+    } catch (err) {
+      setError('Erreur lors de la lecture du fichier');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const handleUpdateDuplicateAction = useCallback((productIndex: number, action: DuplicateAction) => {
+    if (!previewData) return;
+    
+    const updatedProducts = [...previewData.products];
+    updatedProducts[productIndex].action = action;
+    
+    setPreviewData({
+      ...previewData,
+      products: updatedProducts
+    });
+  }, [previewData]);
+
+  const handleApplyToAll = useCallback((action: DuplicateAction) => {
+    if (!previewData) return;
+    
+    const updatedProducts = previewData.products.map(product => ({
+      ...product,
+      action: product.existingProduct ? action : undefined
+    }));
+    
+    setPreviewData({
+      ...previewData,
+      products: updatedProducts
+    });
+    
+    setDuplicateAction(action);
+  }, [previewData]);
+
+  const handleConfirmImport = useCallback(async () => {
+    if (!file) return;
+    
+    setIsLoading(true);
+    setStep('processing');
+    setError(null);
+    
+    // Construire les actions pour les doublons
+    const duplicateActions: Record<string, string> = {};
+    if (previewData) {
+      previewData.products.forEach((product, idx) => {
+        if (product.existingProduct && product.action) {
+          duplicateActions[String(idx)] = product.action;
+        }
+      });
+    }
+    
+    try {
+      const result = await inventoryService.importProducts(file, importMode, duplicateActions);
+      
+      if (result.success) {
+        alert(`Importation réussie !\n${result.created || 0} produits créés\n${result.updated || 0} produits mis à jour\n${result.skipped || 0} produits ignorés`);
+        onSuccess();
+        onClose();
+      } else {
+        setError(result.message || 'Erreur lors de l\'importation');
+      }
+    } catch (err) {
+      setError('Erreur lors de l\'importation');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [file, importMode, previewData, onSuccess, onClose]);
+
+  const handleDownloadTemplate = useCallback(async (format: 'excel' | 'csv') => {
+    try {
+      const blob = await inventoryService.getImportTemplate(format);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `import_template.${format === 'excel' ? 'xlsx' : 'csv'}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Erreur téléchargement template:', err);
+      alert('Erreur lors du téléchargement du template');
+    }
+  }, []);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-4xl max-h-[90vh] overflow-auto rounded-[28px] bg-white shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
+              <Upload size={22} />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-slate-900">Importation de produits</h3>
+              <p className="text-sm text-slate-500">
+                Importez vos produits depuis Excel ou CSV
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl p-2 text-slate-400 hover:bg-slate-100"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {step === 'select' && (
+            <>
+              {/* Options d'import */}
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <h4 className="mb-3 font-bold text-slate-800">Mode d'importation</h4>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <button
+                    onClick={() => setImportMode('add')}
+                    className={`rounded-2xl p-4 text-left transition-all ${
+                      importMode === 'add'
+                        ? 'border-2 border-sky-600 bg-sky-50'
+                        : 'border border-slate-200 hover:border-sky-300'
+                    }`}
+                  >
+                    <Plus size={20} className="mb-2 text-sky-600" />
+                    <p className="font-bold text-slate-800">Ajouter</p>
+                    <p className="text-xs text-slate-500">Ignore les doublons</p>
+                  </button>
+                  
+                  <button
+                    onClick={() => setImportMode('update')}
+                    className={`rounded-2xl p-4 text-left transition-all ${
+                      importMode === 'update'
+                        ? 'border-2 border-sky-600 bg-sky-50'
+                        : 'border border-slate-200 hover:border-sky-300'
+                    }`}
+                  >
+                    <Edit2 size={20} className="mb-2 text-amber-600" />
+                    <p className="font-bold text-slate-800">Mettre à jour</p>
+                    <p className="text-xs text-slate-500">Met à jour les existants</p>
+                  </button>
+                  
+                  <button
+                    onClick={() => setImportMode('replace')}
+                    className={`rounded-2xl p-4 text-left transition-all ${
+                      importMode === 'replace'
+                        ? 'border-2 border-sky-600 bg-sky-50'
+                        : 'border border-slate-200 hover:border-sky-300'
+                    }`}
+                  >
+                    <RefreshCw size={20} className="mb-2 text-red-600" />
+                    <p className="font-bold text-slate-800">Remplacer</p>
+                    <p className="text-xs text-slate-500">Remplace les existants</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Téléchargement template */}
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <h4 className="mb-3 font-bold text-slate-800">Télécharger le modèle</h4>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => handleDownloadTemplate('excel')}
+                    className="flex items-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700"
+                  >
+                    <FileSpreadsheet size={18} />
+                    Excel (.xlsx)
+                  </button>
+                  <button
+                    onClick={() => handleDownloadTemplate('csv')}
+                    className="flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+                  >
+                    <FileText size={18} />
+                    CSV (.csv)
+                  </button>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  Le modèle contient les colonnes : nom, code, code-barres, quantité, prix_achat, prix_vente, date_expiration, catégorie, emplacement, fournisseur
+                </p>
+              </div>
+
+              {/* Sélection du fichier */}
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 p-8 text-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+                  className="hidden"
+                />
+                <Upload size={48} className="mx-auto mb-4 text-slate-400" />
+                <p className="mb-2 font-bold text-slate-700">Cliquez pour sélectionner un fichier</p>
+                <p className="text-sm text-slate-500">Formats acceptés : .xlsx, .xls, .csv</p>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="mt-4 rounded-2xl bg-sky-600 px-6 py-2 font-bold text-white hover:bg-sky-700"
+                >
+                  Choisir un fichier
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === 'preview' && previewData && (
+            <div className="space-y-4">
+              {/* Résumé */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl bg-emerald-50 p-4 text-center">
+                  <p className="text-2xl font-black text-emerald-700">{previewData.newProducts.length}</p>
+                  <p className="text-sm text-emerald-600">Nouveaux produits</p>
+                </div>
+                <div className="rounded-2xl bg-amber-50 p-4 text-center">
+                  <p className="text-2xl font-black text-amber-700">{previewData.duplicates.length}</p>
+                  <p className="text-sm text-amber-600">Doublons détectés</p>
+                </div>
+                <div className="rounded-2xl bg-slate-100 p-4 text-center">
+                  <p className="text-2xl font-black text-slate-700">{previewData.products.length}</p>
+                  <p className="text-sm text-slate-600">Total lignes</p>
+                </div>
+              </div>
+
+              {/* Actions pour les doublons */}
+              {previewData.duplicates.length > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <h4 className="mb-3 font-bold text-amber-800">Gestion des doublons</h4>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => handleApplyToAll('update')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-bold transition-all ${
+                        duplicateAction === 'update' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700'
+                      }`}
+                    >
+                      Tout mettre à jour
+                    </button>
+                    <button
+                      onClick={() => handleApplyToAll('merge_quantity')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-bold transition-all ${
+                        duplicateAction === 'merge_quantity' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700'
+                      }`}
+                    >
+                      Fusionner quantités
+                    </button>
+                    <button
+                      onClick={() => handleApplyToAll('keep_both')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-bold transition-all ${
+                        duplicateAction === 'keep_both' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700'
+                      }`}
+                    >
+                      Garder les deux
+                    </button>
+                    <button
+                      onClick={() => handleApplyToAll('skip')}
+                      className={`rounded-xl px-3 py-1.5 text-sm font-bold transition-all ${
+                        duplicateAction === 'skip' ? 'bg-amber-600 text-white' : 'bg-white text-amber-700'
+                      }`}
+                    >
+                      Ignorer
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Aperçu des données */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Nom</th>
+                      <th className="px-3 py-2 text-left">Code</th>
+                      <th className="px-3 py-2 text-right">Qté</th>
+                      <th className="px-3 py-2 text-right">Prix achat</th>
+                      <th className="px-3 py-2 text-right">Prix vente</th>
+                      <th className="px-3 py-2 text-left">Expiration</th>
+                      <th className="px-3 py-2 text-left">Statut</th>
+                      <th className="px-3 py-2 text-left">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {previewData.products.slice(0, 10).map((product, idx) => (
+                      <tr key={idx} className={product.existingProduct ? 'bg-amber-50/50' : ''}>
+                        <td className="px-3 py-2 font-medium">{product.name}</td>
+                        <td className="px-3 py-2 text-slate-500">{product.code || '-'}</td>
+                        <td className="px-3 py-2 text-right font-bold">{product.current_stock}</td>
+                        <td className="px-3 py-2 text-right">{product.purchase_price} FC</td>
+                        <td className="px-3 py-2 text-right">{product.selling_price} FC</td>
+                        <td className="px-3 py-2">{product.expiry_date || '-'}</td>
+                        <td className="px-3 py-2">
+                          {product.existingProduct ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+                              Existant
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">
+                              Nouveau
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {product.existingProduct && (
+                            <select
+                              value={product.action || duplicateAction}
+                              onChange={(e) => handleUpdateDuplicateAction(idx, e.target.value as DuplicateAction)}
+                              className="rounded-xl border border-slate-200 px-2 py-1 text-xs"
+                            >
+                              <option value="update">Mettre à jour</option>
+                              <option value="merge_quantity">Fusionner qté</option>
+                              <option value="keep_both">Garder les deux</option>
+                              <option value="skip">Ignorer</option>
+                            </select>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {previewData.products.length > 10 && (
+                  <p className="mt-2 text-center text-sm text-slate-500">
+                    et {previewData.products.length - 10} autres produits...
+                  </p>
+                )}
+              </div>
+
+              {error && (
+                <div className="rounded-2xl bg-red-50 p-4 text-red-700">
+                  {error}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setStep('select')}
+                  className="rounded-2xl border border-slate-200 px-6 py-2 font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Retour
+                </button>
+                <button
+                  onClick={handleConfirmImport}
+                  disabled={isLoading}
+                  className="rounded-2xl bg-sky-600 px-6 py-2 font-bold text-white hover:bg-sky-700 disabled:opacity-50"
+                >
+                  {isLoading ? 'Importation...' : "Confirmer l'import"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 'processing' && (
+            <div className="py-12 text-center">
+              <Loader2 size={48} className="mx-auto mb-4 animate-spin text-sky-600" />
+              <p className="font-bold text-slate-800">Importation en cours...</p>
+              <p className="text-sm text-slate-500">Veuillez patienter</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default function InventoryList({ pharmacyId }: InventoryListProps) {
   const queryClient = useQueryClient();
   const isMobile = useMediaQuery('(max-width: 768px)');
   
   // Récupération de la configuration de la pharmacie
   const { 
-    config, 
     isLoading: configLoading,
     formatPrice, 
     primaryCurrency,
@@ -224,17 +667,21 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
+  const [stockStatusFilter, setStockStatusFilter] = useState<string>('all');
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [isScanning, setIsScanning] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(isMobile ? 'grid' : 'list');
   const [showFilters, setShowFilters] = useState(false);
-  const [currentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // États des modaux
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showProductList, setShowProductList] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [showAchatModal, setShowAchatModal] = useState(false);
   const [showApproModal, setShowApproModal] = useState(false);
   const [showInitialStockModal, setShowInitialStockModal] = useState(false);
@@ -245,7 +692,6 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     title: string;
     data: any;
   } | null>(null);
-  const [showConfigModal, setShowConfigModal] = useState(false);
 
   // États pour le scanner
   const [barcodeToCreate, setBarcodeToCreate] = useState<string>('');
@@ -256,7 +702,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     setViewMode(isMobile ? 'grid' : 'list');
   }, [isMobile]);
 
-  // Query: Récupération des produits
+  // Query: Récupération des produits avec pagination
   const {
     data: productsData,
     isLoading: productsLoading,
@@ -264,15 +710,17 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     error: productsError,
     isFetching,
   } = useQuery({
-    queryKey: ['inventory-products', pharmacyId, searchTerm, selectedCategory, selectedLocation, currentPage],
+    queryKey: ['inventory-products', pharmacyId, searchTerm, selectedCategory, selectedLocation, stockStatusFilter, currentPage],
     queryFn: () =>
       inventoryService.getProducts({
         search: searchTerm || undefined,
         category: selectedCategory !== 'all' ? selectedCategory : undefined,
         location: selectedLocation !== 'all' ? selectedLocation : undefined,
-        skip: (currentPage - 1) * DEFAULT_PAGINATION_LIMIT,
-        limit: DEFAULT_PAGINATION_LIMIT,
+        stock_status: stockStatusFilter !== 'all' ? stockStatusFilter : undefined,
+        skip: (currentPage - 1) * ITEMS_PER_PAGE,
+        limit: ITEMS_PER_PAGE,
         include_sales_stats: true,
+        pharmacy_id: pharmacyId,
       }),
     staleTime: 5 * 60 * 1000,
     enabled: !!pharmacyId,
@@ -286,12 +734,27 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     enabled: !!pharmacyId,
   });
 
-  // Query: Récupération des catégories - CORRIGÉE
+  // Query: Récupération des catégories existantes
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ['inventory-categories', pharmacyId],
     queryFn: async () => {
       const response = await inventoryService.getCategories({ skip: 0, limit: 100 });
       return response.categories;
+    },
+    staleTime: 10 * 60 * 1000,
+    enabled: true,
+  });
+
+  // Query: Récupération des emplacements uniques
+  const { data: locations = [] } = useQuery<string[]>({
+    queryKey: ['inventory-locations', pharmacyId],
+    queryFn: async () => {
+      const products = await inventoryService.getProducts({ limit: 1000, pharmacy_id: pharmacyId });
+      const uniqueLocations = new Set<string>();
+      products.products.forEach(p => {
+        if (p.location) uniqueLocations.add(p.location);
+      });
+      return Array.from(uniqueLocations);
     },
     staleTime: 10 * 60 * 1000,
     enabled: true,
@@ -304,10 +767,28 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
       await queryClient.invalidateQueries({ queryKey: ['inventory-products'] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
       await queryClient.invalidateQueries({ queryKey: ['inventory-categories'] });
+      setSelectedProducts(new Set());
     },
     onError: (error) => {
       console.error('Erreur suppression produit:', error);
       alert('Erreur lors de la suppression du produit.');
+    },
+  });
+
+  // Mutation: Suppression multiple
+  const deleteMultipleMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.allSettled(ids.map(id => inventoryService.deleteProduct(id)));
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['inventory-products'] });
+      await queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
+      setSelectedProducts(new Set());
+      alert('Produits supprimés avec succès');
+    },
+    onError: (error) => {
+      console.error('Erreur suppression multiple:', error);
+      alert('Erreur lors de la suppression des produits');
     },
   });
 
@@ -332,7 +813,6 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
       async (decodedText: string) => {
         if (!mounted) return;
 
-        // Rechercher le produit par code-barres ou code
         const found = await inventoryService.findProductByCodeOrBarcode(decodedText);
 
         if (found) {
@@ -364,12 +844,9 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
   }, [isScanning]);
 
   // Traitement des données
-  const products = useMemo(() => {
-    if (!productsData?.products) return [];
-    return productsData.products;
-  }, [productsData]);
-
-  const totalProducts = productsData?.total || products.length;
+  const products = useMemo(() => productsData?.products ?? [], [productsData]);
+  const totalProducts = productsData?.total || 0;
+  const totalPages = Math.ceil(totalProducts / ITEMS_PER_PAGE);
 
   // Tri des produits
   const sortedProducts = useMemo(() => {
@@ -385,15 +862,13 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
         return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
       }
 
-      const aText =
-        sortConfig.field === 'category'
-          ? getCategoryName(a)
-          : String(aValue ?? '').toLowerCase();
+      const aText = sortConfig.field === 'category'
+        ? getCategoryName(a)
+        : String(aValue ?? '').toLowerCase();
 
-      const bText =
-        sortConfig.field === 'category'
-          ? getCategoryName(b)
-          : String(bValue ?? '').toLowerCase();
+      const bText = sortConfig.field === 'category'
+        ? getCategoryName(b)
+        : String(bValue ?? '').toLowerCase();
 
       return sortConfig.direction === 'asc'
         ? aText.localeCompare(bText)
@@ -403,48 +878,84 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     return cloned;
   }, [products, sortConfig]);
 
-  // Produits affichés selon le mode
-  const displayedProducts = useMemo(() => {
-    if (viewMode === 'grid') return sortedProducts.slice(0, 12);
-    return sortedProducts.slice(0, 10);
-  }, [sortedProducts, viewMode]);
-
   // Calcul des statistiques locales
   const inventoryHighlights = useMemo(() => {
     const threshold = lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD;
-    const total = products.length;
-    const low = products.filter(p => isProductLowStock(p, threshold)).length;
-    const expired = products.filter(isProductExpired).length;
-    const rupture = products.filter(isProductOutOfStock).length;
-
-    return { total, low, expired, rupture };
+    return {
+      total: products.length,
+      low: products.filter(p => isProductLowStock(p, threshold)).length,
+      expired: products.filter(isProductExpired).length,
+      rupture: products.filter(isProductOutOfStock).length,
+    };
   }, [products, lowStockThreshold]);
 
-  // Calcul des valeurs financières - CORRIGÉ avec les bonnes propriétés
+  // Calcul des valeurs financières
   const totalSelling = Number((stats as any)?.total_value_selling ?? stats?.total_selling_value ?? 0);
   const totalPurchase = Number((stats as any)?.total_value_purchase ?? stats?.total_purchase_value ?? 0);
   const potentialMargin = totalSelling - totalPurchase;
 
   // Handlers
-  const handleSort = (field: keyof Product) => {
+  const handleSort = useCallback((field: keyof Product) => {
     setSortConfig((prev) => {
       if (prev?.field === field) {
-        return {
-          field,
-          direction: prev.direction === 'asc' ? 'desc' : 'asc',
-        };
+        return { field, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
       }
       return { field, direction: 'asc' };
     });
-  };
+  }, []);
 
-  const handleDelete = (id: string) => {
+  const handleSelectProduct = useCallback((productId: string, checked: boolean) => {
+    setSelectedProducts(prev => {
+      const newSet = new Set(prev);
+      if (checked) {
+        newSet.add(productId);
+      } else {
+        newSet.delete(productId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked) {
+      setSelectedProducts(new Set(sortedProducts.map(p => String(p.id))));
+    } else {
+      setSelectedProducts(new Set());
+    }
+  }, [sortedProducts]);
+
+  const handleDeleteSelected = useCallback(() => {
+    if (selectedProducts.size === 0) {
+      alert('Aucun produit sélectionné');
+      return;
+    }
+    const confirmed = window.confirm(`Êtes-vous sûr de vouloir supprimer ${selectedProducts.size} produit(s) ?`);
+    if (!confirmed) return;
+    deleteMultipleMutation.mutate(Array.from(selectedProducts));
+  }, [selectedProducts, deleteMultipleMutation]);
+
+  const handleDelete = useCallback((id: string) => {
     const confirmed = window.confirm('Êtes-vous sûr de vouloir supprimer ce produit ?');
     if (!confirmed) return;
     deleteMutation.mutate(id);
-  };
+  }, [deleteMutation]);
 
-  const handlePrintLabel = (product: Product) => {
+  const handleEditProduct = useCallback((product: Product) => {
+    // Préparer les données pour l'édition
+    const editInitialValues = {
+      ...product,
+      category: typeof product.category === 'object' && product.category !== null
+        ? product.category.name || ''
+        : product.category || '',
+      category_id: typeof product.category === 'object' && product.category !== null
+        ? (product.category as any).id
+        : product.category_id
+    };
+    setSelectedProduct(editInitialValues as Product);
+    setShowEditModal(true);
+  }, []);
+
+  const handlePrintLabel = useCallback((product: Product) => {
     const printWindow = window.open('', '_blank', 'width=500,height=400');
     if (!printWindow) return;
 
@@ -520,28 +1031,14 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     `);
 
     printWindow.document.close();
-  };
+  }, [formatPrice]);
 
-  const handleImport = async (file: File) => {
-    try {
-      const result = await inventoryService.importProducts(file, 'add');
-      alert(result?.message || 'Importation effectuée avec succès.');
-
-      await queryClient.invalidateQueries({ queryKey: ['inventory-products'] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
-      await queryClient.invalidateQueries({ queryKey: ['inventory-categories'] });
-    } catch (error) {
-      console.error('Erreur import:', error);
-      alert("Erreur lors de l'importation.");
-    }
-  };
-
-  const handleCreateFromBarcode = () => {
+  const handleCreateFromBarcode = useCallback(() => {
     setShowBarcodeCreateChoice(false);
     setShowAddModal(true);
-  };
+  }, []);
 
-  const handleStatCardClick = (type: 'value' | 'margin' | 'lowstock' | 'expired' | 'purchase', title: string) => {
+  const handleStatCardClick = useCallback((type: 'value' | 'margin' | 'lowstock' | 'expired' | 'purchase', title: string) => {
     let data: any = {};
 
     switch (type) {
@@ -585,7 +1082,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
     }
 
     setShowStatDetail({ type, title, data });
-  };
+  }, [totalPurchase, totalSelling, potentialMargin, stats, primaryCurrency, categories, products, lowStockThreshold]);
 
   // États de chargement
   const isLoading = productsLoading || statsLoading || configLoading;
@@ -702,14 +1199,19 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
         {/* Barre d'actions */}
         <div className="rounded-[30px] border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap gap-3 items-center">
-            <SearchInput
-              value={searchTerm}
-              onChange={setSearchTerm}
-              onSelect={setSelectedProduct}
-              products={products}
-              placeholder="Rechercher par nom, code, fournisseur..."
-              pharmacyId={pharmacyId}
-            />
+            <div className="flex-1 min-w-50">
+              <SearchInput
+                value={searchTerm}
+                onChange={setSearchTerm}
+                onSelect={(product) => {
+                  setSelectedProduct(product);
+                  setShowApproModal(true);
+                }}
+                products={products}
+                placeholder="Rechercher par nom, code, fournisseur..."
+                pharmacyId={pharmacyId}
+              />
+            </div>
 
             <div className="flex flex-wrap gap-2">
               <QuickActionButton
@@ -739,10 +1241,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
               <QuickActionButton
                 label="Importer"
                 icon={<Upload size={16} />}
-                onClick={() => {
-                  const input = document.getElementById('inventory-import-input') as HTMLInputElement | null;
-                  input?.click();
-                }}
+                onClick={() => setShowImportModal(true)}
               />
               <QuickActionButton
                 label="Exporter"
@@ -750,46 +1249,40 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                 onClick={() => setShowExportModal(true)}
               />
               <QuickActionButton
-                label="Mouvements"
-                icon={<ClipboardList size={16} />}
-                onClick={() => setShowMouvementsModal(true)}
-              />
-              <QuickActionButton
-                label="Rapport"
-                icon={<FileBarChart2 size={16} />}
-                onClick={() => setShowRapportModal(true)}
-              />
-              <QuickActionButton
                 label="Scanner"
                 icon={<ScanLine size={16} />}
                 onClick={() => setIsScanning(true)}
               />
-              <QuickActionButton
-                label="Config"
-                icon={<Settings size={16} />}
-                onClick={() => setShowConfigModal(true)}
-              />
             </div>
           </div>
 
-          <input
-            id="inventory-import-input"
-            hidden
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleImport(file);
-              e.currentTarget.value = '';
-            }}
-          />
+          {/* Sélection multiple */}
+          {selectedProducts.size > 0 && (
+            <div className="mt-3 flex items-center gap-3 rounded-2xl bg-sky-50 p-3">
+              <span className="text-sm font-bold text-sky-700">
+                {selectedProducts.size} produit(s) sélectionné(s)
+              </span>
+              <button
+                onClick={handleDeleteSelected}
+                className="rounded-xl bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700"
+              >
+                Supprimer
+              </button>
+              <button
+                onClick={() => setSelectedProducts(new Set())}
+                className="rounded-xl bg-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-300"
+              >
+                Annuler
+              </button>
+            </div>
+          )}
 
           {/* Filtres */}
           <div className="mt-4 flex flex-wrap gap-2">
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={`rounded-2xl px-4 py-2.5 text-sm font-bold transition-colors ${
-                showFilters || selectedCategory !== 'all' || selectedLocation !== 'all'
+                showFilters || selectedCategory !== 'all' || selectedLocation !== 'all' || stockStatusFilter !== 'all'
                   ? 'bg-sky-600 text-white'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
@@ -817,16 +1310,6 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
               <span className="inline-flex items-center gap-2">
                 <Eye size={16} />
                 Tout voir ({totalProducts})
-              </span>
-            </button>
-
-            <button
-              onClick={() => setShowInitialStockModal(true)}
-              className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-200"
-            >
-              <span className="inline-flex items-center gap-2">
-                <Boxes size={16} />
-                Stock initial
               </span>
             </button>
 
@@ -865,13 +1348,14 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
               >
                 <option value="all">Tous les emplacements</option>
-                <option value="principal">Principal</option>
-                <option value="reserve">Réserve</option>
+                {locations.map((loc) => (
+                  <option key={loc} value={loc}>{loc}</option>
+                ))}
               </select>
 
               <select
-                value="all"
-                onChange={() => {}}
+                value={stockStatusFilter}
+                onChange={(e) => setStockStatusFilter(e.target.value)}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-sky-100"
               >
                 <option value="all">État du stock : tous</option>
@@ -913,12 +1397,6 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                 <Clock size={14} />
                 {inventoryHighlights.rupture} ruptures
               </span>
-              {primaryCurrency && (
-                <span className="inline-flex items-center gap-2 rounded-full bg-purple-100 px-3 py-1 text-purple-700">
-                  <DollarSign size={14} />
-                  {primaryCurrency}
-                </span>
-              )}
             </div>
           </div>
 
@@ -927,6 +1405,14 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
               <table className="w-full min-w-200">
                 <thead className="border-b border-slate-100 bg-white">
                   <tr>
+                    <th className="px-3 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selectedProducts.size === sortedProducts.length && sortedProducts.length > 0}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </th>
                     <th className="px-3 py-3 text-left text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">#</th>
                     <th className="px-3 py-3 text-left text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 cursor-pointer hover:text-sky-600" onClick={() => handleSort('name')}>
                       Produit {sortConfig?.field === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
@@ -954,21 +1440,32 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {displayedProducts.map((product, index) => {
+                  {sortedProducts.map((product, index) => {
                     const lowStock = isProductLowStock(product, lowStockThreshold);
                     const expired = isProductExpired(product);
                     const outOfStock = isProductOutOfStock(product);
                     const badge = getStockBadge(product, lowStockThreshold);
                     const profit = (product.selling_price - product.purchase_price) * product.quantity;
+                    const isSelected = selectedProducts.has(String(product.id));
 
                     return (
                       <tr
                         key={String(product.id)}
                         className={`transition-colors hover:bg-sky-50/40 ${
+                          isSelected ? 'bg-sky-50' : ''
+                        } ${
                           expired ? 'bg-red-50/50' : outOfStock ? 'bg-red-50/30' : lowStock ? 'bg-amber-50/40' : 'bg-white'
                         }`}
                       >
-                        <td className="px-3 py-3 text-sm font-bold text-slate-500">{index + 1}</td>
+                        <td className="px-3 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => handleSelectProduct(String(product.id), e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-sm font-bold text-slate-500">{index + 1 + (currentPage - 1) * ITEMS_PER_PAGE}</td>
 
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-3">
@@ -1046,7 +1543,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                               className="rounded-xl bg-blue-600 p-2 text-white hover:bg-blue-700"
                               title="Mouvements"
                             >
-                              <ClipboardList size={14} />
+                              <Package size={14} />
                             </button>
 
                             <button
@@ -1058,7 +1555,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                             </button>
 
                             <button
-                              onClick={() => setSelectedProduct(product)}
+                              onClick={() => handleEditProduct(product)}
                               className="rounded-xl bg-slate-700 p-2 text-white hover:bg-slate-800"
                               title="Modifier"
                             >
@@ -1082,16 +1579,19 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-3 xl:grid-cols-5">
-              {displayedProducts.map((product) => {
+              {sortedProducts.map((product) => {
                 const lowStock = isProductLowStock(product, lowStockThreshold);
                 const expired = isProductExpired(product);
                 const outOfStock = isProductOutOfStock(product);
                 const badge = getStockBadge(product, lowStockThreshold);
+                const isSelected = selectedProducts.has(String(product.id));
 
                 return (
                   <div
                     key={String(product.id)}
-                    className={`rounded-3xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg ${
+                    className={`relative rounded-3xl border p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg ${
+                      isSelected ? 'border-sky-400 ring-2 ring-sky-400' : ''
+                    } ${
                       expired
                         ? 'border-red-200 bg-red-50/40'
                         : outOfStock
@@ -1101,7 +1601,15 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                           : 'border-slate-200 bg-white'
                     }`}
                   >
-                    <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="absolute top-2 left-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => handleSelectProduct(String(product.id), e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                    </div>
+                    <div className="mb-3 flex items-start justify-between gap-3 pt-4">
                       <div className="min-w-0">
                         <p className="truncate text-xs font-black uppercase tracking-[0.15em] text-slate-400">
                           {getProductCode(product)}
@@ -1170,13 +1678,10 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
                         Étiquette
                       </button>
                       <button
-                        onClick={() => {
-                          setSelectedProduct(product);
-                          setShowMouvementsModal(true);
-                        }}
-                        className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                        onClick={() => handleEditProduct(product)}
+                        className="rounded-xl bg-slate-700 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
                       >
-                        Mouv.
+                        Modifier
                       </button>
                       <button
                         onClick={() => handleDelete(String(product.id))}
@@ -1203,13 +1708,27 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
             </div>
           )}
 
-          {sortedProducts.length > displayedProducts.length && (
-            <div className="border-t border-slate-100 px-4 py-4">
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
               <button
-                onClick={() => setShowProductList(true)}
-                className="w-full rounded-2xl bg-slate-50 py-3 text-sm font-black text-sky-600 transition-colors hover:bg-sky-50"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-600 disabled:opacity-50"
               >
-                Voir tous les produits ({sortedProducts.length})
+                <ChevronLeft size={16} />
+                Précédent
+              </button>
+              <span className="text-sm text-slate-600">
+                Page {currentPage} sur {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="flex items-center gap-1 rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-600 disabled:opacity-50"
+              >
+                Suivant
+                <ChevronRight size={16} />
               </button>
             </div>
           )}
@@ -1306,6 +1825,28 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
           />
         )}
 
+        {showEditModal && selectedProduct && (
+          <CreateProductView
+            open={showEditModal}
+            onClose={() => {
+              setShowEditModal(false);
+              setSelectedProduct(null);
+            }}
+            onSuccess={() => {
+              refetch();
+              setShowEditModal(false);
+              setSelectedProduct(null);
+            }}
+            initialValues={{
+              ...selectedProduct,
+              category: typeof selectedProduct.category === 'object' && selectedProduct.category !== null
+                ? selectedProduct.category.name || ''
+                : selectedProduct.category || ''
+            }}
+            pharmacyId={pharmacyId}
+          />
+        )}
+
         {showProductList && (
           <ProductListView
             open={showProductList}
@@ -1327,6 +1868,18 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
               search: searchTerm,
               category: selectedCategory !== 'all' ? selectedCategory : undefined,
             }}
+          />
+        )}
+
+        {showImportModal && (
+          <ImportInventoryModal
+            open={showImportModal}
+            onClose={() => setShowImportModal(false)}
+            onSuccess={() => {
+              refetch();
+              setShowImportModal(false);
+            }}
+            pharmacyId={pharmacyId}
           />
         )}
 
@@ -1365,6 +1918,7 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
               refetch();
               setShowInitialStockModal(false);
             }}
+            pharmacyId={pharmacyId}
           />
         )}
 
@@ -1397,115 +1951,6 @@ export default function InventoryList({ pharmacyId, tenantId: _tenantId }: Inven
             onClose={() => setShowStatDetail(null)}
             pharmacyId={pharmacyId}
           />
-        )}
-
-        {showConfigModal && config && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-2xl rounded-[28px] bg-white p-6 shadow-2xl">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 text-sky-600">
-                    <Settings size={22} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-900">Configuration du stock</h3>
-                    <p className="text-sm text-slate-500">
-                      Paramètres de gestion d'inventaire
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowConfigModal(false)}
-                  className="rounded-xl p-2 text-slate-400 hover:bg-slate-100"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <h4 className="mb-3 font-bold text-slate-800">Seuils d'alerte</h4>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Stock faible (quantité)</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Alerte expiration (jours)</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {expiryWarningDays ?? 30} jours
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <h4 className="mb-3 font-bold text-slate-800">Configuration financière</h4>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Devise principale</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {primaryCurrency || 'CDF'}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Taux TVA</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {taxRate ?? 0}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <h4 className="mb-3 font-bold text-slate-800">Méthodes de calcul</h4>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Prix de vente</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {config?.automaticPricing?.enabled ? 'Auto (marge fixe)' : 'Manuel'}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Marge par défaut</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {config?.marginConfig?.defaultMargin ?? 25}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <h4 className="mb-3 font-bold text-slate-800">Horaires de service</h4>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Ouverture</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {config?.workingHours?.startTime || '08:00'}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-600">Fermeture</label>
-                      <div className="rounded-2xl bg-slate-100 px-4 py-3 font-mono font-bold">
-                        {config?.workingHours?.endTime || '20:00'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={() => setShowConfigModal(false)}
-                  className="rounded-2xl bg-slate-100 px-6 py-3 font-bold text-slate-700 hover:bg-slate-200"
-                >
-                  Fermer
-                </button>
-              </div>
-            </div>
-          </div>
         )}
       </div>
     </div>

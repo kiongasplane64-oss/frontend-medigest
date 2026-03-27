@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 interface Product {
   id: string;
   name: string;
-  price: number;
+  price: number;      // Prix unitaire
   quantity: number;
   code?: string;
 }
@@ -210,7 +210,7 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
 
   const displayPrice = (price: number, currencyCode: string = primaryCurrency): string => {
     const currency = currencies.find(c => c.code === currencyCode);
-    if (!currency) return `${price} ${currencyCode}`;
+    if (!currency) return `${price.toFixed(2)} ${currencyCode}`;
     
     const convertedPrice = price / currency.exchangeRate;
     return `${currency.symbol} ${convertedPrice.toFixed(2)}`;
@@ -219,7 +219,7 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
   const getPaymentMethodLabel = (method: string): string => {
     switch (method) {
       case 'cash': return 'Espèces';
-      case 'mobile': return 'Mobile Money';
+      case 'mobile_money': return 'Mobile Money';
       case 'account': return 'Compte Client';
       default: return method;
     }
@@ -260,7 +260,7 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
         </div>
       </div>
 
-      {/* QR Code avec icône */}
+      {/* QR Code */}
       {qrCodeDataUrl && showQrCode && (
         <div className="flex flex-col items-center justify-center my-3">
           <div className="relative">
@@ -270,15 +270,12 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
               className="qr-code"
               style={{ width: '70px', height: '70px' }}
             />
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <QrCode size={20} className="text-gray-500 opacity-50" />
-            </div>
           </div>
           <p className="text-[8px] text-gray-400 mt-1">Scannez pour les détails</p>
         </div>
       )}
 
-      {/* Bouton pour masquer/afficher le QR code (uniquement dans la modale) */}
+      {/* Bouton pour masquer/afficher le QR code */}
       <div className="flex justify-end mb-2 print:hidden">
         <button
           onClick={() => setShowQrCode(!showQrCode)}
@@ -343,10 +340,6 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       <div className="text-center text-xs border-t border-dashed border-gray-300 pt-3 mt-3">
         <p>Merci de votre visite !</p>
         <p>Retour possible sous 30 jours</p>
-        <p className="mt-1 text-[10px] flex items-center justify-center gap-1">
-          <QrCode size={10} />
-          Scannez le QR pour voir les détails
-        </p>
       </div>
     </div>
   );
@@ -354,7 +347,7 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white shadow-2xl">
-        {/* En-tête modal avec icône QR */}
+        {/* En-tête modal */}
         <div className="border-b border-slate-100 p-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

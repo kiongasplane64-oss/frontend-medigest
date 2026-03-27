@@ -1,3 +1,4 @@
+// components/ui/Card.tsx
 import { HTMLAttributes, forwardRef } from 'react';
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
@@ -25,7 +26,7 @@ export const CardHeader = forwardRef<HTMLDivElement, CardProps>(
     return (
       <div
         ref={ref}
-        className={`border-b border-slate-100 p-6 ${className}`}
+        className={`flex flex-col space-y-1.5 p-6 ${className}`}
         {...props}
       >
         {children}
@@ -41,7 +42,7 @@ export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadi
     return (
       <h3
         ref={ref}
-        className={`text-lg font-bold text-slate-800 ${className}`}
+        className={`text-lg font-semibold leading-none tracking-tight text-slate-800 ${className}`}
         {...props}
       >
         {children}
@@ -52,12 +53,28 @@ export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadi
 
 CardTitle.displayName = 'CardTitle';
 
+export const CardDescription = forwardRef<HTMLParagraphElement, HTMLAttributes<HTMLParagraphElement>>(
+  ({ className = '', children, ...props }, ref) => {
+    return (
+      <p
+        ref={ref}
+        className={`text-sm text-slate-500 ${className}`}
+        {...props}
+      >
+        {children}
+      </p>
+    );
+  }
+);
+
+CardDescription.displayName = 'CardDescription';
+
 export const CardContent = forwardRef<HTMLDivElement, CardProps>(
   ({ className = '', children, ...props }, ref) => {
     return (
       <div
         ref={ref}
-        className={`p-6 ${className}`}
+        className={`p-6 pt-0 ${className}`}
         {...props}
       >
         {children}
@@ -73,7 +90,7 @@ export const CardFooter = forwardRef<HTMLDivElement, CardProps>(
     return (
       <div
         ref={ref}
-        className={`border-t border-slate-100 p-6 ${className}`}
+        className={`flex items-center p-6 pt-0 ${className}`}
         {...props}
       >
         {children}

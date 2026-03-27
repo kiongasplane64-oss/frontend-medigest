@@ -11,6 +11,6 @@ export interface StockTransfer {
 }
 
 export const getTransfers = async (): Promise<StockTransfer[]> => {
-  const { data } = await api.get('/endpoints/transfers');
+  const { data } = await api.get('/transfers');
   return data;
 };

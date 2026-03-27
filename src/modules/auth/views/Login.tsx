@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAuthRedirect } from '@/hooks/useAuthRedirect';
 import api from '@/api/client';
-import { normalizeUser, LoginResponse} from '@/types/auth';
+import { normalizeUser, LoginResponse } from '@/types/auth';
 import {
   Lock,
   Mail,
@@ -19,11 +19,30 @@ import {
   EyeOff,
   WifiOff,
   RefreshCw,
-  X
+  X,
+  Clock
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 type AuthMode = 'login' | 'forgot_password' | 'confirm_reset';
+
+interface ServiceStatus {
+  in_service: boolean;
+  restrictions_enabled: boolean;
+  current_time_utc: string;
+  current_time_local: string;
+  timezone: string;
+  current_day: string;
+  is_working_day: boolean;
+  is_within_hours: boolean;
+  working_hours: {
+    start: string;
+    end: string;
+    overtime?: string;
+  };
+  message: string;
+  next_service_time?: string;
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -52,6 +71,11 @@ export default function Login() {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
+  
+  // État pour le modal d'alerte hors service
+  const [showOutOfServiceModal, setShowOutOfServiceModal] = useState(false);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [pendingUserData, setPendingUserData] = useState<{ user: any; token: string } | null>(null);
 
   // Vérifier si déjà authentifié au chargement
   useEffect(() => {
@@ -63,6 +87,62 @@ export default function Login() {
       console.log('✅ Utilisateur déjà authentifié');
     }
   }, [isAuthenticated, user]);
+
+  /**
+   * Vérifie si la pharmacie est en service avant de rediriger
+   */
+  const checkServiceStatusAndRedirect = async (pharmacyId: string, userData: any, token: string) => {
+    try {
+      console.log('🔍 Vérification du statut de service pour:', pharmacyId);
+      
+      const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
+      const status = response.data;
+      
+      setServiceStatus(status);
+      
+      if (status.in_service) {
+        // ✅ En service - redirection normale
+        console.log('✅ Pharmacie en service, redirection vers /dashboard');
+        toast.success('Connexion réussie !');
+        
+        // Stocker l'authentification
+        setAuth(userData, token);
+        
+        // Redirection avec un léger délai
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 100);
+      } else {
+        // ❌ Hors service - afficher le modal d'alerte
+        console.log('❌ Pharmacie hors service');
+        setPendingUserData({ user: userData, token });
+        setShowOutOfServiceModal(true);
+      }
+      
+    } catch (err: any) {
+      console.error('Erreur lors de la vérification du service:', err);
+      
+      // En cas d'erreur réseau, on permet l'accès par sécurité
+      const isNetworkError = err.code === 'ERR_NETWORK' || 
+                             err.message === 'Network Error' ||
+                             err.message?.includes('NetworkError');
+      
+      if (isNetworkError) {
+        console.warn('⚠️ Erreur réseau - accès autorisé par sécurité');
+        toast.success('Connexion réussie !');
+        setAuth(userData, token);
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 100);
+      } else {
+        toast.error('Impossible de vérifier le statut du service');
+        setAuth(userData, token);
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 100);
+      }
+    }
+  };
 
   const handleSuperAdminAccess = async () => {
     if (!superAdminKey.trim()) {
@@ -88,14 +168,12 @@ export default function Login() {
       
       if (response.data.valid) {
         console.log('✅ Clé valide, redirection vers /superadmin-welcome');
-        // Stocker la clé pour la session
         sessionStorage.setItem('super_admin_temp_key', superAdminKey);
         sessionStorage.setItem('super_admin_access_time', Date.now().toString());
         
         setShowSuperAdminModal(false);
         setSuperAdminKey('');
         
-        // Redirection avec un léger délai pour laisser le temps de fermer le modal
         setTimeout(() => {
           navigate('/superadmin-welcome', { replace: true });
         }, 100);
@@ -108,7 +186,6 @@ export default function Login() {
       
       const errorMsg = error.response?.data?.detail || 'Erreur de connexion au serveur';
       
-      // Ne pas exposer d'erreurs techniques en production
       const isDev = import.meta.env.DEV;
       setSuperAdminKeyError(isDev ? errorMsg : 'Erreur de vérification');
       
@@ -121,7 +198,6 @@ export default function Login() {
         setNetworkFallback(true);
         toast.error('Serveur indisponible, accès en mode dégradé', { duration: 5000 });
         
-        // Mode fallback: permettre l'accès même sans serveur
         sessionStorage.setItem('super_admin_temp_key', superAdminKey);
         sessionStorage.setItem('super_admin_fallback_mode', 'true');
         
@@ -160,14 +236,28 @@ export default function Login() {
 
       // Normaliser l'utilisateur
       const normalizedUser = normalizeUser(userData);
-
-      // Stocker l'authentification
-      setAuth(normalizedUser, access_token);
       
-      toast.success('Connexion réussie !');
+      // Vérifier si l'utilisateur a une pharmacie associée
+      // Utiliser pharmacy_id ou tenant_id selon ce qui est disponible
+      const pharmacyId = (normalizedUser as any).pharmacy_id || normalizedUser.tenant_id;
       
-      // La redirection sera gérée par useAuthRedirect
-      // Pas de navigation manuelle pour éviter les conflits
+      if (!pharmacyId) {
+        // Si pas de pharmacie, redirection directe
+        console.log('⚠️ Utilisateur sans pharmacie associée');
+        setAuth(normalizedUser, access_token);
+        toast.success('Connexion réussie !');
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 100);
+        return;
+      }
+      
+      // ✅ Vérifier le statut de service AVANT de rediriger
+      await checkServiceStatusAndRedirect(
+        pharmacyId,
+        normalizedUser,
+        access_token
+      );
 
     } catch (err: any) {
       console.error('❌ Erreur connexion:', err);
@@ -178,7 +268,6 @@ export default function Login() {
 
       let msg = 'Erreur de connexion. Veuillez réessayer.';
 
-      // Messages d'erreur utilisateur-friendly
       if (typeof detail === 'string') {
         if (detail.includes('email') || detail.includes('mot de passe')) {
           msg = 'Email ou mot de passe incorrect.';
@@ -251,7 +340,6 @@ export default function Login() {
       setSuccessMsg('✅ Mot de passe modifié avec succès !');
       toast.success('Mot de passe réinitialisé !');
       
-      // Redirection après succès
       setTimeout(() => {
         setMode('login');
         setResetCode('');
@@ -270,6 +358,67 @@ export default function Login() {
     } finally {
       setIsLoading(false);
     }
+  };
+  
+  /**
+   * Gère la redirection vers OutOfService après confirmation du modal
+   */
+  const handleGoToOutOfService = () => {
+    if (pendingUserData) {
+      // Stocker l'authentification quand même pour pouvoir afficher la page hors service
+      setAuth(pendingUserData.user, pendingUserData.token);
+    }
+    setShowOutOfServiceModal(false);
+    navigate('/out-of-service', { replace: true, state: { serviceStatus } });
+  };
+  
+  /**
+   * Gère la tentative de reconnexion
+   */
+  const handleRetryCheck = async () => {
+    if (!pendingUserData?.user?.pharmacy_id && !pendingUserData?.user?.tenant_id) {
+      // Pas de pharmacie, redirection normale
+      setAuth(pendingUserData!.user, pendingUserData!.token);
+      setShowOutOfServiceModal(false);
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    
+    const pharmacyId = pendingUserData!.user.pharmacy_id || pendingUserData!.user.tenant_id;
+    
+    try {
+      const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
+      const status = response.data;
+      
+      setServiceStatus(status);
+      
+      if (status.in_service) {
+        // Maintenant en service
+        setAuth(pendingUserData!.user, pendingUserData!.token);
+        setShowOutOfServiceModal(false);
+        toast.success('La pharmacie est maintenant en service !');
+        navigate('/dashboard', { replace: true });
+      } else {
+        // Toujours hors service
+        toast.error('La pharmacie est toujours hors service');
+      }
+    } catch (err) {
+      console.error('Erreur lors de la revérification:', err);
+      toast.error('Impossible de vérifier le statut du service');
+    }
+  };
+
+  // Convertir l'heure UTC en heure locale pour l'affichage
+  const convertUTCToLocal = (utcTime: string): string => {
+    if (!utcTime) return '';
+    const [hours, minutes] = utcTime.split(':').map(Number);
+    const date = new Date();
+    date.setUTCHours(hours, minutes, 0, 0);
+    return date.toLocaleTimeString('fr-FR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
   };
 
   return (
@@ -400,6 +549,88 @@ export default function Login() {
               <p className="mt-4 text-xs text-center text-gray-400">
                 ⚠️ Cette clé vous a été fournie par l'administrateur système
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Hors Service */}
+      {showOutOfServiceModal && serviceStatus && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+            <div className="p-6 border-b border-gray-100 bg-linear-to-r from-amber-500 to-orange-600">
+              <div className="flex items-center gap-3">
+                <div className="h-12 w-12 bg-white/20 rounded-xl flex items-center justify-center">
+                  <Clock className="text-white" size={24} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Hors Service</h2>
+                  <p className="text-sm text-white/80">La pharmacie n'est pas disponible</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <p className="text-slate-600 mb-4">
+                {serviceStatus.message || "L'application n'est pas disponible pour le moment. Veuillez respecter les heures de service établies."}
+              </p>
+
+              <div className="bg-amber-50 p-4 rounded-xl space-y-3 mb-6">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Heures de service:</span>
+                  <span className="font-medium text-slate-700">
+                    {serviceStatus.working_hours?.start || '--'}:00 - {serviceStatus.working_hours?.end || '--'}:00
+                  </span>
+                </div>
+                
+                <div className="flex justify-between text-sm text-blue-600 bg-blue-50 p-2 rounded-lg">
+                  <span>Votre heure locale:</span>
+                  <span className="font-medium">
+                    {convertUTCToLocal(serviceStatus.working_hours?.start || '08:00')} - {convertUTCToLocal(serviceStatus.working_hours?.end || '20:00')}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-500 text-sm">Jour actuel:</span>
+                  <div className="mt-1">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      serviceStatus.is_working_day 
+                        ? 'bg-green-100 text-green-700' 
+                        : 'bg-red-100 text-red-700'
+                    }`}>
+                      {serviceStatus.is_working_day ? 'Jour ouvré' : 'Jour fermé'}
+                    </span>
+                  </div>
+                </div>
+
+                {serviceStatus.next_service_time && (
+                  <p className="text-sm text-blue-600 mt-2">
+                    Prochain service: {new Date(serviceStatus.next_service_time).toLocaleString('fr-FR')}
+                  </p>
+                )}
+
+                <div className="text-xs text-slate-400 pt-2 border-t border-amber-200">
+                  <p>Fuseau horaire de la pharmacie: {serviceStatus.timezone || 'UTC'}</p>
+                  <p>• L'accès est restreint en dehors des heures de service</p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={handleGoToOutOfService}
+                  className="flex-1 py-3 bg-amber-500 text-white font-bold rounded-xl hover:bg-amber-600 transition-all flex items-center justify-center gap-2"
+                >
+                  <Clock size={18} />
+                  Voir les détails
+                </button>
+                <button
+                  onClick={handleRetryCheck}
+                  className="px-4 py-3 border border-amber-300 rounded-xl hover:bg-amber-50 transition-colors flex items-center gap-2"
+                >
+                  <RefreshCw size={18} />
+                  Réessayer
+                </button>
+              </div>
             </div>
           </div>
         </div>

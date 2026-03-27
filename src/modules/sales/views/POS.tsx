@@ -31,16 +31,17 @@ import { Link, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { observer } from 'mobx-react-lite';
 import { useOnline } from '@/hooks/useOnline';
 import { FacturePrinter } from '@/modules/sales/views/FacturePrinter';
 import { posService, CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig } from '@/services/posService';
-import { OfflineSale } from '@/db/offlineDb';
+import { useToast } from '@/hooks/useToast';
+import { Toaster } from '@/components/ui/Toaster';
 
 // ============================================
 // TYPES
 // ============================================
 
-// Re-export des types depuis le service
 export type { CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig };
 
 // Mapping des méthodes de paiement pour l'affichage
@@ -58,27 +59,20 @@ const ProductCard = memo(({
   product, 
   onAdd,
   currencySymbol,
-  exchangeRate,
-  salesType
+  exchangeRate
 }: { 
   product: Product; 
   onAdd: (product: Product) => void;
   currencySymbol: string;
   exchangeRate: number;
-  salesType: string;
 }) => {
-  const displayPrice = product.salesType === 'wholesale' 
-    ? (product.wholesalePrice || product.price)
-    : (product.retailPrice || product.price);
-  
-  const formattedPrice = (displayPrice / exchangeRate).toFixed(2);
-  const isAvailable = product.stock > 0;
-  const isAllowed = salesType === 'both' || product.salesType === salesType || product.salesType === 'both';
-  const disabled = !isAvailable || !isAllowed;
-
-  let disabledReason = '';
-  if (!isAvailable) disabledReason = 'Rupture de stock';
-  else if (!isAllowed) disabledReason = `Non disponible en ${salesType === 'wholesale' ? 'gros' : 'détail'}`;
+  // Prix de vente direct du backend
+  const sellingPrice = product.selling_price || 0;
+  // Prix converti si nécessaire
+  const displayPrice = sellingPrice / exchangeRate;
+  const formattedPrice = displayPrice.toFixed(2);
+  const isAvailable = (product.quantity || 0) > 0;
+  const disabled = !isAvailable;
 
   return (
     <button
@@ -92,7 +86,7 @@ const ProductCard = memo(({
           : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-md hover:scale-[1.02] active:scale-[0.98]'
         }
       `}
-      title={disabledReason}
+      title={disabled ? 'Rupture de stock' : ''}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -101,20 +95,14 @@ const ProductCard = memo(({
           {product.barcode && (
             <p className="text-xs text-slate-400">Barre: {product.barcode}</p>
           )}
-          {product.salesType === 'wholesale' && (
-            <p className="text-xs text-blue-600">Vente en gros</p>
-          )}
-          {product.salesType === 'retail' && (
-            <p className="text-xs text-green-600">Vente au détail</p>
-          )}
         </div>
         <span
           className={`
             shrink-0 rounded-full px-2 py-1 text-xs font-bold
-            ${product.stock > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}
+            ${(product.quantity || 0) > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}
           `}
         >
-          {product.stock}
+          {product.quantity || 0}
         </span>
       </div>
 
@@ -123,7 +111,7 @@ const ProductCard = memo(({
           {currencySymbol} {formattedPrice}
         </span>
         <span className="text-xs text-slate-400">
-          {disabledReason || 'Cliquer pour ajouter'}
+          {disabled ? 'Rupture de stock' : 'Cliquer pour ajouter'}
         </span>
       </div>
     </button>
@@ -147,8 +135,10 @@ const CartItemComponent = memo(({
   currencySymbol: string;
   exchangeRate: number;
 }) => {
-  const unitPrice = item.unitPrice / exchangeRate;
-  const totalPrice = (item.unitPrice * item.quantity) / exchangeRate;
+  // Prix unitaire converti
+  const unitPriceDisplay = (item.unitPrice || 0) / exchangeRate;
+  // Prix total converti
+  const totalPriceDisplay = ((item.unitPrice || 0) * (item.quantity || 0)) / exchangeRate;
 
   return (
     <div className="rounded-2xl bg-slate-50 p-3 transition-all hover:bg-slate-100">
@@ -156,7 +146,7 @@ const CartItemComponent = memo(({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-slate-800">{item.name}</p>
           <p className="text-xs text-slate-400">
-            {currencySymbol} {unitPrice.toFixed(2)}/u · Stock: {item.stock}
+            {currencySymbol} {unitPriceDisplay.toFixed(2)}/u · Stock: {item.stock || 0}
           </p>
         </div>
         <button
@@ -182,7 +172,7 @@ const CartItemComponent = memo(({
           </span>
           <button
             onClick={() => onUpdateQuantity(index, 1)}
-            disabled={item.quantity >= item.stock}
+            disabled={item.quantity >= (item.stock || 0)}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100 active:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Augmenter la quantité"
           >
@@ -190,7 +180,7 @@ const CartItemComponent = memo(({
           </button>
         </div>
         <p className="text-sm font-black text-blue-600">
-          {currencySymbol} {totalPrice.toFixed(2)}
+          {currencySymbol} {totalPriceDisplay.toFixed(2)}
         </p>
       </div>
     </div>
@@ -200,67 +190,40 @@ const CartItemComponent = memo(({
 CartItemComponent.displayName = 'CartItemComponent';
 
 // ============================================
-// COMPOSANT PRINCIPAL
+// COMPOSANT PRINCIPAL - OBSERVER POUR MOBX
 // ============================================
 
-export default function POS() {
+const POS = observer(() => {
   const location = useLocation();
   const isOnline = useOnline();
+  const { toast } = useToast();
 
-  // États locaux (synchronisés avec le service)
+  // États locaux
   const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [showInvoice, setShowInvoice] = useState(false);
-  const [currentSale, setCurrentSale] = useState<OfflineSale | null>(null);
   const [showScanner, setShowScanner] = useState(false);
-  const [scanMode, setScanMode] = useState<ScanMode>('auto');
-  const [lastScanned, setLastScanned] = useState<{ code: string; type: 'barcode' | 'qrcode'; timestamp: number } | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [cashierInfo, setCashierInfo] = useState<CashierInfo>({
-    id: '',
-    name: '',
-    posId: '',
-    posName: '',
-    sessionId: '',
-    sessionNumber: '',
-    pharmacy_id: '',
-  });
-  const [stats, setStats] = useState({
-    total: 0,
-    salesCount: 0,
-    currentClient: 'Passager',
-  });
-  const [config, setConfig] = useState<PharmacyConfig>({
-    pharmacyId: '',
-    pharmacyInfo: {
-      name: '',
-      address: '',
-      phone: '',
-      email: '',
-      licenseNumber: '',
-      logoUrl: undefined,
-    },
-    currencies: [],
-    primaryCurrency: 'CDF',
-    taxRate: 16,
-    salesType: 'both',
-    sellByExchangeRate: true,
-    profitability: { enabled: false, rate: 30 },
-    invoice: { autoPrint: false, autoSave: true, fontSize: 12 },
-    theme: 'system',
-  });
+  const [showInvoice, setShowInvoice] = useState(false);
 
   // Refs
   const scanInputRef = useRef<HTMLInputElement>(null);
   const cartContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Données du service (observées automatiquement)
+  const products = posService.products;
+  const filteredProducts = posService.filteredProducts;
+  const categories = posService.categories;
+  const cart = posService.cart;
+  const search = posService.search;
+  const selectedCategory = posService.selectedCategory;
+  const paymentMethod = posService.paymentMethod;
+  const currentSale = posService.currentSale;
+  const scanMode = posService.scanMode;
+  const lastScanned = posService.lastScanned;
+  const scanError = posService.scanError;
+  const cashierInfo = posService.cashierInfo;
+  const stats = posService.stats;
+  const config = posService.config;
+  const isProcessing = posService.isProcessing;
 
   // Virtualisation pour les longs paniers
   const cartVirtualizer = useVirtualizer({
@@ -272,111 +235,47 @@ export default function POS() {
 
   // Devise active
   const activeCurrency = useMemo(() => {
-    const currency = config.currencies.find(c => c.code === config.primaryCurrency);
+    const currency = config.currencies?.find(c => c.code === config.primaryCurrency);
     return currency || { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true };
   }, [config.currencies, config.primaryCurrency]);
 
   // Prix total avec conversion devise
   const total = useMemo(() => {
-    const rawTotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    if (config.sellByExchangeRate) {
+    const rawTotal = cart.reduce((acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 0), 0);
+    if (config.sellByExchangeRate && activeCurrency.exchangeRate > 0) {
       return rawTotal / activeCurrency.exchangeRate;
     }
     return rawTotal;
   }, [cart, config.sellByExchangeRate, activeCurrency.exchangeRate]);
 
   const totalItems = useMemo(
-    () => cart.reduce((acc, item) => acc + item.quantity, 0),
+    () => cart.reduce((acc, item) => acc + (item.quantity || 0), 0),
     [cart],
   );
 
   // ============================================
-  // INITIALISATION ET SYNC AVEC LE SERVICE
+  // INITIALISATION
   // ============================================
 
   useEffect(() => {
-    // Configurer les callbacks du service
-    posService.setCallbacks({
-      onCartChange: (newCart) => {
-        setCart(newCart);
-      },
-      onProcessingChange: (processing) => {
-        setIsProcessing(processing);
-      },
-      onShowInvoiceChange: (show) => {
-        setShowInvoice(show);
-      },
-      onCurrentSaleChange: (sale) => {
-        setCurrentSale(sale);
-      },
-      onProductsChange: (newProducts) => {
-        setProducts(newProducts);
-      },
-      onCategoriesChange: (newCategories) => {
-        setCategories(newCategories);
-      },
-      onConfigChange: (newConfig) => {
-        setConfig(newConfig);
-      },
-      onStatsChange: (newStats) => {
-        setStats(newStats);
-      },
-    });
-
-    // Charger les données initiales
     const loadData = async () => {
       setLoading(true);
-      await posService.loadInitialData();
-      
-      // Synchroniser les états depuis le service
-      setProducts(posService.products);
-      setFilteredProducts(posService.filteredProducts);
-      setCategories(posService.categories);
-      setCart(posService.cart);
-      setCashierInfo(posService.cashierInfo);
-      setStats(posService.stats);
-      setConfig(posService.config);
-      setLoading(false);
+      try {
+        await posService.loadInitialData();
+      } catch (error) {
+        console.error('Erreur chargement:', error);
+        toast({
+          title: "Erreur",
+          description: "Impossible de charger les données",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
     };
 
     loadData();
-
-    // Nettoyage
-    return () => {
-      posService.setCallbacks({});
-    };
-  }, []);
-
-  // Synchroniser les états lorsque le service change via l'interval
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (posService.products !== products) {
-        setProducts(posService.products);
-      }
-      if (posService.filteredProducts !== filteredProducts) {
-        setFilteredProducts(posService.filteredProducts);
-      }
-      if (posService.categories !== categories) {
-        setCategories(posService.categories);
-      }
-      if (posService.cart !== cart) {
-        setCart(posService.cart);
-      }
-      if (posService.cashierInfo !== cashierInfo) {
-        setCashierInfo(posService.cashierInfo);
-      }
-      if (posService.stats !== stats) {
-        setStats(posService.stats);
-      }
-      if (posService.config !== config) {
-        setConfig(posService.config);
-      }
-      setLoading(posService.loading);
-      setIsProcessing(posService.isProcessing);
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [products, filteredProducts, categories, cart, cashierInfo, stats, config]);
+  }, [toast]);
 
   // Application du thème
   useEffect(() => {
@@ -397,13 +296,14 @@ export default function POS() {
 
   useHotkeys('ctrl+enter', () => {
     if (cart.length > 0 && !isProcessing) {
-      void posService.validateSale();
+      posService.validateSale();
     }
   });
 
   useHotkeys('escape', () => {
     setShowScanner(false);
     setShowInvoice(false);
+    posService.setShowScanner(false);
   });
 
   // ============================================
@@ -411,12 +311,10 @@ export default function POS() {
   // ============================================
 
   const handleSearch = useCallback((value: string) => {
-    setSearch(value);
     posService.setSearch(value);
   }, []);
 
   const handleCategoryChange = useCallback((categoryId: string) => {
-    setSelectedCategory(categoryId);
     posService.setSelectedCategory(categoryId);
   }, []);
 
@@ -437,23 +335,50 @@ export default function POS() {
   }, []);
 
   const handlePaymentMethodChange = useCallback((method: PaymentMethod) => {
-    setPaymentMethod(method);
     posService.setPaymentMethod(method);
   }, []);
 
-  const handleValidateSale = useCallback(() => {
-    void posService.validateSale();
-  }, []);
+  const handleValidateSale = useCallback(async () => {
+    if (cart.length === 0) {
+      toast({
+        title: "Panier vide",
+        description: "Ajoutez des produits avant de valider",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    if (isProcessing) {
+      toast({
+        title: "Vente en cours",
+        description: "Une vente est déjà en cours de validation",
+        variant: "warning",
+      });
+      return;
+    }
+
+    try {
+      await posService.validateSale();
+      // Après validation réussie, afficher la facture
+      if (posService.currentSale) {
+        setShowInvoice(true);
+      }
+    } catch (error) {
+      console.error('Erreur validation:', error);
+      toast({
+        title: "Erreur",
+        description: "La validation de la vente a échoué",
+        variant: "destructive",
+      });
+    }
+  }, [cart.length, isProcessing, toast]);
 
   const handleRefresh = useCallback(() => {
-    void posService.loadInitialData();
+    posService.loadInitialData();
   }, []);
 
   const handleScan = useCallback((detectedCode: string, type: 'barcode' | 'qrcode') => {
     posService.handleScan(detectedCode, type);
-    // Synchroniser les états après scan
-    setScanError(posService.scanError);
-    setLastScanned(posService.lastScanned);
     if (posService.scanMode === 'auto') {
       setShowScanner(false);
     }
@@ -470,7 +395,6 @@ export default function POS() {
   }, [handleScan]);
 
   const handleScanModeChange = useCallback((mode: ScanMode) => {
-    setScanMode(mode);
     posService.setScanMode(mode);
   }, []);
 
@@ -479,13 +403,18 @@ export default function POS() {
     posService.setShowScanner(false);
   }, []);
 
+  const handleCloseInvoice = useCallback(() => {
+    setShowInvoice(false);
+    posService.setShowInvoice(false);
+  }, []);
+
   const getCategoryProducts = useCallback((categoryId: string) => {
     return posService.getCategoryProducts(categoryId);
   }, []);
 
-  // Rendu des catégories - toujours afficher au moins "Tous"
+  // Rendu des catégories
   const displayCategories = useMemo(() => {
-    if (categories.length === 0) {
+    if (!categories || categories.length === 0) {
       return [{ id: 'all', name: 'Tous' }];
     }
     return categories;
@@ -508,6 +437,9 @@ export default function POS() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
+      {/* Toaster pour les notifications */}
+      <Toaster />
+
       {/* Bannière hors-ligne */}
       {!isOnline && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
@@ -521,11 +453,11 @@ export default function POS() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="rounded-2xl bg-blue-600 px-4 py-2 text-xl font-black text-white">
-              {config.pharmacyInfo.name?.charAt(0) || 'P'}
+              {config.pharmacyInfo?.name?.charAt(0) || 'P'}
             </div>
             <div>
               <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
-                {config.pharmacyInfo.name || 'Pharmacie'}
+                {config.pharmacyInfo?.name || 'Pharmacie'}
               </p>
               <p className="text-xs text-slate-400">
                 {new Date().toLocaleString('fr-FR', {
@@ -545,10 +477,10 @@ export default function POS() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
-                {cashierInfo.name || 'Caissier'}
+                {cashierInfo?.name || 'Caissier'}
               </p>
               <p className="text-xs text-slate-400">
-                Caisse: {cashierInfo.posName} · Session: {cashierInfo.sessionNumber}
+                Caisse: {cashierInfo?.posName} · Session: {cashierInfo?.sessionNumber}
                 {!isOnline && <WifiOff size={12} className="ml-1 inline text-amber-500" />}
               </p>
             </div>
@@ -646,7 +578,7 @@ export default function POS() {
                       }}
                       onError={(error) => {
                         console.error('Scanner error:', error);
-                        setScanError('Erreur de caméra');
+                        posService.setScanError('Erreur de caméra');
                       }}
                       styles={{ container: { width: '100%', height: 360 } }}
                     />
@@ -754,7 +686,7 @@ export default function POS() {
                   {config.salesType === 'both' && 'Gros et Détail'}
                 </strong>
               </span>
-              {config.sellByExchangeRate && (
+              {config.sellByExchangeRate && activeCurrency && (
                 <span className="ml-auto text-xs">
                   <DollarSign size={12} className="inline" />
                   Taux: 1 {activeCurrency.code} = {activeCurrency.exchangeRate} FC
@@ -762,7 +694,7 @@ export default function POS() {
               )}
             </div>
 
-            {/* Categories - Afficher toujours au moins "Tous" */}
+            {/* Categories */}
             {displayCategories.length > 1 && (
               <div className="mb-5 flex gap-2 overflow-x-auto pb-2">
                 {displayCategories.map((cat) => (
@@ -785,13 +717,12 @@ export default function POS() {
 
             {/* Products Grid */}
             {selectedCategory === 'all' ? (
-              // Affichage groupé par catégories
               <div className="space-y-5">
                 {displayCategories
                   .filter((c) => c.id !== 'all')
                   .map((cat) => {
                     const catProducts = getCategoryProducts(cat.id);
-                    if (!catProducts.length) return null;
+                    if (!catProducts || catProducts.length === 0) return null;
 
                     return (
                       <div
@@ -806,9 +737,8 @@ export default function POS() {
                               key={product.id} 
                               product={product} 
                               onAdd={handleAddToCart}
-                              currencySymbol={activeCurrency.symbol}
-                              exchangeRate={activeCurrency.exchangeRate}
-                              salesType={config.salesType}
+                              currencySymbol={activeCurrency?.symbol || 'FC'}
+                              exchangeRate={activeCurrency?.exchangeRate || 1}
                             />
                           ))}
                         </div>
@@ -816,8 +746,7 @@ export default function POS() {
                     );
                   })}
                 
-                {/* Si aucune catégorie n'a de produits, afficher tous les produits */}
-                {displayCategories.filter(c => c.id !== 'all').length === 0 && products.length > 0 && (
+                {displayCategories.filter(c => c.id !== 'all').length === 0 && products && products.length > 0 && (
                   <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                       {products.map((product) => (
@@ -825,9 +754,8 @@ export default function POS() {
                           key={product.id} 
                           product={product} 
                           onAdd={handleAddToCart}
-                          currencySymbol={activeCurrency.symbol}
-                          exchangeRate={activeCurrency.exchangeRate}
-                          salesType={config.salesType}
+                          currencySymbol={activeCurrency?.symbol || 'FC'}
+                          exchangeRate={activeCurrency?.exchangeRate || 1}
                         />
                       ))}
                     </div>
@@ -835,20 +763,18 @@ export default function POS() {
                 )}
               </div>
             ) : (
-              // Affichage filtré par catégorie
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {filteredProducts.map((product) => (
+                {filteredProducts && filteredProducts.map((product) => (
                   <ProductCard 
                     key={product.id} 
                     product={product} 
                     onAdd={handleAddToCart}
-                    currencySymbol={activeCurrency.symbol}
-                    exchangeRate={activeCurrency.exchangeRate}
-                    salesType={config.salesType}
+                    currencySymbol={activeCurrency?.symbol || 'FC'}
+                    exchangeRate={activeCurrency?.exchangeRate || 1}
                   />
                 ))}
 
-                {filteredProducts.length === 0 && (
+                {(!filteredProducts || filteredProducts.length === 0) && (
                   <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-10 text-center text-slate-400 dark:border-slate-700 dark:bg-slate-800">
                     Aucun produit trouvé
                   </div>
@@ -917,8 +843,8 @@ export default function POS() {
                             index={virtualRow.index}
                             onUpdateQuantity={handleUpdateQuantity}
                             onRemove={handleRemoveFromCart}
-                            currencySymbol={activeCurrency.symbol}
-                            exchangeRate={activeCurrency.exchangeRate}
+                            currencySymbol={activeCurrency?.symbol || 'FC'}
+                            exchangeRate={activeCurrency?.exchangeRate || 1}
                           />
                         </div>
                       ))}
@@ -930,11 +856,11 @@ export default function POS() {
                   <div className="flex items-center justify-between text-xl font-black text-slate-800 dark:text-slate-200">
                     <span>Total</span>
                     <span className="text-blue-600">
-                      {activeCurrency.symbol} {total.toFixed(2)}
+                      {activeCurrency?.symbol || 'FC'} {total.toFixed(2)}
                     </span>
                   </div>
 
-                  {/* Payment Methods - CORRIGÉ avec les bonnes valeurs API */}
+                  {/* Payment Methods */}
                   <div className="grid grid-cols-3 gap-2">
                     {(['cash', 'mobile_money', 'account'] as PaymentMethod[]).map((method) => (
                       <button
@@ -963,15 +889,15 @@ export default function POS() {
                   {/* Validate Button */}
                   <button
                     onClick={handleValidateSale}
-                    disabled={isProcessing || cart.length === 0}
+                    disabled={cart.length === 0 || isProcessing}
                     className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-600"
                   >
                     {isProcessing ? (
-                      <Loader2 className="animate-spin" size={20} />
+                      <Loader2 size={20} className="animate-spin" />
                     ) : (
                       <CheckCircle size={20} />
                     )}
-                    {isProcessing ? 'Validation...' : 'Valider la vente'}
+                    {isProcessing ? 'Traitement...' : 'Valider la vente'}
                   </button>
                 </div>
               </div>
@@ -987,17 +913,17 @@ export default function POS() {
                   <div>
                     <p className="text-xs text-slate-400">Total</p>
                     <p className="text-lg font-black text-blue-600">
-                      {activeCurrency.symbol} {stats.total.toFixed(2)}
+                      {activeCurrency?.symbol || 'FC'} {(stats?.total || 0).toFixed(2)}
                     </p>
                   </div>
                   <div>
                     <p className="text-xs text-slate-400">Ventes</p>
-                    <p className="text-lg font-black text-slate-800 dark:text-slate-200">{stats.salesCount}</p>
+                    <p className="text-lg font-black text-slate-800 dark:text-slate-200">{stats?.salesCount || 0}</p>
                   </div>
                   <div>
                     <p className="text-xs text-slate-400">Client</p>
                     <p className="truncate text-lg font-black text-slate-800 dark:text-slate-200">
-                      {stats.currentClient}
+                      {stats?.currentClient || 'Passager'}
                     </p>
                   </div>
                 </div>
@@ -1030,35 +956,37 @@ export default function POS() {
       {showInvoice && currentSale && (
         <FacturePrinter
           sale={{
-            id: String(currentSale.id),
+            id: String(currentSale.id || Date.now()),
             receiptNumber: currentSale.receiptNumber,
             items: (currentSale.items || []).map((item: any) => ({
-              id: item.productId || item.id,
+              id: item.id || item.productId,
               name: item.name,
-              price: item.price || item.unitPrice,
-              quantity: item.quantity,
+              price: item.price || item.unitPrice || 0,
+              quantity: item.quantity || 1,
               code: item.code,
             })),
-            total: Number(currentSale.total),
-            paymentMethod: currentSale.paymentMethod as PaymentMethod,
-            timestamp: currentSale.timestamp,
-            cashierName: currentSale.cashierName || cashierInfo.name,
-            posName: currentSale.posName || cashierInfo.posName,
-            sessionNumber: cashierInfo.sessionNumber,
-            clientName: currentSale.clientType,
+            total: Number(currentSale.total || 0),
+            paymentMethod: currentSale.paymentMethod as PaymentMethod || paymentMethod,
+            timestamp: currentSale.timestamp || Date.now(),
+            cashierName: currentSale.cashierName || cashierInfo?.name || 'Caissier',
+            posName: currentSale.posName || cashierInfo?.posName || 'POS-01',
+            sessionNumber: cashierInfo?.sessionNumber || '001',
+            clientName: currentSale.clientName || currentSale.clientType || 'Passager',
           }}
-          pharmacyInfo={config.pharmacyInfo}
-          invoiceConfig={config.invoice}
-          primaryCurrency={config.primaryCurrency}
-          currencies={config.currencies}
-          onClose={() => setShowInvoice(false)}
+          pharmacyInfo={config.pharmacyInfo || { name: '', address: '', phone: '', email: '', licenseNumber: '' }}
+          invoiceConfig={config.invoice || { autoPrint: false, autoSave: true, fontSize: 12 }}
+          primaryCurrency={config.primaryCurrency || 'CDF'}
+          currencies={config.currencies || []}
+          onClose={handleCloseInvoice}
           onPrint={() => {
-            if (config.invoice.autoSave) {
-              // Sauvegarde automatique déjà faite
+            if (config.invoice?.autoPrint) {
+              // L'impression auto est gérée par le composant
             }
           }}
         />
       )}
     </div>
   );
-}
+});
+
+export default POS;

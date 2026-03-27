@@ -8,13 +8,12 @@ import {
 } from 'mobx';
 import { toast } from 'react-hot-toast';
 import api from '@/api/client';
-import { db, OfflineSale, OfflineSession } from '@/db/offlineDb';
 import { useAuthStore} from '@/store/useAuthStore';
 import { saleService } from './saleService';
 import { inventoryService } from './inventoryService';
 
 // ============================================
-// TYPES
+// TYPES - ALIGNÉS AVEC LE BACKEND
 // ============================================
 
 export interface Category {
@@ -23,29 +22,42 @@ export interface Category {
   icon?: string;
 }
 
+/**
+ * Interface Product alignée avec ce que renvoie le backend.
+ * Plus de champs redondants comme 'price', 'wholesalePrice', etc.
+ * Le backend gère la logique de prix, le frontend l'affiche.
+ */
 export interface Product {
   id: string;
   name: string;
-  price: number;
-  sellingPrice?: number;
-  purchasePrice?: number;
-  categoryId: string;
-  category?: Category;
-  stock: number;
+  // Prix venant directement du backend
+  selling_price: number;
+  purchase_price: number;
+  quantity: number;
+  // Identifiants
   code: string;
   barcode?: string;
-  qrCode?: string;
+  qr_code?: string;
+  // Catégorie
+  category_id?: string;
+  category?: Category;
+  // Métadonnées
   description?: string;
-  salesType: 'wholesale' | 'retail' | 'both';
-  wholesalePrice?: number;
-  retailPrice?: number;
-  minQuantity?: number;
   pharmacy_id?: string;
+  // Pour l'affichage
+  unit?: string;
+  alert_threshold?: number;
+  expiry_date?: string;
 }
 
-export interface CartItem extends Product {
+export interface CartItem {
+  id: string;
+  name: string;
+  code: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice: number;      // Prix unitaire utilisé pour le calcul (selling_price)
+  stock: number;          // Stock actuel pour validation
+  selling_price: number;  // Prix de vente original
 }
 
 export interface CashierInfo {
@@ -108,7 +120,6 @@ export interface PharmacyConfig {
 
 export type PaymentMethod = 'cash' | 'mobile_money' | 'account';
 export type ScanMode = 'auto' | 'manual';
-export type SaleStatus = 'synced' | 'pending' | 'failed';
 
 export interface SaleData {
   items: CartItem[];
@@ -121,6 +132,7 @@ export interface SaleData {
   posName: string;
   sessionId: string;
   clientType: string;
+  clientName?: string;
   currency: string;
   exchangeRate: number;
   pharmacy_id?: string;
@@ -132,6 +144,7 @@ export interface SaleData {
 
 const SCAN_COOLDOWN = 1500;
 const VIBRATION_DURATION = 80;
+const PENDING_SALES_KEY = 'pending_sales';
 
 // ============================================
 // SERVICE PRINCIPAL
@@ -150,7 +163,7 @@ export class PosService {
   selectedCategory = 'all';
   paymentMethod: PaymentMethod = 'cash';
   showInvoice = false;
-  currentSale: OfflineSale | null = null;
+  currentSale: any = null;
   showScanner = false;
   scanMode: ScanMode = 'auto';
   lastScanned: ScannedProduct | null = null;
@@ -189,12 +202,15 @@ export class PosService {
     theme: 'system',
   };
   isOnline = true;
+  
+  // Nom du client modifiable
+  clientName = 'Passager';
 
   // Callbacks pour les notifications
   private onCartChange?: (cart: CartItem[]) => void;
   private onProcessingChange?: (isProcessing: boolean) => void;
   private onShowInvoiceChange?: (show: boolean) => void;
-  private onCurrentSaleChange?: (sale: OfflineSale | null) => void;
+  private onCurrentSaleChange?: (sale: any | null) => void;
   private onProductsChange?: (products: Product[]) => void;
   private onCategoriesChange?: (categories: Category[]) => void;
   private onConfigChange?: (config: PharmacyConfig) => void;
@@ -222,6 +238,7 @@ export class PosService {
       stats: observable,
       config: observable,
       isOnline: observable,
+      clientName: observable,
       
       total: computed,
       totalItems: computed,
@@ -249,6 +266,7 @@ export class PosService {
       setOnlineStatus: action,
       loadInitialData: action,
       filterProducts: action,
+      setClientName: action,
     });
   }
 
@@ -281,7 +299,7 @@ export class PosService {
     onCartChange?: (cart: CartItem[]) => void;
     onProcessingChange?: (isProcessing: boolean) => void;
     onShowInvoiceChange?: (show: boolean) => void;
-    onCurrentSaleChange?: (sale: OfflineSale | null) => void;
+    onCurrentSaleChange?: (sale: any | null) => void;
     onProductsChange?: (products: Product[]) => void;
     onCategoriesChange?: (categories: Category[]) => void;
     onConfigChange?: (config: PharmacyConfig) => void;
@@ -330,7 +348,7 @@ export class PosService {
     this.onShowInvoiceChange?.(show);
   }
 
-  setCurrentSale(sale: OfflineSale | null) {
+  setCurrentSale(sale: any | null) {
     this.currentSale = sale;
     this.onCurrentSaleChange?.(sale);
   }
@@ -367,44 +385,57 @@ export class PosService {
 
   setOnlineStatus(isOnline: boolean) {
     this.isOnline = isOnline;
+    if (isOnline) {
+      this.syncPendingSales();
+    }
+  }
+
+  setClientName(name: string) {
+    this.clientName = name || 'Passager';
+    this.stats.currentClient = this.clientName;
+    this.onStatsChange?.(this.stats);
   }
 
   // ============================================
-  // LOGIQUE MÉTIER
+  // LOGIQUE MÉTIER - CHARGEMENT DIRECT API
   // ============================================
 
   /**
-   * Charge toutes les données initiales
+   * Charge les données initiales directement depuis l'API
    */
   async loadInitialData() {
     this.setLoading(true);
     try {
-      // Étape 1: Charger les infos utilisateur et la config (obtient le pharmacy_id)
+      // Charger les infos utilisateur
       await this.loadUserInfo();
       
-      console.log('📌 loadUserInfo terminé, pharmacy_id:', this.cashierInfo.pharmacy_id);
-      
-      // Étape 2: Charger les données qui dépendent du pharmacy_id
-      // On charge d'abord les produits, puis les catégories (qui peuvent être vides)
+      // Charger les produits
       await this.loadProducts();
       
-      // Les catégories sont optionnelles - on les charge même si l'API échoue
+      // Charger les catégories
       try {
         await this.loadCategories();
-      } catch (categoriesError) {
-        console.warn('⚠️ Erreur chargement catégories (non critique):', categoriesError);
-        // On continue même sans catégories - les produits s'afficheront quand même
+      } catch (e) {
+        console.warn('Erreur catégories (non bloquante):', e);
         runInAction(() => {
           this.categories = [{ id: 'all', name: 'Tous' }];
         });
       }
       
+      // Charger les stats
       await this.loadDailyStats();
       
-      console.log('✅ Toutes les données chargées avec succès - produits:', this.products.length);
+      // Sauvegarder la config dans le cache (uniquement pour persistance des préférences)
+      localStorage.setItem('pharmacy_config', JSON.stringify(this.config));
+      
+      // Synchroniser les ventes en attente
+      await this.syncPendingSales();
+      
+      console.log('✅ Données chargées depuis le serveur');
+      
     } catch (error) {
       console.error('❌ Erreur chargement données POS:', error);
-      toast.error('Erreur lors du chargement de la caisse');
+      toast.error('Erreur de connexion au serveur');
     } finally {
       this.setLoading(false);
     }
@@ -418,79 +449,22 @@ export class PosService {
       const response = await api.get('/user/current-session');
       const { user } = useAuthStore.getState();
       
-      // Récupérer le pharmacy_id depuis le store (propriété correcte: pharmacy_id, pas pharmacyId)
       const pharmacy_id = 
-        response.data?.pharmacyId ||           // Format camelCase de l'API
-        response.data?.pharmacy_id ||          // Format snake_case de l'API
-        response.data?.current_pharmacy?.id || // Dans l'objet current_pharmacy
-        response.data?.pharmacy?.id ||         // Dans l'objet pharmacy
-        user?.pharmacy_id;                     // Depuis le store user (propriété correcte)
+        response.data?.pharmacyId ||
+        response.data?.pharmacy_id ||
+        response.data?.current_pharmacy?.id ||
+        response.data?.pharmacy?.id ||
+        user?.pharmacy_id;
 
-      // Log détaillé pour déboguer
-      console.log('👤 loadUserInfo - détails:', {
-        responseData: response.data,
-        userFromStore: user,
-        pharmacy_id_trouve: pharmacy_id,
-        toutes_cles_response: Object.keys(response.data || {})
-      });
+      console.log('👤 loadUserInfo - pharmacy_id:', pharmacy_id);
 
-      // Charger la configuration si on a un pharmacy_id
       if (pharmacy_id) {
         console.log('🏪 Chargement config pour pharmacie:', pharmacy_id);
         await this.loadConfig(pharmacy_id);
       } else {
-        console.warn('⚠️ Aucun pharmacy_id trouvé, tentative de récupération depuis les pharmacies disponibles');
-        
-        // Tentative de récupération depuis la liste des pharmacies
-        try {
-          const pharmaciesResponse = await api.get('/pharmacies', { 
-            params: { active_only: true, limit: 1 } 
-          });
-          
-          const pharmacies = pharmaciesResponse.data;
-          if (pharmacies && pharmacies.length > 0) {
-            const fallbackPharmacyId = pharmacies[0].id;
-            console.log('🏪 Pharmacy_id récupéré depuis /pharmacies:', fallbackPharmacyId);
-            
-            // Mettre à jour le store si possible (utilisation de setPharmacy si disponible)
-            const store = useAuthStore.getState();
-            if (store.setPharmacy) {
-              store.setPharmacy(fallbackPharmacyId);
-            }
-            
-            // Continuer avec ce pharmacy_id
-            await this.loadConfig(fallbackPharmacyId);
-            this.setCashierInfo({
-              id: user?.id || '',
-              name: user?.nom_complet || user?.email || 'Caissier',
-              posId: response.data?.posId || 'pos-main',
-              posName: response.data?.posName || 'POS-01',
-              sessionId: response.data?.sessionId || Date.now().toString(),
-              sessionNumber: response.data?.sessionNumber || '001',
-              pharmacy_id: fallbackPharmacyId,
-            });
-            
-            const sessionData: Omit<OfflineSession, 'id'> = {
-              sessionId: response.data?.sessionId || Date.now().toString(),
-              posId: response.data?.posId || 'pos-main',
-              posName: response.data?.posName || 'POS-01',
-              sessionNumber: response.data?.sessionNumber || '001',
-              userId: user?.id,
-              userName: user?.nom_complet || user?.email,
-              openedAt: Date.now(),
-              status: 'open',
-              pharmacy_id: fallbackPharmacyId,
-            };
-            
-            await db.saveSession(sessionData);
-            return; // Sortie anticipée car tout est configuré
-          }
-        } catch (pharmacyError) {
-          console.error('❌ Erreur récupération pharmacies de secours:', pharmacyError);
-        }
+        console.warn('⚠️ Aucun pharmacy_id trouvé');
       }
 
-      // Configuration standard avec pharmacy_id (peut être undefined)
       this.setCashierInfo({
         id: user?.id || '',
         name: user?.nom_complet || user?.email || 'Caissier',
@@ -500,64 +474,10 @@ export class PosService {
         sessionNumber: response.data?.sessionNumber || '001',
         pharmacy_id: pharmacy_id,
       });
-
-      // Sauvegarder la session
-      const sessionData: Omit<OfflineSession, 'id'> = {
-        sessionId: response.data?.sessionId || Date.now().toString(),
-        posId: response.data?.posId || 'pos-main',
-        posName: response.data?.posName || 'POS-01',
-        sessionNumber: response.data?.sessionNumber || '001',
-        userId: user?.id,
-        userName: user?.nom_complet || user?.email,
-        openedAt: Date.now(),
-        status: 'open',
-        pharmacy_id: pharmacy_id,
-      };
-
-      await db.saveSession(sessionData);
-      
-      console.log('✅ loadUserInfo terminé avec succès, pharmacy_id:', pharmacy_id);
       
     } catch (error) {
       console.error('❌ Erreur loadUserInfo:', error);
-      console.warn('⚠️ Mode hors-ligne session, utilisation du cache');
-      
-      const { user } = useAuthStore.getState();
-      const offlineSession = await db.getCurrentSession(user?.id);
-
-      if (offlineSession) {
-        const offlinePharmacyId = (offlineSession as any).pharmacy_id;
-        console.log('📱 Mode hors-ligne - pharmacy_id depuis cache:', offlinePharmacyId);
-        
-        if (offlinePharmacyId) {
-          try {
-            await this.loadConfig(offlinePharmacyId);
-          } catch (configError) {
-            console.warn('⚠️ Impossible de charger la config hors-ligne:', configError);
-          }
-        }
-        
-        this.setCashierInfo({
-          id: user?.id || '',
-          name: user?.nom_complet || user?.email || 'Caissier',
-          posId: offlineSession.posId,
-          posName: offlineSession.posName,
-          sessionId: offlineSession.sessionId,
-          sessionNumber: offlineSession.sessionNumber,
-          pharmacy_id: offlinePharmacyId,
-        });
-      } else {
-        console.warn('⚠️ Aucune session offline trouvée');
-        this.setCashierInfo({
-          id: user?.id || '',
-          name: user?.nom_complet || user?.email || 'Caissier',
-          posId: 'pos-main',
-          posName: 'POS-01',
-          sessionId: Date.now().toString(),
-          sessionNumber: '001',
-          pharmacy_id: undefined,
-        });
-      }
+      throw error;
     }
   }
 
@@ -592,7 +512,7 @@ export class PosService {
       console.log('⚙️ Configuration chargée pour:', pharmacyId);
     } catch (error) {
       console.warn('⚠️ Erreur chargement config:', error);
-      // Continuer avec la configuration par défaut
+      throw error;
     }
   }
 
@@ -604,36 +524,8 @@ export class PosService {
       const { user } = useAuthStore.getState();
       const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
 
-      console.log('🔍 loadProducts - pharmacy_id:', pharmacy_id);
-
       if (!pharmacy_id) {
-        console.warn('⚠️ Aucun ID de pharmacie disponible, tentative de chargement sans filtre');
-        // Tentative de chargement sans pharmacy_id
-        try {
-          const response = await inventoryService.getProducts({
-            is_active: true,
-            limit: 1000,
-            skip: 0,
-            include_sales_stats: false,
-          });
-          
-          if (response?.products?.length > 0) {
-            const normalizedProducts = response.products.map(p => this.normalizeProduct(p));
-            console.log('✅ Produits chargés sans pharmacy_id:', normalizedProducts.length);
-            
-            runInAction(() => {
-              this.products = normalizedProducts;
-              this.rebuildProductsMap(normalizedProducts);
-              this.filterProducts();
-            });
-            
-            this.onProductsChange?.(this.products);
-            return;
-          }
-        } catch (noIdError) {
-          console.warn('Chargement sans pharmacy_id échoué:', noIdError);
-        }
-        
+        console.warn('⚠️ Aucun ID de pharmacie disponible');
         runInAction(() => {
           this.products = [];
           this.filteredProducts = [];
@@ -642,137 +534,54 @@ export class PosService {
         return;
       }
 
-      console.log('🔍 Chargement produits pour pharmacie:', pharmacy_id);
-
       const response = await inventoryService.getProducts({
         pharmacy_id: pharmacy_id,
-        is_active: true,
         limit: 1000,
         skip: 0,
         include_sales_stats: false,
       });
 
-      console.log('📦 Réponse produits reçue:', response?.products?.length || 0, 'produits');
-
       const rawProducts: any[] = response?.products || [];
       const normalizedProducts = rawProducts.map(p => this.normalizeProduct(p));
-
-      // Ne pas filtrer par pharmacy_id si la réponse est déjà filtrée
-      const finalProducts = normalizedProducts;
-
-      console.log('✅ Produits après normalisation:', finalProducts.length);
-      
-      if (finalProducts.length > 0) {
-        console.log('📝 Premier produit (exemple):', finalProducts[0]?.name);
-      }
-
-      // Sauvegarde en base de données locale
-      if (finalProducts.length > 0) {
-        await db.products.bulkPut(finalProducts as any);
-      }
       
       runInAction(() => {
-        this.products = finalProducts;
-        this.rebuildProductsMap(finalProducts);
+        this.products = normalizedProducts;
+        this.rebuildProductsMap(normalizedProducts);
         this.filterProducts();
       });
       
-      console.log('🎯 État final - products.length:', this.products.length);
-      console.log('🎯 État final - filteredProducts.length:', this.filteredProducts.length);
-      
       this.onProductsChange?.(this.products);
-
-      if (finalProducts.length === 0) {
-        toast('Aucun produit trouvé pour cette pharmacie', { icon: 'ℹ️' });
-      } else {
-        console.log(`✅ ${finalProducts.length} produits chargés avec succès`);
-      }
+      
     } catch (error) {
       console.error('❌ Erreur chargement produits:', error);
-      toast.error('Erreur lors du chargement des produits');
-
-      // Chargement hors-ligne
-      const { user } = useAuthStore.getState();
-      const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
-      try {
-        let localProducts: any[] = [];
-        
-        if (pharmacy_id) {
-          localProducts = await db.products
-            .filter(p => (p as any).pharmacy_id === pharmacy_id)
-            .toArray();
-        } else {
-          localProducts = await db.products.toArray();
-        }
-
-        const normalizedProducts = localProducts.map(p => this.normalizeProduct(p));
-
-        runInAction(() => {
-          this.products = normalizedProducts;
-          this.rebuildProductsMap(normalizedProducts);
-          this.filterProducts();
-        });
-        
-        this.onProductsChange?.(this.products);
-
-        if (normalizedProducts.length > 0) {
-          toast('Mode hors-ligne: produits chargés depuis le cache');
-          console.log(`📱 ${normalizedProducts.length} produits chargés depuis le cache local`);
-        } else {
-          console.warn('⚠️ Aucun produit trouvé en cache local');
-          toast('Aucun produit disponible en mode hors-ligne');
-        }
-      } catch (dbError) {
-        console.error('❌ Erreur chargement produits hors-ligne:', dbError);
-        runInAction(() => {
-          this.products = [];
-          this.filteredProducts = [];
-        });
-      }
+      toast.error('Erreur de chargement des produits');
+      throw error;
     }
   }
 
   /**
-   * Normalise un produit venant de l'API
+   * Normalise un produit
    */
   normalizeProduct(p: any): Product {
-    // Gestion robuste de la catégorie
-    let categoryId = 'uncategorized';
-    let category: Category | undefined = undefined;
-    
-    if (p.category_id) {
-      categoryId = String(p.category_id);
-    } else if (p.category?.id) {
-      categoryId = String(p.category.id);
-    } else if (p.category && typeof p.category === 'string') {
-      categoryId = p.category;
-    }
-    
-    if (p.category && typeof p.category === 'object') {
-      category = {
-        id: String(p.category.id || categoryId),
-        name: p.category.name || p.category,
-      };
-    }
-
     return {
       id: String(p.id),
       name: p.name || p.product_name || p.commercial_name || 'Sans nom',
-      price: Number(p.selling_price ?? p.price ?? p.unit_price ?? 0),
-      sellingPrice: Number(p.selling_price ?? p.price ?? p.unit_price ?? 0),
-      purchasePrice: Number(p.purchase_price ?? p.cost_price ?? p.buying_price ?? 0),
-      categoryId: categoryId,
-      category: category,
-      stock: Number(p.quantity ?? p.stock ?? p.current_stock ?? p.available_quantity ?? 0),
+      selling_price: Number(p.selling_price ?? p.price ?? 0),
+      purchase_price: Number(p.purchase_price ?? p.cost_price ?? p.buying_price ?? 0),
+      quantity: Number(p.quantity ?? p.stock ?? p.current_stock ?? p.available_quantity ?? 0),
       code: p.code || p.sku || '',
       barcode: p.barcode || p.bar_code || undefined,
-      qrCode: p.qr_code || p.qrCode || undefined,
+      qr_code: p.qr_code || p.qrCode || undefined,
+      category_id: p.category_id ? String(p.category_id) : undefined,
+      category: p.category && typeof p.category === 'object' ? {
+        id: String(p.category.id || p.category_id),
+        name: p.category.name || p.category,
+      } : undefined,
       description: p.description || undefined,
-      salesType: p.sales_type || p.salesType || 'both',
-      wholesalePrice: Number(p.wholesale_price ?? p.wholesalePrice ?? 0),
-      retailPrice: Number(p.retail_price ?? p.retailPrice ?? 0),
-      minQuantity: Number(p.min_quantity ?? p.minQuantity ?? 1),
       pharmacy_id: p.pharmacy_id || p.pharmacyId,
+      unit: p.unit || 'unité',
+      alert_threshold: p.alert_threshold ? Number(p.alert_threshold) : 5,
+      expiry_date: p.expiry_date,
     };
   }
 
@@ -783,7 +592,7 @@ export class PosService {
     const map = new Map<string, Product>();
     productList.forEach(p => {
       if (p.barcode) map.set(p.barcode, p);
-      if (p.qrCode) map.set(p.qrCode, p);
+      if (p.qr_code) map.set(p.qr_code, p);
       if (p.code) map.set(p.code, p);
     });
     runInAction(() => {
@@ -792,7 +601,7 @@ export class PosService {
   }
 
   /**
-   * Charge les catégories (optionnel - ne bloque pas l'affichage des produits)
+   * Charge les catégories
    */
   async loadCategories() {
     try {
@@ -805,7 +614,6 @@ export class PosService {
 
       let rawCategories: any[] = [];
       
-      // Gestion des différents formats de réponse
       if (response.data?.categories && Array.isArray(response.data.categories)) {
         rawCategories = response.data.categories;
       } else if (response.data?.data && Array.isArray(response.data.data)) {
@@ -819,43 +627,19 @@ export class PosService {
         name: cat.name,
         icon: cat.icon,
       }));
-
-      // Sauvegarde en cache
-      if (cats.length > 0) {
-        await db.categories.bulkPut(cats as any);
-      }
       
       runInAction(() => {
-        // Toujours ajouter l'option "Tous"
         this.categories = [{ id: 'all', name: 'Tous' }, ...cats];
       });
       
-      console.log('📁 Catégories chargées:', this.categories.length);
       this.onCategoriesChange?.(this.categories);
       
     } catch (error) {
-      console.warn('⚠️ Erreur chargement catégories (non critique):', error);
-      
-      // Chargement hors-ligne des catégories
-      try {
-        const localCats = await db.categories.toArray();
-        const normalized = localCats.map((cat: any) => ({
-          id: String(cat.id),
-          name: cat.name,
-          icon: cat.icon,
-        }));
-        
-        runInAction(() => {
-          this.categories = [{ id: 'all', name: 'Tous' }, ...normalized];
-        });
-        
-        this.onCategoriesChange?.(this.categories);
-      } catch (dbError) {
-        console.error('❌ Erreur chargement catégories hors-ligne:', dbError);
-        runInAction(() => {
-          this.categories = [{ id: 'all', name: 'Tous' }];
-        });
-      }
+      console.warn('⚠️ Erreur chargement catégories:', error);
+      runInAction(() => {
+        this.categories = [{ id: 'all', name: 'Tous' }];
+      });
+      throw error;
     }
   }
 
@@ -878,44 +662,13 @@ export class PosService {
       const newStats = {
         total: Number(response?.total_amount || 0),
         salesCount: Number(response?.sales_count || 0),
-        currentClient: 'Passager',
+        currentClient: this.clientName,
       };
 
       this.updateStats(newStats);
-      await db.updateDailyStats(todayStr, newStats);
     } catch (error) {
-      console.warn('⚠️ Mode hors-ligne stats:', error);
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString().split('T')[0];
-
-      try {
-        const offlineStats = await db.getDailyStats(todayStr);
-
-        if (offlineStats) {
-          this.updateStats({
-            total: offlineStats.total,
-            salesCount: offlineStats.salesCount,
-            currentClient: offlineStats.currentClient,
-          });
-        } else {
-          const localSales = await db.sales
-            .where('timestamp')
-            .aboveOrEqual(today.getTime())
-            .toArray();
-
-          const total = localSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-
-          this.updateStats({
-            total,
-            salesCount: localSales.length,
-            currentClient: 'Passager',
-          });
-        }
-      } catch (dbError) {
-        console.error('❌ Erreur chargement stats hors-ligne:', dbError);
-      }
+      console.warn('⚠️ Erreur chargement stats:', error);
+      // Garder les stats par défaut
     }
   }
 
@@ -925,12 +678,10 @@ export class PosService {
   filterProducts() {
     let filtered = [...this.products];
 
-    // Filtrer par catégorie (si ce n'est pas "all" et si la catégorie existe)
     if (this.selectedCategory !== 'all') {
-      filtered = filtered.filter(p => p.categoryId === this.selectedCategory);
+      filtered = filtered.filter(p => p.category_id === this.selectedCategory);
     }
 
-    // Filtrer par recherche
     if (this.search.trim()) {
       const term = this.search.trim().toLowerCase();
       filtered = filtered.filter(p =>
@@ -946,62 +697,56 @@ export class PosService {
     });
   }
 
+  // ============================================
+  // GESTION DU PANIER
+  // ============================================
+
   /**
    * Ajoute un produit au panier
    */
   addToCart = (product: Product) => {
-    if (product.stock <= 0) {
+    if (product.quantity <= 0) {
       toast.error(`${product.name} est en rupture de stock`);
       return;
     }
 
-    // Vérifier le type de vente
-    if (this.config.salesType !== 'both' && product.salesType !== this.config.salesType) {
-      const typeLabel = this.config.salesType === 'wholesale' ? 'gros' : 'détail';
-      toast.error(`${product.name} n'est pas disponible en vente ${typeLabel}`);
-      return;
-    }
-
-    // Calculer le prix selon le type de vente
-    let unitPrice = product.price;
-    if (product.salesType === 'wholesale' && product.wholesalePrice) {
-      unitPrice = product.wholesalePrice;
-    } else if (product.salesType === 'retail' && product.retailPrice) {
-      unitPrice = product.retailPrice;
-    }
-
-    // Vérifier la quantité minimale pour le gros
-    if (this.config.salesType === 'wholesale' && product.minQuantity && product.minQuantity > 1) {
-      const existing = this.cart.find(item => item.id === product.id);
-      const currentQty = existing?.quantity || 0;
-      if (currentQty === 0 && product.minQuantity > 1) {
-        toast(`💡 ${product.name} se vend par lot de ${product.minQuantity}`, {
-          icon: 'ℹ️',
-          duration: 3000,
-        });
-      }
-    }
+    const unitPrice = product.selling_price;
 
     const existingIndex = this.cart.findIndex(item => item.id === product.id);
 
     if (existingIndex !== -1) {
       const existing = this.cart[existingIndex];
       const newQuantity = existing.quantity + 1;
-      if (newQuantity > product.stock) {
+      
+      if (newQuantity > product.quantity) {
         toast.error(`Stock insuffisant pour ${product.name}`);
         return;
       }
+      
       const newCart = [...this.cart];
-      newCart[existingIndex] = { ...existing, quantity: newQuantity };
+      newCart[existingIndex] = { 
+        ...existing, 
+        quantity: newQuantity,
+        unitPrice 
+      };
       this.setCart(newCart);
     } else {
-      this.setCart([{ ...product, quantity: 1, unitPrice }, ...this.cart]);
+      const newItem: CartItem = {
+        id: product.id,
+        name: product.name,
+        code: product.code,
+        quantity: 1,
+        unitPrice: unitPrice,
+        stock: product.quantity,
+        selling_price: product.selling_price,
+      };
+      this.setCart([newItem, ...this.cart]);
     }
+    
+    toast.success(`${product.name} ajouté au panier`);
+    this.vibrate();
   };
 
-  /**
-   * Met à jour la quantité d'un article dans le panier
-   */
   updateQuantity = (index: number, delta: number) => {
     const newCart = [...this.cart];
     const item = newCart[index];
@@ -1023,27 +768,22 @@ export class PosService {
     this.setCart(newCart);
   };
 
-  /**
-   * Retire un article du panier
-   */
   removeFromCart = (index: number) => {
     const newCart = [...this.cart];
     newCart.splice(index, 1);
     this.setCart(newCart);
   };
 
-  /**
-   * Vide le panier
-   */
   clearCart = () => {
     if (this.cart.length > 0 && window.confirm('Vider le panier ?')) {
       this.setCart([]);
     }
   };
 
-  /**
-   * Gère le scan d'un code-barres ou QR code
-   */
+  // ============================================
+  // GESTION DU SCAN
+  // ============================================
+
   handleScan = (detectedCode: string, type: 'barcode' | 'qrcode') => {
     const code = detectedCode.trim();
     if (!code) return;
@@ -1067,7 +807,6 @@ export class PosService {
     }
 
     this.addToCart(product);
-    toast.success(`${product.name} ajouté au panier`);
     this.playBeep('success');
     this.vibrate();
 
@@ -1076,9 +815,6 @@ export class PosService {
     }
   };
 
-  /**
-   * Joue un son de feedback
-   */
   playBeep(type: 'success' | 'error') {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -1099,164 +835,272 @@ export class PosService {
     }
   }
 
-  /**
-   * Vibration du périphérique
-   */
   vibrate() {
     if (navigator.vibrate) {
       navigator.vibrate(VIBRATION_DURATION);
     }
   }
 
-  /**
-   * Met à jour le stock local après une vente
-   */
-  async updateLocalStock(items: CartItem[]) {
-    const updatedProducts = [...this.products];
-    const stockUpdates: { id: string; stock: number }[] = [];
-
-    for (const item of items) {
-      const productIndex = updatedProducts.findIndex(p => p.id === item.id);
-      if (productIndex === -1) continue;
-
-      const newStock = Math.max(0, updatedProducts[productIndex].stock - item.quantity);
-      updatedProducts[productIndex] = { ...updatedProducts[productIndex], stock: newStock };
-      stockUpdates.push({ id: item.id, stock: newStock });
-    }
-
-    if (stockUpdates.length > 0) {
-      try {
-        await db.bulkUpdateProductsStock(stockUpdates);
-      } catch (error) {
-        console.error('Erreur mise à jour stock offline:', error);
-      }
-    }
-
-    runInAction(() => {
-      this.products = updatedProducts;
-      this.rebuildProductsMap(updatedProducts);
-      this.filterProducts();
-    });
-    
-    this.onProductsChange?.(this.products);
-  }
+  // ============================================
+  // VALIDATION DE LA VENTE - VERSION OPTIMISÉE
+  // ============================================
 
   /**
-   * Valide la vente
+   * Valide la vente avec affichage immédiat de la facture
+   * L'appel API se fait en arrière-plan pour une expérience ultra-rapide (< 1s)
    */
   async validateSale() {
-    if (this.cart.length === 0 || this.isProcessing) return;
+    // Vérifications rapides
+    if (this.cart.length === 0) {
+      toast.error('Panier vide');
+      return;
+    }
+    
+    if (this.isProcessing) {
+      toast.error('Une vente est déjà en cours');
+      return;
+    }
 
     this.setProcessing(true);
 
-    // Vérifier les quantités minimales pour le gros
-    if (this.config.salesType === 'wholesale') {
-      const invalidItems = this.cart.filter(item =>
-        item.minQuantity && item.quantity < item.minQuantity
-      );
-      if (invalidItems.length > 0) {
-        const message = invalidItems
-          .map(item => `${item.name}: minimum ${item.minQuantity} unités`)
-          .join('\n');
-        toast.error(`Quantités minimales non respectées:\n${message}`);
-        this.setProcessing(false);
-        return;
-      }
-    }
+    // Sauvegarde immédiate des données (copie profonde)
+    const cartSnapshot = this.cart.map(item => ({ ...item }));
+    const clientNameSnapshot = this.clientName;
+    const paymentMethodSnapshot = this.paymentMethod;
+    const timestamp = Date.now();
 
-    const rawTotal = this.cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    // Calcul du total (synchronisé, immédiat)
+    const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
     const totalAmount = this.config.sellByExchangeRate
       ? rawTotal / this.activeCurrency.exchangeRate
       : rawTotal;
 
-    const saleData: SaleData = {
-      items: this.cart.map(item => ({
-        ...item,
-        unitPrice: item.unitPrice,
+    // CRÉER LA FACTURE INSTANTANÉMENT (sans attendre l'API)
+    const saleForReceipt = {
+      id: `temp-${timestamp}`,
+      receiptNumber: `TEMP-${timestamp}`,
+      items: cartSnapshot.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.unitPrice,
+        quantity: item.quantity,
+        code: item.code,
       })),
       total: totalAmount,
-      paymentMethod: this.paymentMethod,
-      timestamp: new Date().toISOString(),
-      cashierId: this.cashierInfo.id,
+      paymentMethod: paymentMethodSnapshot,
+      timestamp: timestamp,
       cashierName: this.cashierInfo.name,
-      posId: this.cashierInfo.posId,
       posName: this.cashierInfo.posName,
-      sessionId: this.cashierInfo.sessionId,
-      clientType: this.stats.currentClient,
-      currency: this.config.primaryCurrency,
-      exchangeRate: this.activeCurrency.exchangeRate,
-      pharmacy_id: this.cashierInfo.pharmacy_id,
+      sessionNumber: this.cashierInfo.sessionNumber,
+      clientName: clientNameSnapshot,
     };
 
+    // VIDER LE PANIER IMMÉDIATEMENT (feedback utilisateur instantané)
+    this.setCart([]);
+    
+    // AFFICHER LA FACTURE IMMÉDIATEMENT (UX ultra-rapide)
+    this.setCurrentSale(saleForReceipt);
+    this.setShowInvoice(true);
+    
+    // Mettre à jour les stats localement (optimiste)
+    this.updateStats({
+      total: this.stats.total + totalAmount,
+      salesCount: this.stats.salesCount + 1,
+      currentClient: clientNameSnapshot,
+    });
+
+    // Déclencher l'impression automatique si configurée
+    if (this.config.invoice.autoPrint) {
+      setTimeout(() => window.print(), 100);
+    }
+
+    toast.success('Vente enregistrée !');
+
+    // --- TRAITEMENT ASYNCHRONE EN ARRIÈRE-PLAN ---
+    // L'API est appelée sans bloquer l'interface
+    this.processSaleInBackground(cartSnapshot, {
+      totalAmount,
+      paymentMethod: paymentMethodSnapshot,
+      clientName: clientNameSnapshot,
+      timestamp,
+      tempId: saleForReceipt.id,
+    });
+    
+    this.setProcessing(false);
+  }
+
+  /**
+   * Traitement asynchrone de la vente en arrière-plan
+   * Ne bloque pas l'interface utilisateur
+   */
+  async processSaleInBackground(
+    cartSnapshot: CartItem[],
+    saleInfo: {
+      totalAmount: number;
+      paymentMethod: PaymentMethod;
+      clientName: string;
+      timestamp: number;
+      tempId: string;
+    }
+  ) {
     try {
-      let saleResponse: any = null;
-      
-      if (this.isOnline) {
-        const response = await saleService.createSale({
-          items: this.cart.map(item => ({
-            product_id: item.id,
-            quantity: item.quantity,
-            unit_price: item.unitPrice,
-          })),
-          total_amount: totalAmount,
-          payment_method: this.paymentMethod,
-          pharmacy_id: this.cashierInfo.pharmacy_id,
-        });
-        saleResponse = response?.data || response?.sale || response;
-      }
-
-      await this.updateLocalStock(this.cart);
-
-      const offlineSale: OfflineSale = {
-        ...saleData,
-        id: undefined,
-        timestamp: Date.now(),
-        status: this.isOnline ? 'synced' : 'pending',
-        receiptNumber: saleResponse?.receipt_number || saleResponse?.receiptNumber,
-        paymentMethod: saleData.paymentMethod,
-        total: totalAmount,
-        items: saleData.items,
+      const saleData = {
+        items: cartSnapshot.map(item => ({
+          product_id: item.id,
+          quantity: item.quantity,
+          unit_price: item.unitPrice,
+        })),
+        total_amount: saleInfo.totalAmount,
+        payment_method: saleInfo.paymentMethod,
+        client_name: saleInfo.clientName,
+        pharmacy_id: this.cashierInfo.pharmacy_id,
+        timestamp: saleInfo.timestamp,
       };
 
-      const saleId = await db.sales.add(offlineSale);
-      
-      const savedSale = await db.sales.get(saleId);
-      this.setCurrentSale(savedSale || null);
+      // Appel API en arrière-plan
+      const response = await saleService.createSale(saleData);
 
-      if (this.config.invoice.autoPrint) {
-        this.setShowInvoice(true);
-        setTimeout(() => {
-          window.print();
-        }, 100);
-      } else {
-        this.setShowInvoice(true);
+      // Récupérer le vrai numéro de reçu et l'ID
+      let realReceiptNumber = '';
+      let realSaleId = '';
+      
+      // Get the actual sale data from the nested structure
+      const saleDataObj = response.data || response.sale;
+      
+      if (saleDataObj) {
+        // Extraire le numéro de reçu
+        if (saleDataObj.receipt_number) {
+          realReceiptNumber = saleDataObj.receipt_number;
+        } else if (response.receipt_number) {
+          realReceiptNumber = response.receipt_number;
+        }
+        
+        // Extraire l'ID de la vente
+        if (saleDataObj.id) {
+          realSaleId = saleDataObj.id;
+        } else if (saleDataObj.reference) {
+          realSaleId = saleDataObj.reference;
+        }
       }
 
-      this.setCart([]);
-      await this.loadDailyStats();
+      // Mettre à jour la facture avec les vraies informations
+      if ((realReceiptNumber || realSaleId) && this.currentSale && this.currentSale.id === saleInfo.tempId) {
+        const updatedSale = {
+          ...this.currentSale,
+          id: realSaleId || this.currentSale.id,
+          receiptNumber: realReceiptNumber || this.currentSale.receiptNumber,
+        };
+        this.setCurrentSale(updatedSale);
+      }
 
-      toast.success(this.isOnline ? 'Vente enregistrée avec succès' : 'Vente enregistrée en mode hors-ligne');
+      // Rafraîchir les stats depuis le serveur (en arrière-plan)
+      await this.loadDailyStats();
+      
+      console.log('✅ Vente synchronisée avec le serveur:', realReceiptNumber);
+
     } catch (error) {
-      console.error('Erreur lors de la vente:', error);
-      toast.error('Erreur lors de l\'enregistrement de la vente');
-    } finally {
-      this.setProcessing(false);
+      console.error('❌ Erreur synchronisation vente:', error);
+      
+      // Notification discrète d'erreur (sans bloquer l'utilisateur)
+      toast.error('Erreur de synchronisation. La vente sera réessayée.', {
+        duration: 4000,
+      });
+      
+      // Stocker la vente en attente pour réessai ultérieur
+      this.queuePendingSale(cartSnapshot, saleInfo);
     }
   }
 
   /**
-   * Récupère les produits d'une catégorie
+   * Stocke une vente en attente pour synchronisation ultérieure
    */
+  private queuePendingSale(cartSnapshot: CartItem[], saleInfo: {
+    totalAmount: number;
+    paymentMethod: PaymentMethod;
+    clientName: string;
+    timestamp: number;
+    tempId: string;
+  }) {
+    try {
+      const existing = JSON.parse(localStorage.getItem(PENDING_SALES_KEY) || '[]');
+      existing.push({
+        cart: cartSnapshot,
+        saleInfo: {
+          totalAmount: saleInfo.totalAmount,
+          paymentMethod: saleInfo.paymentMethod,
+          clientName: saleInfo.clientName,
+          timestamp: saleInfo.timestamp,
+        },
+        pharmacy_id: this.cashierInfo.pharmacy_id,
+        createdAt: Date.now(),
+      });
+      localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(existing));
+      
+      console.log('📦 Vente mise en file d\'attente pour synchronisation');
+    } catch (e) {
+      console.error('Erreur sauvegarde vente en attente:', e);
+    }
+  }
+
+  /**
+   * Synchronise les ventes en attente (à appeler quand la connexion revient)
+   */
+  async syncPendingSales() {
+    try {
+      const pendingSales = JSON.parse(localStorage.getItem(PENDING_SALES_KEY) || '[]');
+      
+      if (pendingSales.length === 0) return;
+      
+      console.log(`🔄 Synchronisation de ${pendingSales.length} ventes en attente...`);
+      
+      const remainingSales = [];
+      
+      for (const pending of pendingSales) {
+        try {
+          const saleData = {
+            items: pending.cart.map((item: CartItem) => ({
+              product_id: item.id,
+              quantity: item.quantity,
+              unit_price: item.unitPrice,
+            })),
+            total_amount: pending.saleInfo.totalAmount,
+            payment_method: pending.saleInfo.paymentMethod,
+            client_name: pending.saleInfo.clientName,
+            pharmacy_id: pending.pharmacy_id || this.cashierInfo.pharmacy_id,
+            timestamp: pending.saleInfo.timestamp,
+          };
+          
+          await saleService.createSale(saleData);
+          console.log('✅ Vente en attente synchronisée');
+        } catch (error) {
+          console.error('❌ Erreur synchronisation vente en attente:', error);
+          remainingSales.push(pending);
+        }
+      }
+      
+      // Mettre à jour le stock avec les ventes restantes
+      if (remainingSales.length > 0) {
+        localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(remainingSales));
+      } else {
+        localStorage.removeItem(PENDING_SALES_KEY);
+      }
+      
+    } catch (error) {
+      console.error('Erreur synchronisation ventes en attente:', error);
+    }
+  }
+
+  // ============================================
+  // UTILITAIRES
+  // ============================================
+
   getCategoryProducts(categoryId: string): Product[] {
     if (categoryId === 'all') {
       return this.products;
     }
-    return this.products.filter(p => p.categoryId === categoryId);
+    return this.products.filter(p => p.category_id === categoryId);
   }
 
-  /**
-   * Applique le thème
-   */
   applyTheme() {
     const root = document.documentElement;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1274,9 +1118,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Réinitialise le service (pour déconnexion)
-   */
   reset() {
     this.setLoading(true);
     this.setProcessing(false);
@@ -1294,6 +1135,7 @@ export class PosService {
     this.productsMap.clear();
     this.categories = [];
     this.filteredProducts = [];
+    this.clientName = 'Passager';
   }
 }
 
