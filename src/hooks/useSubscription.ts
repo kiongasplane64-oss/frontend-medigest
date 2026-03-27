@@ -1,4 +1,4 @@
-// hooks/useSubscription.ts (version améliorée)
+// hooks/useSubscription.ts (version corrigée)
 import { useAuthStore } from '@/store/useAuthStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useEffect, useState } from 'react';
@@ -10,7 +10,7 @@ import * as subscriptionApi from '@/services/subscriptionService';
 // Types
 import type { 
   Plan,
-  BillingHistory,
+  BillingHistoryResponse,  // Changed: import BillingHistoryResponse instead
   SubscriptionUsage
 } from '@/services/subscriptionService';
 
@@ -202,18 +202,22 @@ export const useSubscription = () => {
     initialData: [],
   });
 
-  // Historique de facturation
+  // Historique de facturation - Fixed: properly handle the response
   const {
-    data: billingHistory = [],
+    data: billingHistoryResponse,
     isLoading: billingLoading,
     refetch: refetchBilling
   } = useQuery({
     queryKey: subscriptionKeys.billing(),
-    queryFn: (): Promise<BillingHistory[]> => subscriptionApi.getBillingHistory(),
+    queryFn: (): Promise<BillingHistoryResponse> => subscriptionApi.getBillingHistory(50, 0),
     enabled: Boolean(isAuthenticated && subscriptionData?.subscription),
     staleTime: 10 * 60 * 1000,
-    initialData: [],
   });
+
+  // Extract billing history items from response
+  const billingHistory = useMemo((): BillingHistoryResponse['billing_history'] => {
+    return billingHistoryResponse?.billing_history || [];
+  }, [billingHistoryResponse]);
 
   // ========================================
   // MUTATIONS
@@ -528,6 +532,7 @@ export const useSubscription = () => {
     // Factures
     invoices,
     billingHistory,
+    billingHistoryResponse, // Also expose the full response if needed
     
     // États
     isLoading: subscriptionLoading || plansLoading || usageLoading || billingLoading,
