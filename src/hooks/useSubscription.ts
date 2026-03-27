@@ -1,4 +1,4 @@
-// hooks/useSubscription.ts (version corrigée)
+// hooks/useSubscription.ts (correction pour la requête des plans)
 import { useAuthStore } from '@/store/useAuthStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useEffect, useState } from 'react';
@@ -10,7 +10,7 @@ import * as subscriptionApi from '@/services/subscriptionService';
 // Types
 import type { 
   Plan,
-  BillingHistoryResponse,  // Changed: import BillingHistoryResponse instead
+  BillingHistoryResponse,
   SubscriptionUsage
 } from '@/services/subscriptionService';
 
@@ -189,20 +189,22 @@ export const useSubscription = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Plans disponibles
+  // FIX: Plans disponibles - Wrap the function in an arrow function
   const {
     data: availablePlans = [],
     isLoading: plansLoading,
     refetch: refetchPlans
   } = useQuery({
     queryKey: subscriptionKeys.plans(),
-    queryFn: (): Promise<SubscriptionPlan[]> => subscriptionApi.getAvailablePlans(),
+    // FIX: Don't pass the function directly if it expects parameters
+    // Use an arrow function to call it without parameters (or with default)
+    queryFn: (): Promise<SubscriptionPlan[]> => subscriptionApi.getAvailablePlans(false),
     enabled: isAuthenticated,
     staleTime: 30 * 60 * 1000,
     initialData: [],
   });
 
-  // Historique de facturation - Fixed: properly handle the response
+  // Historique de facturation
   const {
     data: billingHistoryResponse,
     isLoading: billingLoading,
@@ -214,7 +216,7 @@ export const useSubscription = () => {
     staleTime: 10 * 60 * 1000,
   });
 
-  // Extract billing history items from response
+  // Extraire le tableau d'historique de la réponse
   const billingHistory = useMemo((): BillingHistoryResponse['billing_history'] => {
     return billingHistoryResponse?.billing_history || [];
   }, [billingHistoryResponse]);
@@ -532,7 +534,7 @@ export const useSubscription = () => {
     // Factures
     invoices,
     billingHistory,
-    billingHistoryResponse, // Also expose the full response if needed
+    billingHistoryResponse,
     
     // États
     isLoading: subscriptionLoading || plansLoading || usageLoading || billingLoading,
