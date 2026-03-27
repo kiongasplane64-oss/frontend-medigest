@@ -85,6 +85,24 @@ export const subscriptionKeys = {
 } as const;
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+const getPlanDescription = (planName: string): string => {
+  const descriptions: Record<string, string> = {
+    starter: 'Idéal pour démarrer avec les fonctionnalités essentielles',
+    basic: 'Pour les petites structures avec des besoins standards',
+    professional: 'Pour les professionnels ayant besoin de plus de fonctionnalités',
+    pro: 'Pour les professionnels ayant besoin de plus de fonctionnalités',
+    enterprise: 'Solution complète pour les grandes organisations',
+    premium: 'Performance maximale et support prioritaire',
+    trial: "Période d'essai pour découvrir la plateforme"
+  };
+  const key = planName?.toLowerCase() || '';
+  return descriptions[key] || `Plan ${planName} avec toutes les fonctionnalités incluses`;
+};
+
+// ============================================================================
 // HOOK PRINCIPAL
 // ============================================================================
 
@@ -189,19 +207,44 @@ export const useSubscription = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  // FIX: Plans disponibles - Correction avec fonction fléchée sans paramètre
+  // FIX: Plans disponibles - Version corrigée avec gestion d'erreur et transformation
   const {
-    data: availablePlans = [],
+    data: availablePlansData,
     isLoading: plansLoading,
+    error: plansError,
     refetch: refetchPlans
-  } = useQuery<SubscriptionPlan[], Error>({ // Typage explicite
+  } = useQuery({
     queryKey: subscriptionKeys.plans(),
-    // Correction : fonction fléchée qui ignore le contexte et appelle l'API sans paramètre
-    queryFn: () => subscriptionApi.getAvailablePlans(false),
+    queryFn: async (): Promise<SubscriptionPlan[]> => {
+      try {
+        console.log('🔄 Chargement des plans disponibles...');
+        const plans = await subscriptionApi.getAvailablePlans(false);
+        
+        if (!plans || !Array.isArray(plans)) {
+          console.warn('⚠️ Aucun plan disponible ou format invalide');
+          return [];
+        }
+        
+        console.log(`✅ ${plans.length} plans chargés avec succès`);
+        
+        // Transformer et enrichir les plans
+        return plans.map(plan => ({
+          ...plan,
+          is_popular: plan.is_popular || plan.name === 'professional' || plan.name === 'Pro' || plan.id === 'professional',
+          description: plan.description || getPlanDescription(plan.name || plan.id),
+        }));
+      } catch (error) {
+        console.error('❌ Erreur lors du chargement des plans:', error);
+        return [];
+      }
+    },
     enabled: isAuthenticated,
-    staleTime: 30 * 60 * 1000,
-    initialData: [],
+    staleTime: 30 * 60 * 1000, // 30 minutes
+    retry: 2,
   });
+
+  // Appliquer la valeur par défaut avec useMemo
+  const availablePlans = useMemo(() => availablePlansData ?? [], [availablePlansData]);
 
   // Historique de facturation
   const {
@@ -501,6 +544,13 @@ export const useSubscription = () => {
 
   const { isExpired, daysRemaining } = checkExpiry();
 
+  // Log de debug pour les erreurs de plans (résout le warning)
+  useEffect(() => {
+    if (plansError) {
+      console.error('❌ Erreur lors du chargement des plans:', plansError);
+    }
+  }, [plansError]);
+
   return {
     // Informations de base
     user,
@@ -542,6 +592,7 @@ export const useSubscription = () => {
     
     // Erreurs
     error: subscriptionError,
+    plansError, // Exposer l'erreur des plans dans le retour
     changePlanError: changePlanMutation.error,
     
     // Accès

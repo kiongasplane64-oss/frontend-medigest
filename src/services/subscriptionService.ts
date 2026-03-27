@@ -298,49 +298,42 @@ export const getSubscriptionUsage = async (): Promise<SubscriptionUsage> => {
 /**
  * Récupère la liste des plans disponibles
  */
+// subscriptionService.ts - CORRECTION
 export const getAvailablePlans = async (includeTrial: boolean = false): Promise<Plan[]> => {
   try {
     const url = includeTrial ? '/subscriptions/plans?include_trial=true' : '/subscriptions/plans';
     const { data } = await api.get(url);
     
+    // CORRECTION: La réponse de l'API est { plans: [...] }
+    let plansArray: any[] = [];
+    
     if (data && data.plans && Array.isArray(data.plans)) {
-      return data.plans.map((plan: any) => ({
-        id: plan.id || plan.type,
-        name: plan.name,
-        type: plan.type || plan.id,
-        price: plan.price_monthly || plan.price || 0,
-        price_monthly: plan.price_monthly || plan.price || 0,
-        price_yearly: plan.price_yearly || 0,
-        max_users: plan.max_users || 1,
-        max_products: plan.max_products || 100,
-        max_pharmacies: plan.max_pharmacies || 1,
-        billing_cycle: 'monthly',
-        features: Array.isArray(plan.features) ? plan.features : [],
-        is_popular: plan.is_popular || false,
-        description: plan.description || `Plan ${plan.name}`
-      }));
+      // Format standard: { plans: [...] }
+      plansArray = data.plans;
+    } else if (Array.isArray(data)) {
+      // Fallback: tableau direct
+      plansArray = data;
+    } else if (data && typeof data === 'object') {
+      // Fallback: chercher un tableau dans la réponse
+      plansArray = Object.values(data).find(Array.isArray) || [];
     }
     
-    if (Array.isArray(data)) {
-      return data.map((plan: any) => ({
-        id: plan.id || plan.type,
-        name: plan.name,
-        type: plan.type || plan.id,
-        price: plan.price_monthly || plan.price || 0,
-        price_monthly: plan.price_monthly || plan.price || 0,
-        price_yearly: plan.price_yearly || 0,
-        max_users: plan.max_users || 1,
-        max_products: plan.max_products || 100,
-        max_pharmacies: plan.max_pharmacies || 1,
-        billing_cycle: 'monthly',
-        features: Array.isArray(plan.features) ? plan.features : [],
-        is_popular: plan.is_popular || false,
-        description: plan.description || `Plan ${plan.name}`
-      }));
-    }
-    
-    console.warn('getAvailablePlans: Format de réponse inattendu', data);
-    return [];
+    // Transformer les plans au format attendu
+    return plansArray.map((plan: any) => ({
+      id: plan.id || plan.type || plan.name?.toLowerCase(),
+      name: plan.name,
+      type: plan.type || plan.id || plan.name?.toLowerCase(),
+      price: typeof plan.price_monthly === 'number' ? plan.price_monthly : (plan.price || 0),
+      price_monthly: plan.price_monthly || plan.price || 0,
+      price_yearly: plan.price_yearly || 0,
+      max_users: plan.max_users === "Illimité" ? "Illimité" : (Number(plan.max_users) || 1),
+      max_products: plan.max_products === "Illimité" ? "Illimité" : (Number(plan.max_products) || 100),
+      max_pharmacies: plan.max_pharmacies === "Illimité" ? "Illimité" : (Number(plan.max_pharmacies) || 1),
+      billing_cycle: 'monthly',
+      features: Array.isArray(plan.features) ? plan.features : [],
+      is_popular: plan.is_popular || plan.name === 'professional' || plan.name === 'Pro',
+      description: plan.description || `Plan ${plan.name}`
+    }));
   } catch (error) {
     console.error('Erreur lors de la récupération des plans:', error);
     return [];
