@@ -63,6 +63,9 @@ interface UsageStatsProps {
   usage: SubscriptionUsage;
   daysRemaining: number | null;
   subscriptionData?: ExtendedSubscription;
+  getDisplayValue: (value: string | number) => string | number;
+  getRemainingText: (value: string | number, label: string) => string;
+  getUsagePercentage: (percentage?: number) => number;
 }
 
 interface SuccessModalProps {
@@ -149,6 +152,7 @@ export default function SubscriptionPage() {
     retry: 2
   });
   
+  // CORRECTION ICI : utiliser une fonction fléchée sans paramètre
   const { 
     data: plansData, 
     isLoading: loadingPlans,
@@ -156,7 +160,7 @@ export default function SubscriptionPage() {
     refetch: refetchPlans
   } = useQuery<ExtendedPlan[]>({
     queryKey: ['subscription-plans'],
-    queryFn: getAvailablePlans,
+    queryFn: () => getAvailablePlans(false), // Appel direct avec false
     retry: 2
   });
 
@@ -570,12 +574,6 @@ function CurrentPlanSection({
 }
 
 // Composant : Statistiques d'utilisation
-interface UsageStatsEnhancedProps extends UsageStatsProps {
-  getDisplayValue: (value: string | number) => string | number;
-  getRemainingText: (value: string | number, label: string) => string;
-  getUsagePercentage: (percentage?: number) => number;
-}
-
 function UsageStats({
   usage,
   daysRemaining,
@@ -583,7 +581,7 @@ function UsageStats({
   getDisplayValue,
   getRemainingText,
   getUsagePercentage
-}: UsageStatsEnhancedProps) {
+}: UsageStatsProps) {
   const usersUsagePercentage = getUsagePercentage(usage.users_usage_percentage);
 
   return (
