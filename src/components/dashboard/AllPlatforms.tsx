@@ -1,8 +1,7 @@
 // components/dashboard/AllPlatforms.tsx
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { sessionService, UserSession, SessionSalesResponse } from '@/services/sessionService';
-import useDashboard from '@/hooks/useDashboard';
+import { dashboardService, UserSession} from '@/services/dashboardService';
 import {
   Card,
   CardContent,
@@ -92,12 +91,22 @@ interface PlatformStats {
   averageBasket: number;
 }
 
+interface SessionSalesResponse {
+  session: any;
+  sales: any[];
+  summary: {
+    total_sales: number;
+    total_amount: number;
+    average_basket: number;
+  };
+}
+
 export const AllPlatforms: React.FC = () => {
   const queryClient = useQueryClient();
-  const { formattedStats } = useDashboard();
   const [sessionSales, setSessionSales] = useState<SessionSalesResponse | null>(null);
   const [loadingSales, setLoadingSales] = useState(false);
   const [currentSessionForDialog, setCurrentSessionForDialog] = useState<UserSession | null>(null);
+  const [monthlySales, setMonthlySales] = useState<number>(0);
 
   // Récupérer toutes les sessions
   const {
@@ -106,10 +115,26 @@ export const AllPlatforms: React.FC = () => {
     refetch: refetchSessions,
   } = useQuery({
     queryKey: ['user-sessions'],
-    queryFn: () => sessionService.getUserSessions(true),
+    queryFn: () => dashboardService.getUserSessions(true),
     staleTime: 30 * 1000, // 30 secondes
     gcTime: 5 * 60 * 1000, // 5 minutes
   });
+
+  // Récupérer les statistiques mensuelles pour le panier moyen
+  useEffect(() => {
+    const fetchMonthlyStats = async () => {
+      try {
+        const stats = await dashboardService.getDashboardStats({
+          period: 'month',
+        });
+        setMonthlySales(stats.monthly_sales || 0);
+      } catch (error) {
+        console.error('Erreur lors du chargement des statistiques mensuelles:', error);
+      }
+    };
+    
+    fetchMonthlyStats();
+  }, []);
 
   // Enregistrer la session actuelle au montage
   useEffect(() => {
@@ -129,10 +154,17 @@ export const AllPlatforms: React.FC = () => {
           // Ignorer les erreurs de géolocalisation
         }
 
-        await sessionService.registerSession(ipInfo);
+        await dashboardService.registerSession({
+          location_city: ipInfo.city,
+          location_country: ipInfo.country,
+        });
         
         const interval = setInterval(() => {
-          sessionService.updateSessionActivity();
+          // Mettre à jour l'activité de la session courante
+          const sessionId = localStorage.getItem('current_session_id');
+          if (sessionId) {
+            dashboardService.updateSessionActivity(sessionId);
+          }
         }, SESSION_REFRESH_INTERVAL);
 
         return () => clearInterval(interval);
@@ -146,7 +178,7 @@ export const AllPlatforms: React.FC = () => {
 
   // Mutation pour déconnecter une session
   const logoutSessionMutation = useMutation({
-    mutationFn: (sessionId: string) => sessionService.logoutSession(sessionId),
+    mutationFn: (sessionId: string) => dashboardService.logoutSession(sessionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-sessions'] });
     },
@@ -157,7 +189,7 @@ export const AllPlatforms: React.FC = () => {
     setCurrentSessionForDialog(session);
     setLoadingSales(true);
     try {
-      const sales = await sessionService.getSessionSales(session.session_id);
+      const sales = await dashboardService.getSessionSales(session.session_id);
       setSessionSales(sales);
     } catch (error) {
       console.error('Erreur:', error);
@@ -231,11 +263,11 @@ export const AllPlatforms: React.FC = () => {
 
   // Calcul du panier moyen
   const averageBasket = useMemo(() => {
-    if (formattedStats?.monthly_sales && sessionsData?.active_count) {
-      return Math.round(formattedStats.monthly_sales / (sessionsData.active_count || 1));
+    if (monthlySales && sessionsData?.active_count) {
+      return Math.round(monthlySales / (sessionsData.active_count || 1));
     }
     return 0;
-  }, [formattedStats, sessionsData]);
+  }, [monthlySales, sessionsData]);
 
   // Filtrage des sessions actives
   const activeSessions = useMemo(() => {
@@ -307,7 +339,7 @@ export const AllPlatforms: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formattedStats?.monthly_sales?.toLocaleString() || '0'} FCFA
+              {monthlySales?.toLocaleString() || '0'} FCFA
             </div>
             <p className="text-xs text-muted-foreground">
               ce mois
@@ -375,7 +407,7 @@ export const AllPlatforms: React.FC = () => {
                                 </span>
                                 <span className="flex items-center gap-1">
                                   <Clock className="h-3 w-3" />
-                                  Dernière activité: {formatDate(session.last_activity)}
+                                  Dernière activité: {formatDate(session.last_activity || session.created_at)}
                                 </span>
                                 <span className="flex items-center gap-1">
                                   <MapPin className="h-3 w-3" />

@@ -1,7 +1,7 @@
 // components/inventory/ProductTableRow.tsx
 import { Edit2, Eye } from 'lucide-react';
 import type { Product, SalesType, Category } from '@/types/inventory.types';
-import StockAlertBadge from './StockAlertbadge';
+import StockAlertBadge from './StockAlertBadge';
 
 interface ProductTableRowProps {
   product: Product;

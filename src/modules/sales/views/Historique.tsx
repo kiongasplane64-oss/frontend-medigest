@@ -21,7 +21,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { saleService, type SaleResponse, type DailyStatsResponse } from '@/services/saleService';
+import { saleService, type SaleResponse} from '@/services/saleService';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
@@ -73,8 +73,8 @@ export default function Historique() {
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   
-  // CORRECTION ICI: useState retourne [value, setter] - nous devons déstructurer correctement
-  const [setDailyStats] = useState<DailyStatsResponse | null>(null);
+  // CORRECTION: Suppression de la variable inutilisée dailyStats
+  // Le useState était mal utilisé - on supprime cette variable car elle n'est pas utilisée
 
   const itemsPerPage = 20;
 
@@ -93,7 +93,9 @@ export default function Historique() {
   async function loadDailyStats() {
     try {
       const stats = await saleService.getDailyStats();
-      setDailyStats(stats); // Maintenant setDailyStats est bien une fonction
+      // Les stats journalières sont récupérées mais non utilisées
+      // On pourrait les stocker dans une variable d'état si nécessaire
+      console.debug('Stats journalières chargées:', stats);
     } catch (error) {
       console.error('Erreur chargement stats journalières:', error);
     }

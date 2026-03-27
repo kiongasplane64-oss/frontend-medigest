@@ -5,7 +5,7 @@ import { format } from "date-fns";
 import { fr } from "date-fns/locale";
 import { DateRange } from "react-day-picker";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/Button";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Popover,
@@ -38,7 +38,7 @@ export function DateRangePicker({ dateRange, onDateRangeChange, className }: Dat
             id="date"
             variant="outline"
             className={cn(
-              "w-[260px] justify-start text-left font-normal",
+              "w-65 justify-start text-left font-normal",
               !date && "text-muted-foreground"
             )}
           >

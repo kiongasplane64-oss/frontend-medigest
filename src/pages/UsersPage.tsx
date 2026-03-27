@@ -12,7 +12,7 @@ import {
   
 } from '@/services/userService';
 import { getSubscriptionUsage, SubscriptionUsage } from '@/services/subscriptionService';
-import { getPharmacies, Pharmacy, Branch } from '@/services/pharmacyService';
+import { getPharmacies, Pharmacy, BranchSummary } from '@/services/pharmacyService';
 import { 
   UserPlus, Shield, Trash2, 
   Loader2, AlertCircle, 
@@ -200,6 +200,19 @@ export default function UsersPage() {
   const percentage = calculatePercentage();
   const isLimitReached = maxUsers !== "Illimité" && typeof maxUsers === 'number' && currentUsers >= maxUsers;
 
+  // Fonction pour obtenir les branches d'une pharmacie
+  const getBranchesForPharmacy = (pharmacyId: string): BranchSummary[] => {
+    const pharmacy = pharmacies.find((p: Pharmacy) => p.id === pharmacyId);
+    return pharmacy?.config?.branchConfig?.branches || [];
+  };
+
+  // Fonction pour obtenir le nom de la branche
+  const getBranchName = (pharmacyId: string, branchId: string): string => {
+    const branches = getBranchesForPharmacy(pharmacyId);
+    const branch = branches.find((b: BranchSummary) => b.id === branchId);
+    return branch?.name || 'Succursale';
+  };
+
   // Fonction pour exporter en PDF
   const exportToPDF = (user?: PharmacyUser) => {
     const doc = new jsPDF();
@@ -348,7 +361,10 @@ export default function UsersPage() {
             </label>
             <select
               value={selectedPharmacy}
-              onChange={(e) => setSelectedPharmacy(e.target.value)}
+              onChange={(e) => {
+                setSelectedPharmacy(e.target.value);
+                setSelectedBranch(''); // Reset branch when pharmacy changes
+              }}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
             >
               <option value="">Toutes les pharmacies</option>
@@ -369,14 +385,13 @@ export default function UsersPage() {
               value={selectedBranch}
               onChange={(e) => setSelectedBranch(e.target.value)}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
+              disabled={!selectedPharmacy}
             >
               <option value="">Toutes les succursales</option>
-              {selectedPharmacy && pharmacies
-                .find((p: Pharmacy) => p.id === selectedPharmacy)
-                ?.config?.branchConfig?.branches?.map((branch: Branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
+              {selectedPharmacy && getBranchesForPharmacy(selectedPharmacy).map((branch: BranchSummary) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
               ))}
             </select>
           </div>
@@ -519,7 +534,7 @@ export default function UsersPage() {
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Statut</th>
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Présence</th>
                 <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {users.map((user: PharmacyUser) => (
@@ -539,7 +554,7 @@ export default function UsersPage() {
                         <p className="text-[11px] text-slate-400 font-medium">{user.email}</p>
                       </div>
                     </div>
-                  </td>
+                   </td>
                   <td className="px-8 py-5">
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-xs">
@@ -548,19 +563,16 @@ export default function UsersPage() {
                           {pharmacies.find((p: Pharmacy) => p.id === user.pharmacy_id)?.name || 'Non assigné'}
                         </span>
                       </div>
-                      {user.branch_id && (
+                      {user.branch_id && user.pharmacy_id && (
                         <div className="flex items-center gap-1 text-xs text-slate-500">
                           <Users size={12} />
                           <span>
-                            {pharmacies
-                              .find((p: Pharmacy) => p.id === user.pharmacy_id)
-                              ?.config?.branchConfig?.branches
-                              ?.find((b: Branch) => b.id === user.branch_id)?.name || 'Succursale'}
+                            {getBranchName(user.pharmacy_id, user.branch_id)}
                           </span>
                         </div>
                       )}
                     </div>
-                  </td>
+                   </td>
                   <td className="px-8 py-5">
                     <div className="flex items-center gap-2">
                       <Shield size={14} className="text-medical" />
@@ -574,7 +586,7 @@ export default function UsersPage() {
                          user.role}
                       </span>
                     </div>
-                  </td>
+                   </td>
                   <td className="px-8 py-5">
                     <button
                       onClick={() => handleToggleStatus(user)}
@@ -588,7 +600,7 @@ export default function UsersPage() {
                       <Power size={12} />
                       {user.is_active ? 'Actif' : 'Inactif'}
                     </button>
-                  </td>
+                   </td>
                   <td className="px-8 py-5">
                     <div className="space-y-1">
                       {user.last_login ? (
@@ -610,7 +622,7 @@ export default function UsersPage() {
                         <span className="text-xs text-slate-400">Jamais connecté</span>
                       )}
                     </div>
-                  </td>
+                   </td>
                   <td className="px-8 py-5 text-right">
                     <div className="flex items-center justify-end gap-1">
                       {/* Permissions */}
@@ -660,7 +672,7 @@ export default function UsersPage() {
                         <Trash2 size={16} />
                       </button>
                     </div>
-                  </td>
+                   </td>
                 </tr>
               ))}
             </tbody>

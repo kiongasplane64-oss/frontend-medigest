@@ -45,7 +45,6 @@ export default function InitialStockView({ pharmacyId, branchId }: InitialStockV
   });
   const [showAddForm, setShowAddForm] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<InitialStockItem[]>([]);
   const [isImporting, setIsImporting] = useState(false);
 
@@ -127,7 +126,6 @@ export default function InitialStockView({ pharmacyId, branchId }: InitialStockV
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['initial-stock-products'] });
       setShowImportModal(false);
-      setImportFile(null);
       setImportPreview([]);
       setIsImporting(false);
     },
@@ -160,7 +158,6 @@ export default function InitialStockView({ pharmacyId, branchId }: InitialStockV
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setImportFile(file);
       // Simuler la lecture du fichier et l'aperçu
       // Dans un vrai projet, utilisez xlsx ou csv-parse
       const previewItems: InitialStockItem[] = [

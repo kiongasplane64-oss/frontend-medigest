@@ -4,7 +4,7 @@ import { X, Edit2, Package, Calendar, Tag, Building2, AlertTriangle } from 'luci
 import { format, differenceInDays } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import type { Product, SalesType } from '@/types/inventory.types';
-import StockAlertBadge from './StockAlertbadge';
+import StockAlertBadge from './StockAlertBadge';
 
 interface ProductDetailModalProps {
   product: Product;
