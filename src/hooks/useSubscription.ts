@@ -189,16 +189,15 @@ export const useSubscription = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  // FIX: Plans disponibles - Wrap the function in an arrow function
+  // FIX: Plans disponibles - Correction avec fonction fléchée sans paramètre
   const {
     data: availablePlans = [],
     isLoading: plansLoading,
     refetch: refetchPlans
-  } = useQuery({
+  } = useQuery<SubscriptionPlan[], Error>({ // Typage explicite
     queryKey: subscriptionKeys.plans(),
-    // FIX: Don't pass the function directly if it expects parameters
-    // Use an arrow function to call it without parameters (or with default)
-    queryFn: (): Promise<SubscriptionPlan[]> => subscriptionApi.getAvailablePlans(false),
+    // Correction : fonction fléchée qui ignore le contexte et appelle l'API sans paramètre
+    queryFn: () => subscriptionApi.getAvailablePlans(false),
     enabled: isAuthenticated,
     staleTime: 30 * 60 * 1000,
     initialData: [],
