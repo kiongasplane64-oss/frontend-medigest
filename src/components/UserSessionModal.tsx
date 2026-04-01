@@ -11,24 +11,31 @@ import {
   MapPin,
   RefreshCw
 } from 'lucide-react';
-import { User } from '@/types/auth';
 import { getUserSessionHistory, UserSession } from '@/services/userService';
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// Interface étendue pour l'utilisateur avec les champs supplémentaires
-// Sans redéclarer les propriétés de User pour éviter les conflits
-interface ExtendedUser extends User {
+// Interface pour l'utilisateur avec les champs nécessaires
+interface PharmacyUser {
+  id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
   full_name?: string;
-  // On ne redéclare PAS 'name' car elle existe déjà dans User
+  name: string;  // Obligatoire pour compatibilité
+  pharmacy_id?: string;
+  branch_id?: string;
+  last_login?: string;
+  session_duration?: number;
+  telephone?: string;
 }
 
 interface UserSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  user: ExtendedUser;
+  user: PharmacyUser;
 }
 
 const UserSessionModal: React.FC<UserSessionModalProps> = ({
@@ -126,7 +133,6 @@ const UserSessionModal: React.FC<UserSessionModalProps> = ({
 
   // Fonction pour obtenir le nom d'affichage
   const getDisplayName = (): string => {
-    // Utiliser full_name si disponible, sinon name (qui existe dans User), sinon email
     return user.full_name || user.name || user.email || 'Utilisateur';
   };
 

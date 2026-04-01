@@ -89,6 +89,8 @@ export interface PharmacyInfo {
   licenseNumber: string;
   logoUrl?: string;
 }
+export type SalesType = 'wholesale' | 'retail' | 'both';
+export type CurrencyMode = 'cdf_only' | 'usd_only' | 'both';
 
 export interface PharmacyConfig {
   pharmacyId: string;
@@ -128,6 +130,35 @@ export interface SaleData {
   currency: string;
   exchangeRate: number;
   pharmacy_id?: string;
+}
+
+export interface WorkingHours {
+  enabled: boolean;
+  startTime: string;
+  endTime: string;
+  overtimeEndTime?: string;
+  timezone?: string;
+  daysOff: {
+    monday: boolean;
+    tuesday: boolean;
+    wednesday: boolean;
+    thursday: boolean;
+    friday: boolean;
+    saturday: boolean;
+    sunday: boolean;
+  };
+}
+
+export interface MarginConfig {
+  defaultMargin: number;
+  minMargin: number;
+  maxMargin: number;
+}
+
+export interface AutomaticPricingConfig {
+  enabled: boolean;
+  method: 'percentage' | 'coefficient' | 'margin';
+  value: number;
 }
 
 // ============================================
@@ -930,6 +961,7 @@ export class PosService {
         price: item.unitPrice,
         quantity: item.quantity,
         code: item.code,
+        product_code: item.code,
       })),
       total: totalAmount,
       paymentMethod: paymentMethodSnapshot,

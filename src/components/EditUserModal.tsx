@@ -1,119 +1,101 @@
-// components/UserModal.tsx
+// components/EditUserModal.tsx
 import { useState, useEffect } from 'react';
-import { X, UserPlus, Mail, Lock, User, Shield, AlertCircle, Building2, MapPin, Phone, Key } from 'lucide-react';
-import { UserCreate } from '@/services/userService';
+import { X, Save, AlertCircle, Building2, MapPin, Mail, Phone, User, Key, Shield } from 'lucide-react';
+import { UpdateUserData } from '@/services/userService';
 import { Pharmacy, BranchSummary } from '@/services/pharmacyService';
 
-// Définir le type des rôles possibles
-type UserRole = 'admin' | 'manager' | 'pharmacist' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
-
-interface UserModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (userData: UserCreate & { pharmacy_id?: string; branch_id?: string }) => void;
-  isLoading: boolean;
-  pharmacies: Pharmacy[];
-  defaultPharmacyId?: string;
-  defaultBranchId?: string;
+// Interface étendue pour inclure les champs de formulaire
+interface ExtendedUpdateUserData extends UpdateUserData {
+  password?: string;
+  active_pharmacy_id?: string;
+  active_branch_id?: string;
+  pharmacy_id?: string;
+  branch_id?: string;
 }
 
-export default function UserModal({ 
+interface EditUserModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  user: any;
+  onSave: (userId: string, userData: ExtendedUpdateUserData) => void;
+  isLoading: boolean;
+  pharmacies: Pharmacy[];
+}
+
+export default function EditUserModal({ 
   isOpen, 
   onClose, 
-  onSubmit, 
+  user, 
+  onSave, 
   isLoading,
-  pharmacies,
-  defaultPharmacyId = '',
-  defaultBranchId = ''
-}: UserModalProps) {
-  const [formData, setFormData] = useState({
-    full_name: '',
-    email: '',
-    password: '',
-    role: 'vendeur' as UserRole,
-    is_active: true,
-    telephone: '',
-    adresse: '',
-    pharmacy_id: defaultPharmacyId,
-    branch_id: defaultBranchId
-  });
+  pharmacies 
+}: EditUserModalProps) {
+  const [formData, setFormData] = useState<ExtendedUpdateUserData>({});
+  const [selectedPharmacyId, setSelectedPharmacyId] = useState<string>('');
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPassword, setShowPassword] = useState(false);
 
-  // Réinitialiser le formulaire quand le modal s'ouvre
+  // Initialiser le formulaire avec les données de l'utilisateur
   useEffect(() => {
-    if (isOpen) {
+    if (user) {
       setFormData({
-        full_name: '',
-        email: '',
-        password: '',
-        role: 'vendeur',
-        is_active: true,
-        telephone: '',
-        adresse: '',
-        pharmacy_id: defaultPharmacyId,
-        branch_id: defaultBranchId
+        full_name: user.full_name || user.name || '',
+        email: user.email || '',
+        role: user.role || 'vendeur',
+        is_active: user.is_active !== undefined ? user.is_active : true,
+        telephone: user.telephone || '',
+        adresse: user.adresse || ''
       });
-      setErrors({});
-      setShowPassword(false);
+      setSelectedPharmacyId(user.pharmacy_id || user.active_pharmacy_id || '');
+      setSelectedBranchId(user.branch_id || user.active_branch_id || '');
     }
-  }, [isOpen, defaultPharmacyId, defaultBranchId]);
+  }, [user]);
 
+  // Récupérer les branches pour la pharmacie sélectionnée
   const getBranchesForPharmacy = (pharmacyId: string): BranchSummary[] => {
     const pharmacy = pharmacies.find(p => p.id === pharmacyId);
     return pharmacy?.config?.branchConfig?.branches || [];
   };
 
-  const branches = getBranchesForPharmacy(formData.pharmacy_id);
+  const branches = getBranchesForPharmacy(selectedPharmacyId);
 
-  const handleChange = (field: string, value: any) => {
+  const handleChange = (field: keyof ExtendedUpdateUserData, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    // Effacer l'erreur du champ
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
 
-  const handleRoleChange = (role: string) => {
-    setFormData(prev => ({ ...prev, role: role as UserRole }));
-    if (errors.role) {
-      setErrors(prev => ({ ...prev, role: '' }));
-    }
+  const handlePharmacyChange = (pharmacyId: string) => {
+    setSelectedPharmacyId(pharmacyId);
+    setSelectedBranchId(''); // Reset branch when pharmacy changes
+    setFormData(prev => ({
+      ...prev,
+      active_pharmacy_id: pharmacyId,
+      active_branch_id: undefined
+    }));
   };
 
-  const handlePharmacyChange = (pharmacyId: string) => {
-    setFormData(prev => ({ 
-      ...prev, 
-      pharmacy_id: pharmacyId,
-      branch_id: '' 
-    }));
-    if (errors.pharmacy_id) {
-      setErrors(prev => ({ ...prev, pharmacy_id: '' }));
-    }
+  const handleBranchChange = (branchId: string) => {
+    setSelectedBranchId(branchId);
+    setFormData(prev => ({ ...prev, active_branch_id: branchId }));
   };
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
     
-    if (!formData.full_name.trim()) {
-      newErrors.full_name = 'Le nom complet est requis';
-    } else if (formData.full_name.trim().length < 2) {
+    if (!formData.full_name || formData.full_name.trim().length < 2) {
       newErrors.full_name = 'Le nom doit contenir au moins 2 caractères';
     }
     
-    if (!formData.email.trim()) {
-      newErrors.email = 'L\'email est requis';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Email invalide';
     }
     
-    if (!formData.password) {
-      newErrors.password = 'Le mot de passe est requis';
-    } else if (formData.password.length < 8) {
+    if (formData.password && formData.password.length > 0 && formData.password.length < 8) {
       newErrors.password = 'Le mot de passe doit contenir au moins 8 caractères';
-    }
-    
-    if (!formData.pharmacy_id) {
-      newErrors.pharmacy_id = 'La pharmacie est requise';
     }
     
     setErrors(newErrors);
@@ -125,22 +107,38 @@ export default function UserModal({
     
     if (!validateForm()) return;
     
-    onSubmit({
-      full_name: formData.full_name.trim(),
-      email: formData.email.trim().toLowerCase(),
-      password: formData.password,
-      role: formData.role,
-      is_active: formData.is_active,
-      telephone: formData.telephone || undefined,
-      adresse: formData.adresse || undefined,
-      pharmacy_id: formData.pharmacy_id,
-      branch_id: formData.branch_id || undefined
-    });
+    // Préparer les données à envoyer - inclure seulement les champs modifiés
+    const updateData: ExtendedUpdateUserData = {};
+    
+    if (formData.full_name !== undefined) updateData.full_name = formData.full_name;
+    if (formData.email !== undefined) updateData.email = formData.email;
+    if (formData.role !== undefined) updateData.role = formData.role;
+    if (formData.is_active !== undefined) updateData.is_active = formData.is_active;
+    if (formData.telephone !== undefined) updateData.telephone = formData.telephone;
+    if (formData.adresse !== undefined) updateData.adresse = formData.adresse;
+    
+    // Ajouter l'affectation de pharmacie
+    if (selectedPharmacyId) {
+      updateData.active_pharmacy_id = selectedPharmacyId;
+    }
+    
+    // Ajouter l'affectation de branche
+    if (selectedBranchId) {
+      updateData.active_branch_id = selectedBranchId;
+    }
+    
+    // Ajouter le mot de passe seulement s'il a été modifié et non vide
+    if (formData.password && formData.password.trim() !== '') {
+      updateData.password = formData.password;
+    }
+    
+    onSave(user.id, updateData);
   };
 
   if (!isOpen) return null;
 
-  const roleOptions: { value: UserRole; label: string }[] = [
+  // Traduction des rôles
+  const roleOptions = [
     { value: 'admin', label: 'Administrateur' },
     { value: 'manager', label: 'Gestionnaire' },
     { value: 'pharmacist', label: 'Pharmacien' },
@@ -159,10 +157,10 @@ export default function UserModal({
         <div className="sticky top-0 bg-white border-b border-slate-100 px-8 py-6 flex items-center justify-between">
           <div>
             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter">
-              AJOUTER <span className="text-medical">UN UTILISATEUR</span>
+              MODIFIER <span className="text-medical">L'UTILISATEUR</span>
             </h2>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
-              Créer un nouveau compte utilisateur
+              {user?.email}
             </p>
           </div>
           <button
@@ -189,7 +187,7 @@ export default function UserModal({
                 </label>
                 <input
                   type="text"
-                  value={formData.full_name}
+                  value={formData.full_name || ''}
                   onChange={(e) => handleChange('full_name', e.target.value)}
                   className={`w-full p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent transition-all ${
                     errors.full_name ? 'border-red-300 bg-red-50' : 'border-slate-200'
@@ -211,7 +209,7 @@ export default function UserModal({
                   <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="email"
-                    value={formData.email}
+                    value={formData.email || ''}
                     onChange={(e) => handleChange('email', e.target.value)}
                     className={`w-full pl-10 p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent ${
                       errors.email ? 'border-red-300 bg-red-50' : 'border-slate-200'
@@ -236,7 +234,7 @@ export default function UserModal({
                   <Phone size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="tel"
-                    value={formData.telephone}
+                    value={formData.telephone || ''}
                     onChange={(e) => handleChange('telephone', e.target.value)}
                     className="w-full pl-10 p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
                     placeholder="+243 XXX XXX XXX"
@@ -250,7 +248,7 @@ export default function UserModal({
                 </label>
                 <input
                   type="text"
-                  value={formData.adresse}
+                  value={formData.adresse || ''}
                   onChange={(e) => handleChange('adresse', e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
                   placeholder="Adresse complète"
@@ -262,24 +260,24 @@ export default function UserModal({
           {/* Sécurité */}
           <div className="space-y-4">
             <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
-              <Lock size={18} className="text-medical" />
+              <Key size={18} className="text-medical" />
               <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Sécurité</h3>
             </div>
             
             <div>
               <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
-                Mot de passe *
+                Nouveau mot de passe (laisser vide pour ne pas modifier)
               </label>
               <div className="relative">
                 <Key size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type={showPassword ? "text" : "password"}
-                  value={formData.password}
+                  value={formData.password || ''}
                   onChange={(e) => handleChange('password', e.target.value)}
                   className={`w-full pl-10 p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent ${
                     errors.password ? 'border-red-300 bg-red-50' : 'border-slate-200'
                   }`}
-                  placeholder="Mot de passe (8 caractères minimum)"
+                  placeholder="Nouveau mot de passe (8 caractères minimum)"
                 />
                 <button
                   type="button"
@@ -313,8 +311,8 @@ export default function UserModal({
                   Rôle *
                 </label>
                 <select
-                  value={formData.role}
-                  onChange={(e) => handleRoleChange(e.target.value)}
+                  value={formData.role || 'vendeur'}
+                  onChange={(e) => handleChange('role', e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
                 >
                   {roleOptions.map(role => (
@@ -355,14 +353,12 @@ export default function UserModal({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
-                  <Building2 size={12} className="inline mr-1" /> Pharmacie *
+                  <Building2 size={12} className="inline mr-1" /> Pharmacie
                 </label>
                 <select
-                  value={formData.pharmacy_id}
+                  value={selectedPharmacyId}
                   onChange={(e) => handlePharmacyChange(e.target.value)}
-                  className={`w-full p-3 bg-slate-50 border rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent ${
-                    errors.pharmacy_id ? 'border-red-300 bg-red-50' : 'border-slate-200'
-                  }`}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent"
                 >
                   <option value="">Sélectionner une pharmacie</option>
                   {pharmacies.map(pharmacy => (
@@ -371,16 +367,9 @@ export default function UserModal({
                     </option>
                   ))}
                 </select>
-                {errors.pharmacy_id && (
-                  <p className="text-[10px] text-red-500 mt-1 flex items-center gap-1">
-                    <AlertCircle size={10} /> {errors.pharmacy_id}
-                  </p>
-                )}
-                {defaultPharmacyId && !formData.pharmacy_id && (
-                  <p className="text-[10px] text-amber-500 mt-1">
-                    La pharmacie par défaut sera utilisée
-                  </p>
-                )}
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Définit la pharmacie active par défaut pour cet utilisateur
+                </p>
               </div>
               
               <div>
@@ -388,10 +377,10 @@ export default function UserModal({
                   <MapPin size={12} className="inline mr-1" /> Succursale
                 </label>
                 <select
-                  value={formData.branch_id}
-                  onChange={(e) => handleChange('branch_id', e.target.value)}
+                  value={selectedBranchId}
+                  onChange={(e) => handleBranchChange(e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-medical focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={!formData.pharmacy_id}
+                  disabled={!selectedPharmacyId}
                 >
                   <option value="">Aucune succursale</option>
                   {branches.map(branch => (
@@ -400,12 +389,7 @@ export default function UserModal({
                     </option>
                   ))}
                 </select>
-                {defaultBranchId && !formData.branch_id && formData.pharmacy_id === defaultPharmacyId && (
-                  <p className="text-[10px] text-amber-500 mt-1">
-                    La succursale par défaut sera utilisée
-                  </p>
-                )}
-                {!formData.pharmacy_id && (
+                {!selectedPharmacyId && (
                   <p className="text-[10px] text-amber-500 mt-1">
                     Sélectionnez d'abord une pharmacie
                   </p>
@@ -431,9 +415,9 @@ export default function UserModal({
               {isLoading ? (
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
               ) : (
-                <UserPlus size={14} />
+                <Save size={14} />
               )}
-              Créer l'utilisateur
+              Enregistrer les modifications
             </button>
           </div>
         </form>

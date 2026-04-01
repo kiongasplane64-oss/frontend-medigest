@@ -11,13 +11,16 @@ import {
   AlertCircle,
   CheckCircle
 } from 'lucide-react';
-import { User } from '@/types/auth';
 import { UserPermissions, getDefaultPermissions } from '@/services/userService';
 
 // Interface étendue pour l'utilisateur avec les champs supplémentaires
 // Sans redéclarer les propriétés de User pour éviter les conflits
-interface ExtendedUser extends User {
+interface ExtendedUser {
+  id: string;
+  email: string;
+  role: string;
   full_name?: string;
+  name?: string;
   permissions?: UserPermissions;
 }
 
@@ -28,6 +31,7 @@ interface PermissionModalProps {
   onSave: (userId: string, permissions: UserPermissions) => void;
   isLoading?: boolean;
 }
+
 
 const PermissionModal: React.FC<PermissionModalProps> = ({
   isOpen,

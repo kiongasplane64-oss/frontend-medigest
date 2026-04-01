@@ -26,6 +26,9 @@ export interface UpdateUserData {
   branch_id?: string;
   telephone?: string;
   adresse?: string;
+  password?: string;  // Ajout du champ password
+  active_pharmacy_id?: string;  // Pour la pharmacie active
+  active_branch_id?: string; 
 }
 
 export interface UserPermissions {

@@ -16,7 +16,6 @@ import {
   ToggleRight,
   CreditCard,
   AlertTriangle,
-  MapPin,
   Sun,
   Moon,
   Monitor,
@@ -30,7 +29,10 @@ import {
   Clock as ClockIcon,
   TrendingUp,
   Settings2,
-  Calendar
+  Calendar,
+  Trash2,
+  Edit,
+  Check,
 } from 'lucide-react';
 import api from '@/api/client';
 import OutOfService from './endehors';
@@ -50,6 +52,7 @@ interface PharmacyResponse {
   phone: string;
   email: string;
   is_active: boolean;
+  tenant_id: string;
   config: PharmacyConfig;
   created_at: string;
   updated_at: string;
@@ -101,22 +104,42 @@ interface AutomaticPricingConfig {
   value: number;
 }
 
+interface Branch {
+  id: string;
+  name: string;
+  code: string;
+  address: string;
+  city: string;
+  country: string;
+  phone: string;
+  email: string;
+  manager_id?: string;
+  manager_name?: string;
+  latitude?: number;
+  longitude?: number;
+  is_active: boolean;
+  is_main_branch: boolean;
+  created_at: string;
+  updated_at?: string;
+  config?: BranchConfigData;
+}
+
+interface BranchConfigData {
+  workingHours?: WorkingHours;
+  workingHoursOverridden?: boolean;
+  [key: string]: any;
+}
+
 interface BranchConfig {
   maxBranches: number;
   currentBranches: number;
-  branches?: Array<{
-    id: string;
-    name: string;
-    address: string;
-    phone: string;
-    email: string;
-    manager?: string;
-    created_at: string;
-    is_active: boolean;
-  }>;
+  branches: Branch[];
+  main_branch_id?: string;
+  main_branch_name?: string;
 }
 
 type SalesType = 'wholesale' | 'retail' | 'both';
+type CurrencyMode = 'cdf_only' | 'usd_only' | 'both';
 
 interface ExpiredProductsConfig {
   allowSale: boolean;
@@ -142,11 +165,18 @@ interface ReportConfig {
   defaultFontSize: number;
 }
 
+interface RoundingConfig {
+  enabled: boolean;
+  precision: number;
+  method: 'nearest' | 'up' | 'down';
+}
+
 interface PharmacyConfig {
   pharmacyId: string;
   pharmacyInfo: PharmacyInfo;
   currencies: CurrencyConfig[];
   primaryCurrency: string;
+  currencyMode: CurrencyMode;
   taxRate: number;
   lowStockThreshold: number;
   expiryWarningDays: number;
@@ -167,6 +197,7 @@ interface PharmacyConfig {
   profitability: ProfitabilityConfig;
   invoice: InvoiceConfig;
   report: ReportConfig;
+  rounding: RoundingConfig;
 }
 
 interface ConfigViewProps {
@@ -189,6 +220,13 @@ interface ServiceStatus {
   };
   message: string;
   next_service_time?: string;
+}
+
+interface User {
+  id: string;
+  nom_complet: string;
+  email: string;
+  role: string;
 }
 
 // ============================================
@@ -231,7 +269,7 @@ const DEFAULT_BRANCH_CONFIG: BranchConfig = {
 };
 
 const DEFAULT_CURRENCIES: CurrencyConfig[] = [
-  { code: 'CDF', symbol: 'FC', isActive: true, exchangeRate: 2500 },
+  { code: 'CDF', symbol: 'FC', isActive: true, exchangeRate: 1 },
   { code: 'USD', symbol: '$', isActive: true, exchangeRate: 1 },
 ];
 
@@ -246,14 +284,16 @@ const DEFAULT_PHARMACY_INFO: PharmacyInfo = {
 };
 
 const DEFAULT_SALES_TYPE: SalesType = 'both';
+const DEFAULT_CURRENCY_MODE: CurrencyMode = 'both';
 const DEFAULT_EXPIRED_PRODUCTS: ExpiredProductsConfig = { allowSale: false };
 const DEFAULT_OVERTIME: OvertimeConfig = { enabled: false, endTime: '22:00' };
 const DEFAULT_SELL_BY_EXCHANGE_RATE = true;
 const DEFAULT_PROFITABILITY: ProfitabilityConfig = { enabled: false, rate: 30 };
 const DEFAULT_INVOICE: InvoiceConfig = { autoPrint: false, autoSave: true, fontSize: 12 };
 const DEFAULT_REPORT: ReportConfig = { defaultFontSize: 12 };
+const DEFAULT_ROUNDING: RoundingConfig = { enabled: false, precision: 0, method: 'nearest' };
 
-// Fuseaux horaires supportés (alignés avec le backend)
+// Fuseaux horaires supportés
 const SUPPORTED_TIMEZONES = [
   { value: 'Africa/Kinshasa', label: 'Africa/Kinshasa (UTC+1)' },
   { value: 'Africa/Lubumbashi', label: 'Africa/Lubumbashi (UTC+2)' },
@@ -280,6 +320,20 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   
+  // États pour les branches
+  const [showBranchModal, setShowBranchModal] = useState(false);
+  const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
+  const [branchFormData, setBranchFormData] = useState<Partial<Branch>>({
+    name: '',
+    address: '',
+    city: '',
+    country: 'CD',
+    phone: '',
+    email: '',
+    manager_id: '',
+  });
+  const [availableUsers, setAvailableUsers] = useState<User[]>([]);
+  
   const { timezone: browserTimezone, offset: browserOffset } = useTimezone();
   
   const [config, setConfig] = useState<PharmacyConfig>({
@@ -287,6 +341,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     pharmacyInfo: DEFAULT_PHARMACY_INFO,
     currencies: DEFAULT_CURRENCIES,
     primaryCurrency: 'CDF',
+    currencyMode: DEFAULT_CURRENCY_MODE,
     taxRate: 16,
     lowStockThreshold: 10,
     expiryWarningDays: 90,
@@ -307,6 +362,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     profitability: DEFAULT_PROFITABILITY,
     invoice: DEFAULT_INVOICE,
     report: DEFAULT_REPORT,
+    rounding: DEFAULT_ROUNDING,
   });
 
   const [newCurrency, setNewCurrency] = useState({
@@ -316,10 +372,9 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   });
 
   // ============================================
-  // EFFETS (Thème, chargement des données)
+  // EFFETS
   // ============================================
 
-  // Application du thème
   useEffect(() => {
     const root = document.documentElement;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -337,7 +392,6 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   }, [config.theme]);
 
-  // Écouter les changements de thème système
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleChange = () => {
@@ -353,7 +407,6 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, [config.theme]);
 
-  // Vérification périodique du statut de service
   useEffect(() => {
     checkServiceStatus();
     const interval = setInterval(checkServiceStatus, 60000);
@@ -367,8 +420,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   const displayLocalTime = (timeStr: string): string => {
     if (!timeStr || !showLocalTimes) return timeStr;
     const [hours, minutes] = timeStr.split(':').map(Number);
-    // Calcul simplifié - dans une vraie implémentation, utilisez une bibliothèque comme date-fns-tz
-    const pharmacyOffset = 1; // À adapter selon le fuseau
+    const pharmacyOffset = 1;
     const browserHour = hours - pharmacyOffset + browserOffset;
     let adjustedHour = browserHour;
     if (adjustedHour < 0) adjustedHour += 24;
@@ -387,6 +439,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         ? loadedConfig.currencies 
         : DEFAULT_CURRENCIES,
       primaryCurrency: loadedConfig?.primaryCurrency || 'CDF',
+      currencyMode: loadedConfig?.currencyMode || DEFAULT_CURRENCY_MODE,
       taxRate: loadedConfig?.taxRate ?? 16,
       lowStockThreshold: loadedConfig?.lowStockThreshold ?? 10,
       expiryWarningDays: loadedConfig?.expiryWarningDays ?? 90,
@@ -439,6 +492,10 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         ...DEFAULT_REPORT,
         ...(loadedConfig?.report || {})
       },
+      rounding: {
+        ...DEFAULT_ROUNDING,
+        ...(loadedConfig?.rounding || {})
+      },
     };
   };
 
@@ -482,6 +539,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
       }
       
       await checkServiceStatus();
+      await loadAvailableUsers();
       
     } catch (err: any) {
       console.error('Erreur lors du chargement:', err);
@@ -491,6 +549,16 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   };
 
+  const loadAvailableUsers = async () => {
+  try {
+    const response = await api.get('/users', {
+      params: { tenant_id: pharmacyData?.tenant_id, limit: 100 }
+    });
+    setAvailableUsers(response.data);
+  } catch (err) {
+    console.error('Erreur lors du chargement des utilisateurs:', err);
+  }
+};
   const checkServiceStatus = async () => {
     try {
       const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
@@ -525,10 +593,33 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     setSuccess(null);
     
     try {
+      // Construire les devises en fonction du mode
+      let currenciesToSave = [...config.currencies];
+      
+      if (config.currencyMode === 'cdf_only') {
+        currenciesToSave = currenciesToSave.map(c => ({
+          ...c,
+          isActive: c.code === 'CDF' || c.code === 'FC'
+        }));
+        config.primaryCurrency = 'CDF';
+      } else if (config.currencyMode === 'usd_only') {
+        currenciesToSave = currenciesToSave.map(c => ({
+          ...c,
+          isActive: c.code === 'USD' || c.code === '$'
+        }));
+        config.primaryCurrency = 'USD';
+      } else {
+        currenciesToSave = currenciesToSave.map(c => ({
+          ...c,
+          isActive: true
+        }));
+      }
+      
       const configToSave = {
         pharmacyInfo: config.pharmacyInfo,
-        currencies: config.currencies,
+        currencies: currenciesToSave,
         primaryCurrency: config.primaryCurrency,
+        currencyMode: config.currencyMode,
         taxRate: config.taxRate,
         lowStockThreshold: config.lowStockThreshold,
         expiryWarningDays: config.expiryWarningDays,
@@ -543,13 +634,21 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         theme: config.theme,
         initialCapital: config.initialCapital,
         branchConfig: config.branchConfig,
-        salesType: { type: config.salesType },
+        salesType: {
+          type: config.salesType,
+          calcul_auto_prix: config.automaticPricing.enabled,
+          marge_par_defaut: config.marginConfig.defaultMargin,
+          taux_tva: config.taxRate,
+          lock_stock_modification: false
+        },
+        
         expiredProducts: config.expiredProducts,
         overtime: config.overtime,
         sellByExchangeRate: config.sellByExchangeRate,
         profitability: config.profitability,
         invoice: config.invoice,
         report: config.report,
+        rounding: config.rounding,
       };
 
       const response = await api.patch(
@@ -643,26 +742,151 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   // GESTION DES SUCCURSALES
   // ============================================
 
-  const handleAddBranch = async () => {
+  const openBranchModal = (branch?: Branch) => {
+    if (branch) {
+      setEditingBranch(branch);
+      setBranchFormData({
+        name: branch.name,
+        address: branch.address,
+        city: branch.city,
+        country: branch.country,
+        phone: branch.phone,
+        email: branch.email,
+        manager_id: branch.manager_id,
+      });
+    } else {
+      setEditingBranch(null);
+      setBranchFormData({
+        name: '',
+        address: '',
+        city: '',
+        country: 'CD',
+        phone: '',
+        email: '',
+        manager_id: '',
+      });
+    }
+    setShowBranchModal(true);
+  };
+
+  const handleCreateBranch = async () => {
+    if (!branchFormData.name) {
+      setError("Le nom de la succursale est requis");
+      return;
+    }
+
     try {
       const response = await api.post(`/pharmacies/${pharmacyId}/branches`, {
-        name: `Succursale ${config.branchConfig.currentBranches + 1}`,
-        address: "",
-        phone: "",
-        email: "",
+        name: branchFormData.name,
+        address: branchFormData.address || '',
+        city: branchFormData.city || '',
+        country: branchFormData.country || 'CD',
+        phone: branchFormData.phone || '',
+        email: branchFormData.email || '',
+        manager_id: branchFormData.manager_id,
       });
       
       setConfig({
         ...config,
         branchConfig: {
           ...config.branchConfig,
-          currentBranches: response.data.current_branches,
-          branches: [...(config.branchConfig.branches || []), response.data.branch],
+          currentBranches: (config.branchConfig.currentBranches || 0) + 1,
+          branches: [...(config.branchConfig.branches || []), response.data],
         },
       });
       
+      setShowBranchModal(false);
+      setSuccess("Succursale créée avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
+      
     } catch (err: any) {
+      console.error('Erreur lors de la création de la succursale:', err);
       setError(err.response?.data?.detail || "Erreur lors de la création de la succursale");
+    }
+  };
+
+  const handleUpdateBranch = async () => {
+    if (!editingBranch || !branchFormData.name) return;
+
+    try {
+      const response = await api.put(`/pharmacies/${pharmacyId}/branches/${editingBranch.id}`, {
+        name: branchFormData.name,
+        address: branchFormData.address,
+        city: branchFormData.city,
+        country: branchFormData.country,
+        phone: branchFormData.phone,
+        email: branchFormData.email,
+        manager_id: branchFormData.manager_id,
+      });
+      
+      setConfig({
+        ...config,
+        branchConfig: {
+          ...config.branchConfig,
+          branches: config.branchConfig.branches.map(b => 
+            b.id === editingBranch.id ? response.data : b
+          ),
+        },
+      });
+      
+      setShowBranchModal(false);
+      setEditingBranch(null);
+      setSuccess("Succursale mise à jour avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err: any) {
+      console.error('Erreur lors de la mise à jour de la succursale:', err);
+      setError(err.response?.data?.detail || "Erreur lors de la mise à jour de la succursale");
+    }
+  };
+
+  const handleDeleteBranch = async (branchId: string) => {
+    if (!confirm("Êtes-vous sûr de vouloir désactiver cette succursale ?")) return;
+
+    try {
+      await api.delete(`/pharmacies/${pharmacyId}/branches/${branchId}`);
+      
+      setConfig({
+        ...config,
+        branchConfig: {
+          ...config.branchConfig,
+          currentBranches: (config.branchConfig.currentBranches || 0) - 1,
+          branches: config.branchConfig.branches.filter(b => b.id !== branchId),
+        },
+      });
+      
+      setSuccess("Succursale désactivée avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err: any) {
+      console.error('Erreur lors de la suppression de la succursale:', err);
+      setError(err.response?.data?.detail || "Erreur lors de la suppression de la succursale");
+    }
+  };
+
+  const handleSetMainBranch = async (branchId: string) => {
+    try {
+      const response = await api.post(`/pharmacies/${pharmacyId}/branches/${branchId}/set-main`);
+      
+      setConfig({
+        ...config,
+        branchConfig: {
+          ...config.branchConfig,
+          branches: config.branchConfig.branches.map(b => ({
+            ...b,
+            is_main_branch: b.id === branchId
+          })),
+          main_branch_id: branchId,
+          main_branch_name: response.data.name,
+        },
+      });
+      
+      setSuccess("Succursale principale définie avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err: any) {
+      console.error('Erreur lors de la définition de la succursale principale:', err);
+      setError(err.response?.data?.detail || "Erreur lors de la définition de la succursale principale");
     }
   };
 
@@ -777,6 +1001,144 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6 bg-white dark:bg-slate-900 min-h-screen">
+      {/* Modal de création/édition de succursale */}
+      {showBranchModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-slate-800 dark:text-slate-200">
+                {editingBranch ? 'Modifier la succursale' : 'Nouvelle succursale'}
+              </h3>
+              <button onClick={() => setShowBranchModal(false)} className="text-slate-500 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Nom de la succursale *
+                </label>
+                <input
+                  type="text"
+                  value={branchFormData.name}
+                  onChange={(e) => setBranchFormData({ ...branchFormData, name: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  placeholder="Ex: Pharmacie du Centre"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Adresse
+                </label>
+                <textarea
+                  value={branchFormData.address}
+                  onChange={(e) => setBranchFormData({ ...branchFormData, address: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  rows={2}
+                  placeholder="Adresse complète"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Ville
+                  </label>
+                  <input
+                    type="text"
+                    value={branchFormData.city}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, city: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                    placeholder="Kinshasa"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Pays
+                  </label>
+                  <select
+                    value={branchFormData.country}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, country: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                  >
+                    <option value="CD">République Démocratique du Congo</option>
+                    <option value="CG">Congo-Brazzaville</option>
+                    <option value="GA">Gabon</option>
+                    <option value="CM">Cameroun</option>
+                    <option value="CI">Côte d'Ivoire</option>
+                    <option value="SN">Sénégal</option>
+                    <option value="FR">France</option>
+                    <option value="BE">Belgique</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Téléphone
+                  </label>
+                  <input
+                    type="tel"
+                    value={branchFormData.phone}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, phone: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                    placeholder="+243 XXX XXX XXX"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={branchFormData.email}
+                    onChange={(e) => setBranchFormData({ ...branchFormData, email: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                    placeholder="contact@pharmacie.com"
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Responsable
+                </label>
+                <select
+                  value={branchFormData.manager_id || ''}
+                  onChange={(e) => setBranchFormData({ ...branchFormData, manager_id: e.target.value || undefined })}
+                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                >
+                  <option value="">Aucun responsable</option>
+                  {availableUsers.map(user => (
+                    <option key={user.id} value={user.id}>
+                      {user.nom_complet} ({user.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowBranchModal(false)}
+                className="flex-1 px-4 py-2 border border-slate-300 dark:border-slate-600 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={editingBranch ? handleUpdateBranch : handleCreateBranch}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+              >
+                {editingBranch ? 'Mettre à jour' : 'Créer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* En-tête */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-700 pb-6">
         <div>
@@ -936,6 +1298,169 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               />
             </div>
           </div>
+        </div>
+
+        {/* Mode de devise (Nouveau) */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
+          <div className="flex items-center gap-2 mb-2">
+            <DollarSign className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+            <h2 className="font-bold text-slate-700 dark:text-slate-300">Mode de devise</h2>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-4">
+            <button
+              onClick={() => setConfig({...config, currencyMode: 'cdf_only'})}
+              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
+                config.currencyMode === 'cdf_only'
+                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
+                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              <span className="text-2xl font-bold">FC</span>
+              <span className="text-sm font-medium">Vente uniquement en Francs Congolais</span>
+              <span className="text-xs text-slate-500">(CDF / FC)</span>
+            </button>
+            
+            <button
+              onClick={() => setConfig({...config, currencyMode: 'usd_only'})}
+              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
+                config.currencyMode === 'usd_only'
+                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
+                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              <span className="text-2xl font-bold">$</span>
+              <span className="text-sm font-medium">Vente uniquement en Dollars Américains</span>
+              <span className="text-xs text-slate-500">(USD / $)</span>
+            </button>
+            
+            <button
+              onClick={() => setConfig({...config, currencyMode: 'both'})}
+              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
+                config.currencyMode === 'both'
+                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
+                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
+              }`}
+            >
+              <div className="flex gap-1 text-2xl">
+                <span>FC</span>
+                <span className="text-lg">/</span>
+                <span>$</span>
+              </div>
+              <span className="text-sm font-medium">Vente en FC et en $</span>
+              <span className="text-xs text-slate-500">Deux prix affichés</span>
+            </button>
+          </div>
+          
+          {config.currencyMode === 'both' && (
+            <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+              <p className="text-sm text-blue-700 dark:text-blue-400">
+                ℹ️ Mode multi-devises activé : Les prix seront affichés dans les deux devises.
+                Le taux de change configuré sera utilisé pour la conversion automatique.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Arrondissement des prix (Nouveau) */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Settings2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+            <h2 className="font-bold text-slate-700 dark:text-slate-300">Arrondissement des prix</h2>
+          </div>
+          
+          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+            <span className="font-semibold text-slate-700 dark:text-slate-300">Activer l'arrondissement</span>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={config.rounding.enabled}
+                onChange={(e) => setConfig({
+                  ...config,
+                  rounding: { ...config.rounding, enabled: e.target.checked }
+                })}
+              />
+              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+            </label>
+          </div>
+          
+          {config.rounding.enabled && (
+            <>
+              <div>
+                <label className="text-sm text-slate-600 dark:text-slate-400">
+                  Précision d'arrondissement
+                </label>
+                <div className="flex gap-2 mt-1">
+                  <select
+                    value={config.rounding.precision}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      rounding: { ...config.rounding, precision: Number(e.target.value) }
+                    })}
+                    className="flex-1 p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                  >
+                    <option value={0}>0 (unités)</option>
+                    <option value={10}>10 (dizaines)</option>
+                    <option value={50}>50 (cinquante)</option>
+                    <option value={100}>100 (centaines)</option>
+                    <option value={500}>500 (cinq cents)</option>
+                    <option value={1000}>1000 (milliers)</option>
+                  </select>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  Les prix seront arrondis à la {config.rounding.precision} {config.rounding.precision === 0 ? 'unité' : 'valeur'} la plus proche
+                </p>
+              </div>
+              
+              <div>
+                <label className="text-sm text-slate-600 dark:text-slate-400">
+                  Méthode d'arrondissement
+                </label>
+                <div className="grid grid-cols-3 gap-2 mt-1">
+                  <button
+                    onClick={() => setConfig({
+                      ...config,
+                      rounding: { ...config.rounding, method: 'nearest' }
+                    })}
+                    className={`p-2 rounded-lg text-sm transition-all ${
+                      config.rounding.method === 'nearest'
+                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
+                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Au plus proche
+                  </button>
+                  <button
+                    onClick={() => setConfig({
+                      ...config,
+                      rounding: { ...config.rounding, method: 'up' }
+                    })}
+                    className={`p-2 rounded-lg text-sm transition-all ${
+                      config.rounding.method === 'up'
+                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
+                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Arrondi supérieur
+                  </button>
+                  <button
+                    onClick={() => setConfig({
+                      ...config,
+                      rounding: { ...config.rounding, method: 'down' }
+                    })}
+                    className={`p-2 rounded-lg text-sm transition-all ${
+                      config.rounding.method === 'down'
+                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
+                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    Arrondi inférieur
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Jours ouvrables */}
@@ -1302,7 +1827,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                     onChange={(e) => updateExchangeRate(index, Number(e.target.value))}
                     className="flex-1 p-1.5 bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
                     placeholder="Taux"
-                    disabled={currency.code === 'USD'}
+                    disabled={currency.code === 'USD' || currency.code === 'CDF'}
                     step="0.01"
                   />
                   {config.currencies.length > 2 && (
@@ -1654,60 +2179,114 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
           )}
         </div>
 
-        {/* Configuration des branches/succursales */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <MapPin className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Succursales</h2>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <div>
-                <p className="font-semibold text-slate-700 dark:text-slate-300">Succursales actives</p>
-                <p className="text-sm text-slate-500 dark:text-slate-400">
-                  {config.branchConfig.currentBranches} / {config.branchConfig.maxBranches}
-                </p>
-              </div>
-              <div className="w-20 h-2 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden">
+        {/* Configuration des branches/succursales - Version améliorée */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+              <h2 className="font-bold text-slate-700 dark:text-slate-300">Succursales</h2>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-slate-500 dark:text-slate-400">
+                {config.branchConfig.currentBranches} / {config.branchConfig.maxBranches} succursales
+              </span>
+              <div className="w-24 h-2 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden">
                 <div 
                   className="h-full bg-orange-600 rounded-full transition-all"
                   style={{ width: `${(config.branchConfig.currentBranches / config.branchConfig.maxBranches) * 100}%` }}
                 />
               </div>
             </div>
+          </div>
 
-            {config.branchConfig.branches && config.branchConfig.branches.length > 0 && (
-              <div className="space-y-2">
-                {config.branchConfig.branches.map((branch) => (
-                  <div key={branch.id} className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-600 hover:shadow-md transition-all">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="font-medium text-slate-700 dark:text-slate-300">{branch.name}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">{branch.address}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">{branch.phone}</p>
+          {config.branchConfig.branches && config.branchConfig.branches.length > 0 ? (
+            <div className="space-y-3">
+              {config.branchConfig.branches.map((branch) => (
+                <div 
+                  key={branch.id} 
+                  className={`p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border transition-all ${
+                    branch.is_main_branch 
+                      ? 'border-orange-300 dark:border-orange-700 bg-orange-50/50 dark:bg-orange-900/10' 
+                      : 'border-slate-200 dark:border-slate-600 hover:shadow-md'
+                  }`}
+                >
+                  <div className="flex justify-between items-start">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-slate-800 dark:text-slate-200">{branch.name}</p>
+                        {branch.is_main_branch && (
+                          <span className="text-xs px-2 py-0.5 bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-400 rounded-full">
+                            Principale
+                          </span>
+                        )}
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          branch.is_active 
+                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
+                            : 'bg-slate-100 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
+                        }`}>
+                          {branch.is_active ? 'Actif' : 'Inactif'}
+                        </span>
                       </div>
-                      <span className={`text-xs px-2 py-1 rounded-full ${
-                        branch.is_active ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-slate-100 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
-                      }`}>
-                        {branch.is_active ? 'Actif' : 'Inactif'}
-                      </span>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{branch.address}</p>
+                      <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {branch.phone && <span>📞 {branch.phone}</span>}
+                        {branch.email && <span>✉️ {branch.email}</span>}
+                        {branch.city && <span>📍 {branch.city}, {branch.country}</span>}
+                        {branch.manager_name && <span>👤 {branch.manager_name}</span>}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 ml-4">
+                      <button
+                        onClick={() => openBranchModal(branch)}
+                        className="p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                        title="Modifier"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      {!branch.is_main_branch && (
+                        <button
+                          onClick={() => handleSetMainBranch(branch.id)}
+                          className="p-1.5 text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors"
+                          title="Définir comme principale"
+                        >
+                          <Check className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteBranch(branch.id)}
+                        className="p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                        title="Désactiver"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+              <Building2 className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p>Aucune succursale configurée</p>
+              <p className="text-sm">La pharmacie principale est considérée comme la succursale par défaut</p>
+            </div>
+          )}
 
-            {config.branchConfig.currentBranches < config.branchConfig.maxBranches && (
-              <button
-                onClick={handleAddBranch}
-                className="w-full p-3 border-2 border-dashed border-orange-200 dark:border-orange-800 rounded-xl text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-all"
-              >
-                <Plus className="w-5 h-5 mx-auto" />
-                <span className="text-sm">Ajouter une succursale</span>
-              </button>
-            )}
-          </div>
+          {config.branchConfig.currentBranches < config.branchConfig.maxBranches && (
+            <button
+              onClick={() => openBranchModal()}
+              className="w-full p-3 border-2 border-dashed border-orange-200 dark:border-orange-800 rounded-xl text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-all flex items-center justify-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              <span>Ajouter une succursale</span>
+            </button>
+          )}
+          
+          <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
+            {config.branchConfig.currentBranches >= config.branchConfig.maxBranches 
+              ? `Limite de ${config.branchConfig.maxBranches} succursale(s) atteinte pour votre plan`
+              : `Vous pouvez ajouter jusqu'à ${config.branchConfig.maxBranches - config.branchConfig.currentBranches} succursale(s) supplémentaire(s)`}
+          </p>
         </div>
 
         {/* Thème */}
@@ -1764,7 +2343,9 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <p className="text-slate-500 dark:text-slate-400">Devise principale</p>
-                <p className="font-medium text-slate-700 dark:text-slate-300">{config.primaryCurrency}</p>
+                <p className="font-medium text-slate-700 dark:text-slate-300">
+                  {config.currencyMode === 'cdf_only' ? 'FC (CDF)' : config.currencyMode === 'usd_only' ? '$ (USD)' : `${config.primaryCurrency} (multi-devises)`}
+                </p>
               </div>
               <div>
                 <p className="text-slate-500 dark:text-slate-400">TVA</p>
@@ -1785,6 +2366,12 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-2">
               <div>
+                <p className="text-slate-500 dark:text-slate-400">Arrondissement</p>
+                <p className="font-medium text-slate-700 dark:text-slate-300">
+                  {config.rounding.enabled ? `${config.rounding.precision} (${config.rounding.method === 'nearest' ? 'au plus proche' : config.rounding.method === 'up' ? 'supérieur' : 'inférieur'})` : 'Désactivé'}
+                </p>
+              </div>
+              <div>
                 <p className="text-slate-500 dark:text-slate-400">Vente périmés</p>
                 <p className="font-medium text-slate-700 dark:text-slate-300">{config.expiredProducts.allowSale ? 'Autorisée' : 'Interdite'}</p>
               </div>
@@ -1793,12 +2380,8 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                 <p className="font-medium text-slate-700 dark:text-slate-300">{config.profitability.enabled ? `${config.profitability.rate}%` : 'Désactivée'}</p>
               </div>
               <div>
-                <p className="text-slate-500 dark:text-slate-400">Impression auto</p>
-                <p className="font-medium text-slate-700 dark:text-slate-300">{config.invoice.autoPrint ? 'Active' : 'Inactive'}</p>
-              </div>
-              <div>
-                <p className="text-slate-500 dark:text-slate-400">Police facture</p>
-                <p className="font-medium text-slate-700 dark:text-slate-300">{config.invoice.fontSize}px</p>
+                <p className="text-slate-500 dark:text-slate-400">Succursales</p>
+                <p className="font-medium text-slate-700 dark:text-slate-300">{config.branchConfig.currentBranches} / {config.branchConfig.maxBranches}</p>
               </div>
             </div>
             <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
