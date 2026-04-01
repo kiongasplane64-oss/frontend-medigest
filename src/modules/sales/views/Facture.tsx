@@ -14,8 +14,9 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { saleService, type SaleResponse } from '@/services/saleService';
 import { useToast } from '@/hooks/useToast';
+import { useSaleStore, type LocalSale } from '@/store/saleStore';
+import { type SaleResponse } from '@/services/saleService';
 
 interface Invoice {
   id: string;
@@ -35,31 +36,34 @@ interface Invoice {
   sessionNumber?: string;
   clientName?: string;
   status?: string;
+  synced?: boolean;
 }
 
 export default function Facture() {
   const { toast } = useToast();
+  const { sales: apiSales, localSales, fetchSales, syncPendingSales, loading: storeLoading, getPendingCount } = useSaleStore();
+  
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [search, setSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [filterDate, setFilterDate] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const pendingCount = getPendingCount();
+
   useEffect(() => {
     void loadInvoices();
   }, []);
 
+  useEffect(() => {
+    combineInvoices();
+  }, [apiSales, localSales, storeLoading]);
+
   async function loadInvoices() {
     setLoading(true);
     try {
-      const response = await saleService.getSales({
-        limit: 100,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      });
-
-      const normalized = (response.items || []).map(normalizeSaleToInvoice);
-      setInvoices(normalized);
+      await fetchSales();
+      await syncPendingSales();
     } catch (error) {
       console.error('Erreur chargement factures:', error);
       toast({
@@ -67,13 +71,12 @@ export default function Facture() {
         description: "Impossible de charger les factures",
         variant: "destructive",
       });
-      setInvoices([]);
     } finally {
       setLoading(false);
     }
   }
 
-  function normalizeSaleToInvoice(sale: SaleResponse): Invoice {
+  function normalizeApiSaleToInvoice(sale: SaleResponse): Invoice {
     return {
       id: sale.id,
       receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
@@ -92,7 +95,41 @@ export default function Facture() {
       sessionNumber: sale.reference?.slice(0, 8),
       clientName: sale.client_name || 'Passager',
       status: sale.status,
+      synced: true,
     };
+  }
+
+  function normalizeLocalSaleToInvoice(sale: LocalSale): Invoice {
+    return {
+      id: sale.id,
+      receiptNumber: sale.receiptNumber,
+      items: sale.items.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        code: item.code,
+      })),
+      total: sale.total,
+      paymentMethod: sale.paymentMethod,
+      timestamp: sale.timestamp,
+      cashierName: sale.cashierName,
+      posName: sale.posName,
+      sessionNumber: sale.sessionNumber,
+      clientName: sale.clientName || 'Passager',
+      status: sale.status,
+      synced: sale.synced,
+    };
+  }
+
+  function combineInvoices() {
+    const apiInvoices = apiSales.map(normalizeApiSaleToInvoice);
+    const localInvoices = localSales.map(normalizeLocalSaleToInvoice);
+    
+    const combined = [...localInvoices, ...apiInvoices];
+    combined.sort((a, b) => b.timestamp - a.timestamp);
+    
+    setInvoices(combined);
   }
 
   function getInvoiceNumber(invoice: Invoice): string {
@@ -199,6 +236,15 @@ export default function Facture() {
               color: #666;
               margin: 2px 0;
             }
+            .pending-badge {
+              background: #f59e0b;
+              color: white;
+              padding: 2px 6px;
+              border-radius: 4px;
+              font-size: 10px;
+              display: inline-block;
+              margin-top: 8px;
+            }
             .items {
               margin: 16px 0;
             }
@@ -244,6 +290,7 @@ export default function Facture() {
               <div class="meta">Caissier: ${getCashierName(invoice)}</div>
               <div class="meta">Caisse: ${getPosName(invoice)}</div>
               <div class="meta">Client: ${getClientName(invoice)}</div>
+              ${!invoice.synced ? '<div class="pending-badge">En attente de synchronisation</div>' : ''}
             </div>
 
             <div class="items">
@@ -292,6 +339,7 @@ Caissier: ${getCashierName(invoice)}
 Caisse: ${getPosName(invoice)}
 Client: ${getClientName(invoice)}
 Paiement: ${getPaymentLabel(invoice.paymentMethod)}
+${!invoice.synced ? 'STATUT: En attente de synchronisation\n' : ''}
 ----------------------------------------
 ARTICLES:
 ${invoice.items
@@ -316,6 +364,13 @@ Merci de votre visite
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {pendingCount > 0 && (
+        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
+          <Loader2 size={16} className="animate-spin" />
+          {pendingCount} facture(s) en attente de synchronisation
+        </div>
+      )}
+
       <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6 sticky top-0 z-10">
         <div className="flex items-center gap-4">
           <Link
@@ -325,12 +380,8 @@ Merci de votre visite
             <ArrowLeft size={20} />
           </Link>
           <div>
-            <h1 className="text-xl font-black text-slate-800 md:text-2xl">
-              Gestion des factures
-            </h1>
-            <p className="text-sm text-slate-400">
-              Historique des ventes et impressions
-            </p>
+            <h1 className="text-xl font-black text-slate-800 md:text-2xl">Gestion des factures</h1>
+            <p className="text-sm text-slate-400">Historique des ventes et impressions</p>
           </div>
         </div>
       </header>
@@ -382,28 +433,30 @@ Merci de votre visite
             </span>
           </div>
 
-          {loading ? (
+          {loading || storeLoading ? (
             <div className="flex items-center justify-center p-10 text-slate-400">
               <Loader2 className="mr-2 animate-spin" size={20} />
               Chargement...
             </div>
           ) : filteredInvoices.length === 0 ? (
-            <div className="p-10 text-center text-slate-400">
-              Aucune facture trouvée
-            </div>
+            <div className="p-10 text-center text-slate-400">Aucune facture trouvée</div>
           ) : (
             <div className="divide-y divide-slate-100">
               {filteredInvoices.map((invoice) => (
-                <div
-                  key={invoice.id}
-                  className="p-4 transition-colors hover:bg-slate-50 md:p-5"
-                >
+                <div key={invoice.id} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
                         <span className="rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-600">
                           #{getInvoiceNumber(invoice)}
                         </span>
+
+                        {!invoice.synced && (
+                          <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">
+                            <Loader2 size={10} className="mr-1 inline animate-spin" />
+                            En attente
+                          </span>
+                        )}
 
                         {invoice.status && invoice.status !== 'completed' && (
                           <span
@@ -423,38 +476,28 @@ Merci de votre visite
                           </span>
                         )}
 
-                        <span className="text-sm text-slate-400">
-                          {formatDate(invoice.timestamp)}
-                        </span>
+                        <span className="text-sm text-slate-400">{formatDate(invoice.timestamp)}</span>
                       </div>
 
                       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <div>
                           <p className="text-xs text-slate-400">Client</p>
-                          <p className="font-semibold text-slate-800">
-                            {getClientName(invoice)}
-                          </p>
+                          <p className="font-semibold text-slate-800">{getClientName(invoice)}</p>
                         </div>
 
                         <div>
                           <p className="text-xs text-slate-400">Caissier</p>
-                          <p className="font-semibold text-slate-800">
-                            {getCashierName(invoice)}
-                          </p>
+                          <p className="font-semibold text-slate-800">{getCashierName(invoice)}</p>
                         </div>
 
                         <div>
                           <p className="text-xs text-slate-400">Articles</p>
-                          <p className="font-semibold text-slate-800">
-                            {invoice.items.length}
-                          </p>
+                          <p className="font-semibold text-slate-800">{invoice.items.length}</p>
                         </div>
 
                         <div>
                           <p className="text-xs text-slate-400">Total</p>
-                          <p className="text-lg font-black text-blue-600">
-                            {Number(invoice.total).toFixed(2)} $
-                          </p>
+                          <p className="text-lg font-black text-blue-600">{Number(invoice.total).toFixed(2)} $</p>
                         </div>
                       </div>
                     </div>
@@ -505,9 +548,13 @@ Merci de votre visite
                     <h3 className="text-lg font-black text-slate-800 md:text-xl">
                       Détails facture #{getInvoiceNumber(selectedInvoice)}
                     </h3>
-                    <p className="text-sm text-slate-400">
-                      {formatDate(selectedInvoice.timestamp)}
-                    </p>
+                    <p className="text-sm text-slate-400">{formatDate(selectedInvoice.timestamp)}</p>
+                    {!selectedInvoice.synced && (
+                      <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" />
+                        En attente de synchronisation
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -534,9 +581,7 @@ Merci de votre visite
 
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="mb-1 text-xs text-slate-400">Paiement</p>
-                  <p className="font-bold text-slate-800">
-                    {getPaymentLabel(selectedInvoice.paymentMethod)}
-                  </p>
+                  <p className="font-bold text-slate-800">{getPaymentLabel(selectedInvoice.paymentMethod)}</p>
                 </div>
 
                 <div className="rounded-2xl bg-slate-50 p-4">
@@ -552,10 +597,7 @@ Merci de votre visite
 
                 <div className="divide-y divide-slate-100">
                   {selectedInvoice.items.map((item, idx) => (
-                    <div
-                      key={`${item.id || idx}`}
-                      className="flex items-center justify-between gap-4 px-4 py-3"
-                    >
+                    <div key={`${item.id || idx}`} className="flex items-center justify-between gap-4 px-4 py-3">
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-800">{item.name}</p>
                         <p className="text-xs text-slate-400">
@@ -575,9 +617,7 @@ Merci de votre visite
               <div className="rounded-2xl bg-blue-50 p-4">
                 <div className="flex items-center justify-between text-lg font-black">
                   <span>Total</span>
-                  <span className="text-blue-600">
-                    {Number(selectedInvoice.total).toFixed(2)} $
-                  </span>
+                  <span className="text-blue-600">{Number(selectedInvoice.total).toFixed(2)} $</span>
                 </div>
               </div>
 

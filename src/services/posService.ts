@@ -8,9 +8,10 @@ import {
 } from 'mobx';
 import { toast } from 'react-hot-toast';
 import api from '@/api/client';
-import { useAuthStore} from '@/store/useAuthStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { saleService } from './saleService';
 import { inventoryService } from './inventoryService';
+import { useSaleStore, type LocalSale } from '@/store/saleStore';
 
 // ============================================
 // TYPES - ALIGNÉS AVEC LE BACKEND
@@ -22,29 +23,19 @@ export interface Category {
   icon?: string;
 }
 
-/**
- * Interface Product alignée avec ce que renvoie le backend.
- * Plus de champs redondants comme 'price', 'wholesalePrice', etc.
- * Le backend gère la logique de prix, le frontend l'affiche.
- */
 export interface Product {
   id: string;
   name: string;
-  // Prix venant directement du backend
   selling_price: number;
   purchase_price: number;
   quantity: number;
-  // Identifiants
   code: string;
   barcode?: string;
   qr_code?: string;
-  // Catégorie
   category_id?: string;
   category?: Category;
-  // Métadonnées
   description?: string;
   pharmacy_id?: string;
-  // Pour l'affichage
   unit?: string;
   alert_threshold?: number;
   expiry_date?: string;
@@ -55,9 +46,10 @@ export interface CartItem {
   name: string;
   code: string;
   quantity: number;
-  unitPrice: number;      // Prix unitaire utilisé pour le calcul (selling_price)
-  stock: number;          // Stock actuel pour validation
-  selling_price: number;  // Prix de vente original
+  unitPrice: number;
+  stock: number;
+  selling_price: number;
+  discount_percent?: number;
 }
 
 export interface CashierInfo {
@@ -122,7 +114,7 @@ export type PaymentMethod = 'cash' | 'mobile_money' | 'account';
 export type ScanMode = 'auto' | 'manual';
 
 export interface SaleData {
-  items: CartItem[];
+  items: Omit<CartItem, 'unitPrice' | 'stock' | 'selling_price'>[];
   total: number;
   paymentMethod: PaymentMethod;
   timestamp: string;
@@ -144,7 +136,6 @@ export interface SaleData {
 
 const SCAN_COOLDOWN = 1500;
 const VIBRATION_DURATION = 80;
-const PENDING_SALES_KEY = 'pending_sales';
 
 // ============================================
 // SERVICE PRINCIPAL
@@ -203,10 +194,9 @@ export class PosService {
   };
   isOnline = true;
   
-  // Nom du client modifiable
   clientName = 'Passager';
 
-  // Callbacks pour les notifications
+  // Callbacks
   private onCartChange?: (cart: CartItem[]) => void;
   private onProcessingChange?: (isProcessing: boolean) => void;
   private onShowInvoiceChange?: (show: boolean) => void;
@@ -386,7 +376,7 @@ export class PosService {
   setOnlineStatus(isOnline: boolean) {
     this.isOnline = isOnline;
     if (isOnline) {
-      this.syncPendingSales();
+      useSaleStore.getState().syncPendingSales();
     }
   }
 
@@ -400,19 +390,12 @@ export class PosService {
   // LOGIQUE MÉTIER - CHARGEMENT DIRECT API
   // ============================================
 
-  /**
-   * Charge les données initiales directement depuis l'API
-   */
   async loadInitialData() {
     this.setLoading(true);
     try {
-      // Charger les infos utilisateur
       await this.loadUserInfo();
-      
-      // Charger les produits
       await this.loadProducts();
       
-      // Charger les catégories
       try {
         await this.loadCategories();
       } catch (e) {
@@ -422,14 +405,9 @@ export class PosService {
         });
       }
       
-      // Charger les stats
       await this.loadDailyStats();
       
-      // Sauvegarder la config dans le cache (uniquement pour persistance des préférences)
       localStorage.setItem('pharmacy_config', JSON.stringify(this.config));
-      
-      // Synchroniser les ventes en attente
-      await this.syncPendingSales();
       
       console.log('✅ Données chargées depuis le serveur');
       
@@ -441,9 +419,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Charge les informations de l'utilisateur et sa session
-   */
   async loadUserInfo() {
     try {
       const response = await api.get('/user/current-session');
@@ -481,9 +456,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Charge la configuration de la pharmacie
-   */
   async loadConfig(pharmacyId: string) {
     try {
       const response = await api.get(`/pharmacies/${pharmacyId}/config`);
@@ -516,9 +488,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Charge les produits depuis l'API
-   */
   async loadProducts() {
     try {
       const { user } = useAuthStore.getState();
@@ -559,9 +528,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Normalise un produit
-   */
   normalizeProduct(p: any): Product {
     return {
       id: String(p.id),
@@ -585,9 +551,6 @@ export class PosService {
     };
   }
 
-  /**
-   * Reconstruit la map de recherche par code-barres/code
-   */
   rebuildProductsMap(productList: Product[]) {
     const map = new Map<string, Product>();
     productList.forEach(p => {
@@ -600,9 +563,6 @@ export class PosService {
     });
   }
 
-  /**
-   * Charge les catégories
-   */
   async loadCategories() {
     try {
       const { user } = useAuthStore.getState();
@@ -643,9 +603,6 @@ export class PosService {
     }
   }
 
-  /**
-   * Charge les statistiques quotidiennes
-   */
   async loadDailyStats() {
     try {
       const today = new Date();
@@ -668,13 +625,9 @@ export class PosService {
       this.updateStats(newStats);
     } catch (error) {
       console.warn('⚠️ Erreur chargement stats:', error);
-      // Garder les stats par défaut
     }
   }
 
-  /**
-   * Filtre les produits selon la recherche et la catégorie
-   */
   filterProducts() {
     let filtered = [...this.products];
 
@@ -701,10 +654,7 @@ export class PosService {
   // GESTION DU PANIER
   // ============================================
 
-  /**
-   * Ajoute un produit au panier
-   */
-  addToCart = (product: Product) => {
+  addToCart = (product: Product, discountPercent: number = 0) => {
     if (product.quantity <= 0) {
       toast.error(`${product.name} est en rupture de stock`);
       return;
@@ -727,7 +677,8 @@ export class PosService {
       newCart[existingIndex] = { 
         ...existing, 
         quantity: newQuantity,
-        unitPrice 
+        unitPrice,
+        discount_percent: discountPercent
       };
       this.setCart(newCart);
     } else {
@@ -739,6 +690,7 @@ export class PosService {
         unitPrice: unitPrice,
         stock: product.quantity,
         selling_price: product.selling_price,
+        discount_percent: discountPercent,
       };
       this.setCart([newItem, ...this.cart]);
     }
@@ -842,253 +794,81 @@ export class PosService {
   }
 
   // ============================================
-  // VALIDATION DE LA VENTE - VERSION OPTIMISÉE
+  // VALIDATION DE LA VENTE - AVEC SALE STORE
   // ============================================
 
-  /**
-   * Valide la vente avec affichage immédiat de la facture
-   * L'appel API se fait en arrière-plan pour une expérience ultra-rapide (< 1s)
-   */
-  async validateSale() {
-    // Vérifications rapides
-    if (this.cart.length === 0) {
-      toast.error('Panier vide');
-      return;
-    }
-    
-    if (this.isProcessing) {
-      toast.error('Une vente est déjà en cours');
-      return;
-    }
-
-    this.setProcessing(true);
-
-    // Sauvegarde immédiate des données (copie profonde)
-    const cartSnapshot = this.cart.map(item => ({ ...item }));
-    const clientNameSnapshot = this.clientName;
-    const paymentMethodSnapshot = this.paymentMethod;
-    const timestamp = Date.now();
-
-    // Calcul du total (synchronisé, immédiat)
-    const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const totalAmount = this.config.sellByExchangeRate
-      ? rawTotal / this.activeCurrency.exchangeRate
-      : rawTotal;
-
-    // CRÉER LA FACTURE INSTANTANÉMENT (sans attendre l'API)
-    const saleForReceipt = {
-      id: `temp-${timestamp}`,
-      receiptNumber: `TEMP-${timestamp}`,
-      items: cartSnapshot.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: item.unitPrice,
-        quantity: item.quantity,
-        code: item.code,
-      })),
-      total: totalAmount,
-      paymentMethod: paymentMethodSnapshot,
-      timestamp: timestamp,
-      cashierName: this.cashierInfo.name,
-      posName: this.cashierInfo.posName,
-      sessionNumber: this.cashierInfo.sessionNumber,
-      clientName: clientNameSnapshot,
-    };
-
-    // VIDER LE PANIER IMMÉDIATEMENT (feedback utilisateur instantané)
-    this.setCart([]);
-    
-    // AFFICHER LA FACTURE IMMÉDIATEMENT (UX ultra-rapide)
-    this.setCurrentSale(saleForReceipt);
-    this.setShowInvoice(true);
-    
-    // Mettre à jour les stats localement (optimiste)
-    this.updateStats({
-      total: this.stats.total + totalAmount,
-      salesCount: this.stats.salesCount + 1,
-      currentClient: clientNameSnapshot,
-    });
-
-    // Déclencher l'impression automatique si configurée
-    if (this.config.invoice.autoPrint) {
-      setTimeout(() => window.print(), 100);
-    }
-
-    toast.success('Vente enregistrée !');
-
-    // --- TRAITEMENT ASYNCHRONE EN ARRIÈRE-PLAN ---
-    // L'API est appelée sans bloquer l'interface
-    this.processSaleInBackground(cartSnapshot, {
-      totalAmount,
-      paymentMethod: paymentMethodSnapshot,
-      clientName: clientNameSnapshot,
-      timestamp,
-      tempId: saleForReceipt.id,
-    });
-    
-    this.setProcessing(false);
+  // Dans posService.ts
+async validateSale() {
+  if (this.cart.length === 0) {
+    toast.error('Panier vide');
+    return;
+  }
+  
+  if (this.isProcessing) {
+    toast.error('Une vente est déjà en cours');
+    return;
   }
 
-  /**
-   * Traitement asynchrone de la vente en arrière-plan
-   * Ne bloque pas l'interface utilisateur
-   */
-  async processSaleInBackground(
-    cartSnapshot: CartItem[],
-    saleInfo: {
-      totalAmount: number;
-      paymentMethod: PaymentMethod;
-      clientName: string;
-      timestamp: number;
-      tempId: string;
-    }
-  ) {
-    try {
-      const saleData = {
-        items: cartSnapshot.map(item => ({
-          product_id: item.id,
-          quantity: item.quantity,
-          unit_price: item.unitPrice,
-        })),
-        total_amount: saleInfo.totalAmount,
-        payment_method: saleInfo.paymentMethod,
-        client_name: saleInfo.clientName,
-        pharmacy_id: this.cashierInfo.pharmacy_id,
-        timestamp: saleInfo.timestamp,
-      };
+  this.setProcessing(true);
 
-      // Appel API en arrière-plan
-      const response = await saleService.createSale(saleData);
+  const cartSnapshot = this.cart.map(item => ({ ...item }));
+  const clientNameSnapshot = this.clientName;
+  const paymentMethodSnapshot = this.paymentMethod;
+  const timestamp = Date.now();
+  const tempId = `temp-${timestamp}`;
 
-      // Récupérer le vrai numéro de reçu et l'ID
-      let realReceiptNumber = '';
-      let realSaleId = '';
-      
-      // Get the actual sale data from the nested structure
-      const saleDataObj = response.data || response.sale;
-      
-      if (saleDataObj) {
-        // Extraire le numéro de reçu
-        if (saleDataObj.receipt_number) {
-          realReceiptNumber = saleDataObj.receipt_number;
-        } else if (response.receipt_number) {
-          realReceiptNumber = response.receipt_number;
-        }
-        
-        // Extraire l'ID de la vente
-        if (saleDataObj.id) {
-          realSaleId = saleDataObj.id;
-        } else if (saleDataObj.reference) {
-          realSaleId = saleDataObj.reference;
-        }
-      }
+  const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+  const totalAmount = this.config.sellByExchangeRate
+    ? rawTotal / this.activeCurrency.exchangeRate
+    : rawTotal;
 
-      // Mettre à jour la facture avec les vraies informations
-      if ((realReceiptNumber || realSaleId) && this.currentSale && this.currentSale.id === saleInfo.tempId) {
-        const updatedSale = {
-          ...this.currentSale,
-          id: realSaleId || this.currentSale.id,
-          receiptNumber: realReceiptNumber || this.currentSale.receiptNumber,
-        };
-        this.setCurrentSale(updatedSale);
-      }
+  const localSale: LocalSale = {
+    id: tempId,
+    tempId: tempId,
+    receiptNumber: `TEMP-${timestamp}`,
+    items: cartSnapshot.map(item => ({
+      id: item.id,
+      name: item.name,
+      price: item.unitPrice,
+      quantity: item.quantity,
+      code: item.code,
+    })),
+    total: totalAmount,
+    paymentMethod: paymentMethodSnapshot,
+    timestamp: timestamp,
+    cashierName: this.cashierInfo.name,
+    posName: this.cashierInfo.posName,
+    sessionNumber: this.cashierInfo.sessionNumber,
+    clientName: clientNameSnapshot,
+    status: 'pending',
+    synced: false,
+  };
 
-      // Rafraîchir les stats depuis le serveur (en arrière-plan)
-      await this.loadDailyStats();
-      
-      console.log('✅ Vente synchronisée avec le serveur:', realReceiptNumber);
+  // Ajouter au store (cela déclenchera une synchronisation)
+  useSaleStore.getState().addLocalSale(localSale);
 
-    } catch (error) {
-      console.error('❌ Erreur synchronisation vente:', error);
-      
-      // Notification discrète d'erreur (sans bloquer l'utilisateur)
-      toast.error('Erreur de synchronisation. La vente sera réessayée.', {
-        duration: 4000,
-      });
-      
-      // Stocker la vente en attente pour réessai ultérieur
-      this.queuePendingSale(cartSnapshot, saleInfo);
-    }
+  // Vider le panier
+  this.setCart([]);
+  
+  // Afficher la facture
+  this.setCurrentSale(localSale);
+  this.setShowInvoice(true);
+  
+  // Mettre à jour les stats
+  this.updateStats({
+    total: this.stats.total + totalAmount,
+    salesCount: this.stats.salesCount + 1,
+    currentClient: clientNameSnapshot,
+  });
+
+  if (this.config.invoice.autoPrint) {
+    setTimeout(() => window.print(), 100);
   }
 
-  /**
-   * Stocke une vente en attente pour synchronisation ultérieure
-   */
-  private queuePendingSale(cartSnapshot: CartItem[], saleInfo: {
-    totalAmount: number;
-    paymentMethod: PaymentMethod;
-    clientName: string;
-    timestamp: number;
-    tempId: string;
-  }) {
-    try {
-      const existing = JSON.parse(localStorage.getItem(PENDING_SALES_KEY) || '[]');
-      existing.push({
-        cart: cartSnapshot,
-        saleInfo: {
-          totalAmount: saleInfo.totalAmount,
-          paymentMethod: saleInfo.paymentMethod,
-          clientName: saleInfo.clientName,
-          timestamp: saleInfo.timestamp,
-        },
-        pharmacy_id: this.cashierInfo.pharmacy_id,
-        createdAt: Date.now(),
-      });
-      localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(existing));
-      
-      console.log('📦 Vente mise en file d\'attente pour synchronisation');
-    } catch (e) {
-      console.error('Erreur sauvegarde vente en attente:', e);
-    }
-  }
-
-  /**
-   * Synchronise les ventes en attente (à appeler quand la connexion revient)
-   */
-  async syncPendingSales() {
-    try {
-      const pendingSales = JSON.parse(localStorage.getItem(PENDING_SALES_KEY) || '[]');
-      
-      if (pendingSales.length === 0) return;
-      
-      console.log(`🔄 Synchronisation de ${pendingSales.length} ventes en attente...`);
-      
-      const remainingSales = [];
-      
-      for (const pending of pendingSales) {
-        try {
-          const saleData = {
-            items: pending.cart.map((item: CartItem) => ({
-              product_id: item.id,
-              quantity: item.quantity,
-              unit_price: item.unitPrice,
-            })),
-            total_amount: pending.saleInfo.totalAmount,
-            payment_method: pending.saleInfo.paymentMethod,
-            client_name: pending.saleInfo.clientName,
-            pharmacy_id: pending.pharmacy_id || this.cashierInfo.pharmacy_id,
-            timestamp: pending.saleInfo.timestamp,
-          };
-          
-          await saleService.createSale(saleData);
-          console.log('✅ Vente en attente synchronisée');
-        } catch (error) {
-          console.error('❌ Erreur synchronisation vente en attente:', error);
-          remainingSales.push(pending);
-        }
-      }
-      
-      // Mettre à jour le stock avec les ventes restantes
-      if (remainingSales.length > 0) {
-        localStorage.setItem(PENDING_SALES_KEY, JSON.stringify(remainingSales));
-      } else {
-        localStorage.removeItem(PENDING_SALES_KEY);
-      }
-      
-    } catch (error) {
-      console.error('Erreur synchronisation ventes en attente:', error);
-    }
-  }
+  toast.success('Vente enregistrée !');
+  
+  this.setProcessing(false);
+}
 
   // ============================================
   // UTILITAIRES
@@ -1139,8 +919,5 @@ export class PosService {
   }
 }
 
-// Export d'une instance unique
 export const posService = new PosService();
-
-// Export également la classe
 export default PosService;

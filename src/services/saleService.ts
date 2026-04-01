@@ -3,22 +3,28 @@ import api from '@/api/client';
 import { PaymentMethod } from './posService';
 
 // ============================================
-// TYPES
+// TYPES - ALIGNÉS AVEC LE BACKEND
 // ============================================
 
+/**
+ * Création d'un item de vente
+ * IMPORTANT: unit_price et tva_rate ne sont PAS envoyés
+ * Le backend utilise les prix et TVA du stock
+ */
 export interface SaleItemCreate {
   product_id: string;
   quantity: number;
-  unit_price: number;
   discount_percent?: number;
-  tva_rate?: number;
   batch_number?: string;
   expiry_date?: string;
 }
 
+/**
+ * Création d'une vente
+ * IMPORTANT: total_amount n'est PAS envoyé, le backend recalcule
+ */
 export interface SaleCreate {
   items: SaleItemCreate[];
-  total_amount: number;
   payment_method: PaymentMethod | string;
   client_id?: string;
   client_name?: string;
@@ -202,23 +208,21 @@ class SaleService {
 
   /**
    * Crée une nouvelle vente
+   * IMPORTANT: N'envoie PAS unit_price, tva_rate, total_amount
+   * Le backend utilise les prix et TVA du stock
    */
   async createSale(data: SaleCreate): Promise<ApiResponse<SaleResponse>> {
     try {
       const response = await api.post(`${this.baseUrl}/`, data);
       const responseData = response.data;
       
-      // Normaliser la réponse pour avoir toujours receipt_number
       if (responseData && typeof responseData === 'object') {
-        // Vérifier si la réponse a un champ sale
         if (responseData.sale && !responseData.receipt_number) {
-          // Accéder directement à receipt_number avec une assertion de type
           const saleData = responseData.sale as Record<string, unknown>;
           if (saleData.receipt_number) {
             responseData.receipt_number = saleData.receipt_number as string;
           }
         }
-        // Vérifier si la réponse a un champ data
         if (responseData.data && !responseData.receipt_number) {
           const dataObj = responseData.data as Record<string, unknown>;
           if (dataObj.receipt_number) {
@@ -253,7 +257,7 @@ class SaleService {
     sort_order?: 'asc' | 'desc';
   }): Promise<SaleListResponse> {
     try {
-      const response = await api.get(`${this.baseUrl}/`, { params });
+      const response = await api.get(`${this.baseUrl}`, { params });
       return response.data;
     } catch (error: any) {
       console.error('Erreur récupération ventes:', error);
@@ -269,12 +273,10 @@ class SaleService {
       const response = await api.get(`${this.baseUrl}/${id}`);
       const data = response.data;
       
-      // La réponse peut être directement l'objet vente ou avoir une propriété sale
       if (data && typeof data === 'object' && 'sale' in data) {
         return data.sale as SaleResponse;
       }
       
-      // Sinon, retourner directement les données
       return data as SaleResponse;
     } catch (error: any) {
       console.error('Erreur récupération vente:', error);
@@ -335,7 +337,6 @@ class SaleService {
       return response.data;
     } catch (error: any) {
       console.error('Erreur récupération stats quotidiennes:', error);
-      // Retourner des valeurs par défaut en cas d'erreur
       return {
         date: params?.date || new Date().toISOString().split('T')[0],
         sales_count: 0,
@@ -361,7 +362,6 @@ class SaleService {
       return response.data;
     } catch (error: any) {
       console.error('Erreur récupération stats:', error);
-      // Retourner des valeurs par défaut en mode offline
       const today = new Date().toISOString().split('T')[0];
       const defaultStats: DailyStatsResponse = {
         date: today,
@@ -500,12 +500,12 @@ class SaleService {
   }
 
   /**
-   * Crée une vente rapide (sans vérification détaillée)
+   * Crée une vente rapide
+   * IMPORTANT: price n'est PAS envoyé - le backend utilise le prix du stock
    */
   async quickSale(data: {
     product_id: string;
     quantity: number;
-    price?: number;
     payment_method: string;
     client_name?: string;
     client_phone?: string;
@@ -525,8 +525,7 @@ class SaleService {
    */
   async createCreditSale(data: {
     client_id: string;
-    items: SaleItemCreate[];
-    total_amount: number;
+    items: Omit<SaleItemCreate, 'discount_percent'>[];
     due_date: string;
     guarantee_deposit?: number;
     guarantor_name?: string;
@@ -589,16 +588,12 @@ class SaleService {
   extractReceiptNumber(response: ApiResponse<SaleResponse>): string | undefined {
     if (!response) return undefined;
     
-    // Vérifier dans receipt_number direct
     if (response.receipt_number) return response.receipt_number;
     
-    // Vérifier dans sale (si c'est un ApiResponse)
     if (response.sale?.receipt_number) return response.sale.receipt_number;
     
-    // Vérifier dans data
     if (response.data?.receipt_number) return response.data.receipt_number;
     
-    // Vérifier si data a une propriété sale
     if (response.data && typeof response.data === 'object' && 'sale' in response.data) {
       const dataWithSale = response.data as { sale: SaleResponse };
       if (dataWithSale.sale.receipt_number) {
@@ -626,8 +621,5 @@ class SaleService {
   }
 }
 
-// Export d'une instance unique
 export const saleService = new SaleService();
-
-// Export également la classe
 export default SaleService;

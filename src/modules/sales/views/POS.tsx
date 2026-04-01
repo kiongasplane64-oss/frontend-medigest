@@ -1,3 +1,4 @@
+// POS.tsx
 import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import {
   Search,
@@ -25,7 +26,8 @@ import {
   RefreshCw,
   WifiOff,
   DollarSign,
-  Building2
+  Building2,
+  Percent
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -35,25 +37,17 @@ import { observer } from 'mobx-react-lite';
 import { useOnline } from '@/hooks/useOnline';
 import { FacturePrinter } from '@/modules/sales/views/FacturePrinter';
 import { posService, CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig } from '@/services/posService';
+import { useSaleStore} from '@/store/saleStore';
 import { useToast } from '@/hooks/useToast';
 import { Toaster } from '@/components/ui/Toaster';
 
-// ============================================
-// TYPES
-// ============================================
-
 export type { CartItem, Product, Category, CashierInfo, PaymentMethod, ScanMode, CurrencyConfig, PharmacyConfig };
 
-// Mapping des méthodes de paiement pour l'affichage
 const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   cash: 'Espèces',
   mobile_money: 'Mobile Money',
   account: 'Compte',
 };
-
-// ============================================
-// COMPOSANTS MEMOÏSÉS
-// ============================================
 
 const ProductCard = memo(({ 
   product, 
@@ -66,9 +60,7 @@ const ProductCard = memo(({
   currencySymbol: string;
   exchangeRate: number;
 }) => {
-  // Prix de vente direct du backend
   const sellingPrice = product.selling_price || 0;
-  // Prix converti si nécessaire
   const displayPrice = sellingPrice / exchangeRate;
   const formattedPrice = displayPrice.toFixed(2);
   const isAvailable = (product.quantity || 0) > 0;
@@ -125,6 +117,7 @@ const CartItemComponent = memo(({
   index, 
   onUpdateQuantity, 
   onRemove,
+  onUpdateDiscount,
   currencySymbol,
   exchangeRate
 }: { 
@@ -132,13 +125,15 @@ const CartItemComponent = memo(({
   index: number; 
   onUpdateQuantity: (index: number, delta: number) => void;
   onRemove: (index: number) => void;
+  onUpdateDiscount: (index: number, discountPercent: number) => void;
   currencySymbol: string;
   exchangeRate: number;
 }) => {
-  // Prix unitaire converti
   const unitPriceDisplay = (item.unitPrice || 0) / exchangeRate;
-  // Prix total converti
-  const totalPriceDisplay = ((item.unitPrice || 0) * (item.quantity || 0)) / exchangeRate;
+  const subtotalDisplay = ((item.unitPrice || 0) * (item.quantity || 0)) / exchangeRate;
+  const discountPercent = item.discount_percent || 0;
+  const discountAmount = subtotalDisplay * (discountPercent / 100);
+  const totalDisplay = subtotalDisplay - discountAmount;
 
   return (
     <div className="rounded-2xl bg-slate-50 p-3 transition-all hover:bg-slate-100">
@@ -148,6 +143,11 @@ const CartItemComponent = memo(({
           <p className="text-xs text-slate-400">
             {currencySymbol} {unitPriceDisplay.toFixed(2)}/u · Stock: {item.stock || 0}
           </p>
+          {discountPercent > 0 && (
+            <p className="text-xs text-green-600">
+              Remise: {discountPercent}% (-{currencySymbol} {discountAmount.toFixed(2)})
+            </p>
+          )}
         </div>
         <button
           onClick={() => onRemove(index)}
@@ -179,9 +179,27 @@ const CartItemComponent = memo(({
             <Plus size={12} />
           </button>
         </div>
-        <p className="text-sm font-black text-blue-600">
-          {currencySymbol} {totalPriceDisplay.toFixed(2)}
-        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const newDiscount = prompt('Remise en % (0-100):', String(discountPercent));
+              if (newDiscount !== null) {
+                const val = parseFloat(newDiscount);
+                if (!isNaN(val) && val >= 0 && val <= 100) {
+                  onUpdateDiscount(index, val);
+                }
+              }
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100"
+            aria-label="Appliquer une remise"
+            title="Appliquer une remise"
+          >
+            <Percent size={12} />
+          </button>
+          <p className="text-sm font-black text-blue-600">
+            {currencySymbol} {totalDisplay.toFixed(2)}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -189,26 +207,30 @@ const CartItemComponent = memo(({
 
 CartItemComponent.displayName = 'CartItemComponent';
 
-// ============================================
-// COMPOSANT PRINCIPAL - OBSERVER POUR MOBX
-// ============================================
-
 const POS = observer(() => {
   const location = useLocation();
   const isOnline = useOnline();
   const { toast } = useToast();
+  
+  // Utilisation correcte du saleStore
+  const { 
+    getPendingCount, 
+    syncPendingSales,
+    resetFailedSales,
+    localSales 
+  } = useSaleStore();
 
-  // États locaux
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
+  const [globalDiscount, setGlobalDiscount] = useState(0);
+  const [isProcessingSale, setIsProcessingSale] = useState(false);
 
-  // Refs
   const scanInputRef = useRef<HTMLInputElement>(null);
   const cartContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Données du service (observées automatiquement)
+  // États depuis posService
   const products = posService.products;
   const filteredProducts = posService.filteredProducts;
   const categories = posService.categories;
@@ -225,43 +247,58 @@ const POS = observer(() => {
   const config = posService.config;
   const isProcessing = posService.isProcessing;
 
-  // Virtualisation pour les longs paniers
+  const pendingCount = getPendingCount();
+  
+  // Ventes en échec
+  const failedSales = useMemo(() => 
+    localSales.filter(s => !s.synced && (s.retryCount || 0) >= 3),
+    [localSales]
+  );
+
   const cartVirtualizer = useVirtualizer({
     count: cart.length,
     getScrollElement: () => cartContainerRef.current,
-    estimateSize: () => 100,
+    estimateSize: () => 115,
     overscan: 5,
   });
 
-  // Devise active
   const activeCurrency = useMemo(() => {
     const currency = config.currencies?.find(c => c.code === config.primaryCurrency);
     return currency || { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true };
   }, [config.currencies, config.primaryCurrency]);
 
-  // Prix total avec conversion devise
-  const total = useMemo(() => {
-    const rawTotal = cart.reduce((acc, item) => acc + (item.unitPrice || 0) * (item.quantity || 0), 0);
+  const subtotal = useMemo(() => {
+    const rawSubtotal = cart.reduce((acc, item) => {
+      const itemPrice = (item.unitPrice || 0) * (item.quantity || 0);
+      const itemDiscount = itemPrice * ((item.discount_percent || 0) / 100);
+      return acc + (itemPrice - itemDiscount);
+    }, 0);
+    
     if (config.sellByExchangeRate && activeCurrency.exchangeRate > 0) {
-      return rawTotal / activeCurrency.exchangeRate;
+      return rawSubtotal / activeCurrency.exchangeRate;
     }
-    return rawTotal;
+    return rawSubtotal;
   }, [cart, config.sellByExchangeRate, activeCurrency.exchangeRate]);
+
+  const total = useMemo(() => {
+    const totalAfterGlobal = subtotal * (1 - (globalDiscount / 100));
+    return totalAfterGlobal;
+  }, [subtotal, globalDiscount]);
 
   const totalItems = useMemo(
     () => cart.reduce((acc, item) => acc + (item.quantity || 0), 0),
     [cart],
   );
 
-  // ============================================
-  // INITIALISATION
-  // ============================================
-
+  // Chargement initial
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
         await posService.loadInitialData();
+        if (isOnline) {
+          await syncPendingSales();
+        }
       } catch (error) {
         console.error('Erreur chargement:', error);
         toast({
@@ -275,17 +312,21 @@ const POS = observer(() => {
     };
 
     loadData();
-  }, [toast]);
+  }, [toast, isOnline, syncPendingSales]);
 
   // Application du thème
   useEffect(() => {
     posService.applyTheme();
   }, [config.theme]);
 
-  // ============================================
-  // HOTKEYS
-  // ============================================
+  // Synchronisation automatique quand en ligne
+  useEffect(() => {
+    if (isOnline && pendingCount > 0) {
+      syncPendingSales();
+    }
+  }, [isOnline, pendingCount, syncPendingSales]);
 
+  // Raccourcis clavier
   useHotkeys('ctrl+k', () => {
     searchInputRef.current?.focus();
   });
@@ -295,8 +336,8 @@ const POS = observer(() => {
   });
 
   useHotkeys('ctrl+enter', () => {
-    if (cart.length > 0 && !isProcessing) {
-      posService.validateSale();
+    if (cart.length > 0 && !isProcessing && !isProcessingSale) {
+      handleValidateSale();
     }
   });
 
@@ -306,10 +347,7 @@ const POS = observer(() => {
     posService.setShowScanner(false);
   });
 
-  // ============================================
-  // GESTIONNAIRES D'ÉVÉNEMENTS
-  // ============================================
-
+  // Handlers
   const handleSearch = useCallback((value: string) => {
     posService.setSearch(value);
   }, []);
@@ -326,12 +364,21 @@ const POS = observer(() => {
     posService.updateQuantity(index, delta);
   }, []);
 
+  const handleUpdateDiscount = useCallback((index: number, discountPercent: number) => {
+    const newCart = [...cart];
+    if (newCart[index]) {
+      newCart[index] = { ...newCart[index], discount_percent: discountPercent };
+      posService.setCart(newCart);
+    }
+  }, [cart]);
+
   const handleRemoveFromCart = useCallback((index: number) => {
     posService.removeFromCart(index);
   }, []);
 
   const handleClearCart = useCallback(() => {
     posService.clearCart();
+    setGlobalDiscount(0);
   }, []);
 
   const handlePaymentMethodChange = useCallback((method: PaymentMethod) => {
@@ -348,7 +395,7 @@ const POS = observer(() => {
       return;
     }
     
-    if (isProcessing) {
+    if (isProcessing || isProcessingSale) {
       toast({
         title: "Vente en cours",
         description: "Une vente est déjà en cours de validation",
@@ -357,11 +404,30 @@ const POS = observer(() => {
       return;
     }
 
+    // Appliquer la remise globale
+    if (globalDiscount > 0) {
+      const newCart = cart.map(item => ({
+        ...item,
+        discount_percent: Math.min(100, (item.discount_percent || 0) + globalDiscount)
+      }));
+      posService.setCart(newCart);
+    }
+
+    setIsProcessingSale(true);
+    
     try {
       await posService.validateSale();
-      // Après validation réussie, afficher la facture
+      
+      // La vente est maintenant dans le store via posService.validateSale()
       if (posService.currentSale) {
         setShowInvoice(true);
+        setGlobalDiscount(0);
+        
+        toast({
+          title: "Succès",
+          description: "Vente enregistrée avec succès",
+          variant: "success",
+        });
       }
     } catch (error) {
       console.error('Erreur validation:', error);
@@ -370,8 +436,10 @@ const POS = observer(() => {
         description: "La validation de la vente a échoué",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessingSale(false);
     }
-  }, [cart.length, isProcessing, toast]);
+  }, [cart.length, isProcessing, isProcessingSale, globalDiscount, cart, toast]);
 
   const handleRefresh = useCallback(() => {
     posService.loadInitialData();
@@ -408,21 +476,26 @@ const POS = observer(() => {
     posService.setShowInvoice(false);
   }, []);
 
+  
+  const handleResetFailedSales = useCallback(() => {
+    resetFailedSales();
+    toast({
+      title: "Réessai",
+      description: "Tentative de synchronisation des ventes en échec",
+      variant: "default",  // Changé de "info" à "default"
+    });
+  }, [resetFailedSales, toast]);
+
   const getCategoryProducts = useCallback((categoryId: string) => {
     return posService.getCategoryProducts(categoryId);
   }, []);
 
-  // Rendu des catégories
   const displayCategories = useMemo(() => {
     if (!categories || categories.length === 0) {
       return [{ id: 'all', name: 'Tous' }];
     }
     return categories;
   }, [categories]);
-
-  // ============================================
-  // RENDU
-  // ============================================
 
   if (loading) {
     return (
@@ -437,18 +510,41 @@ const POS = observer(() => {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
-      {/* Toaster pour les notifications */}
       <Toaster />
 
+      {/* Bannière de synchronisation */}
+      {pendingCount > 0 && (
+        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
+          <Loader2 size={16} className="animate-spin" />
+          {pendingCount} vente(s) en attente de synchronisation
+        </div>
+      )}
+
+      {/* Bannière d'échec de synchronisation */}
+      {failedSales.length > 0 && !pendingCount && (
+        <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-red-500 px-4 py-2 text-sm font-medium text-white">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} />
+            {failedSales.length} vente(s) en échec après plusieurs tentatives
+          </div>
+          <button
+            onClick={handleResetFailedSales}
+            className="flex items-center gap-1 rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
+          >
+            <RefreshCw size={12} />
+            Réessayer
+          </button>
+        </div>
+      )}
+
       {/* Bannière hors-ligne */}
-      {!isOnline && (
+      {!isOnline && pendingCount === 0 && failedSales.length === 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           <WifiOff size={16} />
           Mode hors-ligne - Les ventes seront synchronisées plus tard
         </div>
       )}
 
-      {/* Header */}
       <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6 dark:border-slate-700 dark:bg-slate-800">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
@@ -488,7 +584,6 @@ const POS = observer(() => {
         </div>
       </header>
 
-      {/* Navigation */}
       <nav className="border-b border-slate-200 bg-white px-4 py-3 md:px-6 dark:border-slate-700 dark:bg-slate-800">
         <div className="flex gap-2 overflow-x-auto">
           {[
@@ -524,9 +619,7 @@ const POS = observer(() => {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-xl font-black text-slate-800 dark:text-slate-200">Scanner un produit</h3>
-                  <p className="text-sm text-slate-400">
-                    Scan code-barres ou QR code
-                  </p>
+                  <p className="text-sm text-slate-400">Scan code-barres ou QR code</p>
                 </div>
                 <button
                   onClick={handleCloseScanner}
@@ -583,9 +676,7 @@ const POS = observer(() => {
                       styles={{ container: { width: '100%', height: 360 } }}
                     />
                   </div>
-                  <p className="mt-3 text-center text-sm text-slate-400">
-                    Placez le code dans le cadre
-                  </p>
+                  <p className="mt-3 text-center text-sm text-slate-400">Placez le code dans le cadre</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -599,9 +690,7 @@ const POS = observer(() => {
                       onKeyDown={handleBarcodeInput}
                     />
                   </div>
-                  <p className="text-sm text-slate-400">
-                    Compatible douchette code-barres
-                  </p>
+                  <p className="text-sm text-slate-400">Compatible douchette code-barres</p>
                 </div>
               )}
 
@@ -631,12 +720,10 @@ const POS = observer(() => {
         </div>
       )}
 
-      {/* Main Content */}
       <main className="p-4 md:p-6">
         <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
-          {/* Products Section */}
+          {/* Section produits */}
           <section>
-            {/* Search Bar */}
             <div className="mb-4 flex flex-col gap-3 md:flex-row">
               <div className="relative flex-1">
                 <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
@@ -667,7 +754,6 @@ const POS = observer(() => {
               </button>
             </div>
 
-            {/* Hotkeys Info */}
             <div className="mb-4 flex flex-wrap gap-2 rounded-2xl bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
               <span className="rounded-lg bg-white px-2 py-1 dark:bg-slate-700">Ctrl + K : recherche</span>
               <span className="rounded-lg bg-white px-2 py-1 dark:bg-slate-700">Ctrl + S : scanner</span>
@@ -675,7 +761,6 @@ const POS = observer(() => {
               <span className="rounded-lg bg-white px-2 py-1 dark:bg-slate-700">Esc : fermer</span>
             </div>
 
-            {/* Type de vente info */}
             <div className="mb-4 flex items-center gap-2 rounded-2xl bg-slate-100 p-3 text-sm dark:bg-slate-800">
               <Building2 size={16} className="text-blue-600" />
               <span className="text-slate-600 dark:text-slate-400">
@@ -694,7 +779,6 @@ const POS = observer(() => {
               )}
             </div>
 
-            {/* Categories */}
             {displayCategories.length > 1 && (
               <div className="mb-5 flex gap-2 overflow-x-auto pb-2">
                 {displayCategories.map((cat) => (
@@ -715,7 +799,6 @@ const POS = observer(() => {
               </div>
             )}
 
-            {/* Products Grid */}
             {selectedCategory === 'all' ? (
               <div className="space-y-5">
                 {displayCategories
@@ -783,10 +866,9 @@ const POS = observer(() => {
             )}
           </section>
 
-          {/* Cart Section */}
+          {/* Panier et caisse */}
           <aside>
             <div className="sticky top-4 space-y-4">
-              {/* Cart */}
               <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
                 <div className="flex items-center justify-between border-b border-slate-100 p-4 dark:border-slate-700">
                   <h3 className="flex items-center gap-2 text-lg font-black text-slate-800 dark:text-slate-200">
@@ -816,9 +898,7 @@ const POS = observer(() => {
                     <div className="py-8 text-center text-sm italic text-slate-400">
                       Panier vide
                       <br />
-                      <span className="text-xs not-italic">
-                        Scannez un produit ou cliquez sur un article
-                      </span>
+                      <span className="text-xs not-italic">Scannez un produit ou cliquez sur un article</span>
                     </div>
                   ) : (
                     <div
@@ -843,6 +923,7 @@ const POS = observer(() => {
                             index={virtualRow.index}
                             onUpdateQuantity={handleUpdateQuantity}
                             onRemove={handleRemoveFromCart}
+                            onUpdateDiscount={handleUpdateDiscount}
                             currencySymbol={activeCurrency?.symbol || 'FC'}
                             exchangeRate={activeCurrency?.exchangeRate || 1}
                           />
@@ -853,14 +934,46 @@ const POS = observer(() => {
                 </div>
 
                 <div className="space-y-4 bg-slate-50 p-4 dark:bg-slate-700/50">
-                  <div className="flex items-center justify-between text-xl font-black text-slate-800 dark:text-slate-200">
+                  <div className="flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+                    <span>Sous-total</span>
+                    <span>{activeCurrency?.symbol || 'FC'} {subtotal.toFixed(2)}</span>
+                  </div>
+
+                  {cart.length > 0 && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Percent size={16} className="text-green-600" />
+                        <span className="text-sm text-slate-600 dark:text-slate-400">Remise globale</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={globalDiscount}
+                          onChange={(e) => setGlobalDiscount(parseFloat(e.target.value) || 0)}
+                          className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-right text-sm dark:border-slate-600 dark:bg-slate-700"
+                        />
+                        <span className="text-sm">%</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {globalDiscount > 0 && (
+                    <div className="flex items-center justify-between text-sm text-green-600">
+                      <span>Remise</span>
+                      <span>-{activeCurrency?.symbol || 'FC'} {(subtotal * (globalDiscount / 100)).toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-3 text-xl font-black text-slate-800 dark:border-slate-600 dark:text-slate-200">
                     <span>Total</span>
                     <span className="text-blue-600">
                       {activeCurrency?.symbol || 'FC'} {total.toFixed(2)}
                     </span>
                   </div>
 
-                  {/* Payment Methods */}
                   <div className="grid grid-cols-3 gap-2">
                     {(['cash', 'mobile_money', 'account'] as PaymentMethod[]).map((method) => (
                       <button
@@ -878,31 +991,27 @@ const POS = observer(() => {
                           {method === 'cash' && <Banknote size={20} />}
                           {method === 'mobile_money' && <Phone size={20} />}
                           {method === 'account' && <Users size={20} />}
-                          <span className="text-[10px] font-bold">
-                            {PAYMENT_METHOD_LABELS[method]}
-                          </span>
+                          <span className="text-[10px] font-bold">{PAYMENT_METHOD_LABELS[method]}</span>
                         </div>
                       </button>
                     ))}
                   </div>
 
-                  {/* Validate Button */}
                   <button
                     onClick={handleValidateSale}
-                    disabled={cart.length === 0 || isProcessing}
+                    disabled={cart.length === 0 || isProcessing || isProcessingSale}
                     className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-600"
                   >
-                    {isProcessing ? (
+                    {(isProcessing || isProcessingSale) ? (
                       <Loader2 size={20} className="animate-spin" />
                     ) : (
                       <CheckCircle size={20} />
                     )}
-                    {isProcessing ? 'Traitement...' : 'Valider la vente'}
+                    {(isProcessing || isProcessingSale) ? 'Traitement...' : 'Valider la vente'}
                   </button>
                 </div>
               </div>
 
-              {/* Daily Stats */}
               <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <div className="mb-3 flex items-center gap-2 text-slate-700 dark:text-slate-300">
                   <TrendingUp size={16} />
@@ -929,7 +1038,6 @@ const POS = observer(() => {
                 </div>
               </div>
 
-              {/* Quick Links */}
               <div className="grid grid-cols-2 gap-3">
                 <Link
                   to="/historique"
@@ -952,7 +1060,6 @@ const POS = observer(() => {
         </div>
       </main>
 
-      {/* Facture Printer Modal */}
       {showInvoice && currentSale && (
         <FacturePrinter
           sale={{
@@ -978,11 +1085,7 @@ const POS = observer(() => {
           primaryCurrency={config.primaryCurrency || 'CDF'}
           currencies={config.currencies || []}
           onClose={handleCloseInvoice}
-          onPrint={() => {
-            if (config.invoice?.autoPrint) {
-              // L'impression auto est gérée par le composant
-            }
-          }}
+          onPrint={() => {}}
         />
       )}
     </div>

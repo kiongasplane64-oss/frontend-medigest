@@ -5,6 +5,7 @@
  * Version unifiée - mars 2026
  */
 
+import api from '@/api/client';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 
@@ -335,13 +336,9 @@ export interface DashboardFilters {
 // ===================================================================
 
 class DashboardService {
-  private baseURL: string;
-  private timeout: number = 30000;
-
   constructor() {
-    this.baseURL = import.meta.env.VITE_API_URL || 'https://backend-medigest.onrender.com';
-    
-    axiosRetry(axios, {
+    // Configuration du retry sur l'instance api centralisée
+    axiosRetry(api, {
       retries: 3,
       retryDelay: axiosRetry.exponentialDelay,
       retryCondition: (error) => {
@@ -350,17 +347,6 @@ class DashboardService {
                (error.response?.status ?? 0) >= 500;
       }
     });
-  }
-
-  private getHeaders(): Record<string, string> {
-    const token = localStorage.getItem('token');
-    const tenantId = localStorage.getItem('tenantId') || localStorage.getItem('pharmacyId') || '';
-    
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'X-Tenant-ID': tenantId
-    };
   }
 
   private handleError(error: unknown, context: string): never {
@@ -379,7 +365,9 @@ class DashboardService {
         case 429:
           throw new Error('Trop de requêtes. Veuillez patienter.');
         default:
-          const message = error.response.data?.message || error.response.data?.detail || `Erreur serveur (${error.response.status})`;
+          const message = error.response.data?.message || 
+                         error.response.data?.detail || 
+                         `Erreur serveur (${error.response.status})`;
           throw new Error(message);
       }
     } else if (axios.isAxiosError(error) && error.request) {
@@ -401,15 +389,13 @@ class DashboardService {
    */
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/stats`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/stats', {
         params: {
           pharmacy_id: filters?.pharmacy_id,
           start_date: filters?.start_date,
           end_date: filters?.end_date,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -424,8 +410,7 @@ class DashboardService {
    */
   async getAlerts(filters?: DashboardFilters): Promise<DashboardAlertsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/alerts`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/alerts', {
         params: {
           pharmacy_id: filters?.pharmacy_id,
           limit: filters?.limit || 10,
@@ -433,8 +418,7 @@ class DashboardService {
           type: filters?.type,
           include_resolved: filters?.include_resolved || false,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -449,12 +433,7 @@ class DashboardService {
    */
   async resolveAlert(alertId: string): Promise<{ success: boolean; message: string; alert_id: string }> {
     try {
-      const response = await axios.post(
-        `${this.baseURL}/dashboard/alerts/${alertId}/resolve`,
-        {},
-        { headers: this.getHeaders(), timeout: this.timeout }
-      );
-      
+      const response = await api.post(`/dashboard/alerts/${alertId}/resolve`, {});
       return response.data;
     } catch (error) {
       return this.handleError(error, 'resolveAlert');
@@ -467,8 +446,7 @@ class DashboardService {
    */
   async getSalesHistory(filters?: DashboardFilters): Promise<{ history: SalesHistoryItem[] }> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/sales-history`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/sales-history', {
         params: {
           pharmacy_id: filters?.pharmacy_id,
           period: filters?.period || 'day',
@@ -476,8 +454,7 @@ class DashboardService {
           end_date: filters?.end_date,
           limit: filters?.limit || 30,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -492,14 +469,12 @@ class DashboardService {
    */
   async getSalesTrends(period: 'day' | 'week' | 'month' | 'year' = 'week', pharmacyId?: number): Promise<SalesTrend[]> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/sales/trends`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/sales/trends', {
         params: {
           pharmacy_id: pharmacyId,
           period,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -514,10 +489,8 @@ class DashboardService {
    */
   async getProductsByCategory(pharmacyId?: number): Promise<ProductCategory[]> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/products/categories`, {
-        headers: this.getHeaders(),
-        params: { pharmacy_id: pharmacyId, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get('/dashboard/products/categories', {
+        params: { pharmacy_id: pharmacyId, t: Date.now() }
       });
       
       return response.data;
@@ -532,10 +505,8 @@ class DashboardService {
    */
   async getExpiryReport(pharmacyId?: number, days: number = 30): Promise<ExpiryProductsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/expired-products`, {
-        headers: this.getHeaders(),
-        params: { pharmacy_id: pharmacyId, days, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get('/dashboard/expired-products', {
+        params: { pharmacy_id: pharmacyId, days, t: Date.now() }
       });
       
       return response.data;
@@ -550,10 +521,8 @@ class DashboardService {
    */
   async getNeverSoldProducts(pharmacyId?: number, limit: number = 50): Promise<NeverSoldProductsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/products/never-sold`, {
-        headers: this.getHeaders(),
-        params: { pharmacy_id: pharmacyId, limit, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get('/dashboard/products/never-sold', {
+        params: { pharmacy_id: pharmacyId, limit, t: Date.now() }
       });
       
       return response.data;
@@ -572,15 +541,13 @@ class DashboardService {
     pharmacyId?: number
   ): Promise<SalesByUserResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/sales/by-user`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/sales/by-user', {
         params: {
           pharmacy_id: pharmacyId,
           start_date: startDate,
           end_date: endDate,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -595,14 +562,12 @@ class DashboardService {
    */
   async getDailyProfit(targetDate?: string, pharmacyId?: number): Promise<DailyProfitResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/daily-profit`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/daily-profit', {
         params: {
           pharmacy_id: pharmacyId,
           target_date: targetDate,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -617,10 +582,8 @@ class DashboardService {
    */
   async getPerformanceIndicators(period: 'day' | 'week' | 'month' | 'year' = 'month', pharmacyId?: number): Promise<PerformanceIndicators> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/performance`, {
-        headers: this.getHeaders(),
-        params: { pharmacy_id: pharmacyId, period, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get('/dashboard/performance', {
+        params: { pharmacy_id: pharmacyId, period, t: Date.now() }
       });
       
       return response.data;
@@ -635,12 +598,7 @@ class DashboardService {
    */
   async refreshDashboardCache(pharmacyId?: number): Promise<{ success: boolean; message: string }> {
     try {
-      const response = await axios.post(
-        `${this.baseURL}/dashboard/refresh-cache`,
-        { pharmacy_id: pharmacyId },
-        { headers: this.getHeaders(), timeout: this.timeout }
-      );
-      
+      const response = await api.post('/dashboard/refresh-cache', { pharmacy_id: pharmacyId });
       return response.data;
     } catch (error) {
       console.warn('Erreur lors du rafraîchissement du cache:', error);
@@ -654,14 +612,12 @@ class DashboardService {
    */
   async getLowStockReport(pharmacyId?: number, thresholdMultiplier: number = 1.0): Promise<LowStockReportResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/low-stock-report`, {
-        headers: this.getHeaders(),
+      const response = await api.get('/dashboard/low-stock-report', {
         params: {
           pharmacy_id: pharmacyId,
           threshold_multiplier: thresholdMultiplier,
           t: Date.now()
-        },
-        timeout: this.timeout
+        }
       });
       
       return response.data;
@@ -692,10 +648,8 @@ class DashboardService {
     location_country?: string;
   }): Promise<{ session_id: string; platform: string; device_name: string | null; created_at: string; expires_at: string }> {
     try {
-      const response = await axios.post(`${this.baseURL}/dashboard/session/register`, null, {
-        headers: this.getHeaders(),
-        params,
-        timeout: this.timeout
+      const response = await api.post('/dashboard/session/register', null, {
+        params
       });
       
       return response.data;
@@ -710,10 +664,8 @@ class DashboardService {
    */
   async getUserSessions(includeInactive: boolean = false): Promise<UserSessionsResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/sessions`, {
-        headers: this.getHeaders(),
-        params: { include_inactive: includeInactive, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get('/dashboard/sessions', {
+        params: { include_inactive: includeInactive, t: Date.now() }
       });
       
       return response.data;
@@ -732,10 +684,8 @@ class DashboardService {
     endDate?: string
   ): Promise<{ session: any; sales: any[]; summary: any }> {
     try {
-      const response = await axios.get(`${this.baseURL}/dashboard/sessions/${sessionId}/sales`, {
-        headers: this.getHeaders(),
-        params: { start_date: startDate, end_date: endDate, t: Date.now() },
-        timeout: this.timeout
+      const response = await api.get(`/dashboard/sessions/${sessionId}/sales`, {
+        params: { start_date: startDate, end_date: endDate, t: Date.now() }
       });
       
       return response.data;
@@ -750,10 +700,8 @@ class DashboardService {
    */
   async logoutSession(sessionId?: string): Promise<{ message: string; sessions_count: number }> {
     try {
-      const response = await axios.post(`${this.baseURL}/dashboard/session/logout`, null, {
-        headers: this.getHeaders(),
-        params: sessionId ? { session_id: sessionId } : {},
-        timeout: this.timeout
+      const response = await api.post('/dashboard/session/logout', null, {
+        params: sessionId ? { session_id: sessionId } : {}
       });
       
       return response.data;
@@ -768,12 +716,7 @@ class DashboardService {
    */
   async updateSessionActivity(sessionId: string): Promise<{ message: string }> {
     try {
-      const response = await axios.post(
-        `${this.baseURL}/dashboard/session/${sessionId}/activity`,
-        {},
-        { headers: this.getHeaders(), timeout: this.timeout }
-      );
-      
+      const response = await api.post(`/dashboard/session/${sessionId}/activity`, {});
       return response.data;
     } catch (error) {
       return this.handleError(error, 'updateSessionActivity');

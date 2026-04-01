@@ -21,10 +21,11 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { saleService, type SaleResponse} from '@/services/saleService';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
+import { useSaleStore, type LocalSale } from '@/store/saleStore';
+import { type SaleResponse } from '@/services/saleService';
 
 interface SaleItem {
   productId?: string;
@@ -48,6 +49,7 @@ interface Sale {
   clientName?: string;
   status?: 'completed' | 'pending' | 'cancelled';
   synced?: boolean;
+  isLocal?: boolean;
 }
 
 type DateRange = 'today' | 'week' | 'month' | 'custom';
@@ -56,52 +58,70 @@ export default function Historique() {
   const { user } = useAuthStore();
   const isOnline = useOnline();
   const { toast } = useToast();
+  
+  const { 
+    sales: apiSales, 
+    localSales, 
+    fetchSales, 
+    syncPendingSales,
+    loading: storeLoading,
+    getPendingCount
+  } = useSaleStore();
 
-  const [sales, setSales] = useState<Sale[]>([]);
+  const [allSales, setAllSales] = useState<Sale[]>([]);
   const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
-
   const [search, setSearch] = useState('');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-
   const [dateRange, setDateRange] = useState<DateRange>('today');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<string>('all');
-
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  
-  // CORRECTION: Suppression de la variable inutilisée dailyStats
-  // Le useState était mal utilisé - on supprime cette variable car elle n'est pas utilisée
 
   const itemsPerPage = 20;
+  const pendingCount = getPendingCount();
 
   useEffect(() => {
-    void loadSales();
-  }, [currentPage, dateRange, customStartDate, customEndDate, paymentFilter]);
+    void loadData();
+  }, []);
+
+  useEffect(() => {
+    combineSales();
+  }, [apiSales, localSales, storeLoading]);
 
   useEffect(() => {
     filterSales();
-  }, [sales, search]);
+  }, [allSales, search]);
 
   useEffect(() => {
-    void loadDailyStats();
-  }, []);
+    if (dateRange !== 'custom') {
+      setCurrentPage(1);
+    }
+  }, [dateRange, paymentFilter]);
 
-  async function loadDailyStats() {
+  async function loadData() {
+    setLoading(true);
     try {
-      const stats = await saleService.getDailyStats();
-      // Les stats journalières sont récupérées mais non utilisées
-      // On pourrait les stocker dans une variable d'état si nécessaire
-      console.debug('Stats journalières chargées:', stats);
+      await fetchSales();
+      if (isOnline && pendingCount > 0) {
+        await syncPendingSales();
+      }
     } catch (error) {
-      console.error('Erreur chargement stats journalières:', error);
+      console.error('Erreur chargement historique:', error);
+      toast({
+        title: "Erreur",
+        description: "Impossible de charger l'historique",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
     }
   }
 
-  function normalizeSale(sale: SaleResponse): Sale {
+  function normalizeApiSale(sale: SaleResponse): Sale {
     return {
       id: sale.id,
       items: (sale.items || []).map(item => ({
@@ -121,121 +141,120 @@ export default function Historique() {
       clientName: sale.client_name || 'Passager',
       status: sale.status as 'completed' | 'pending' | 'cancelled',
       synced: true,
+      isLocal: false,
     };
   }
 
-  function buildDateParams() {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    switch (dateRange) {
-      case 'today': {
-        const startDate = today.toISOString();
-        const endDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
-        return { start_date: startDate, end_date: endDate };
-      }
-      case 'week': {
-        const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-        return {
-          start_date: weekAgo.toISOString(),
-          end_date: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
-        };
-      }
-      case 'month': {
-        const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return {
-          start_date: monthAgo.toISOString(),
-          end_date: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
-        };
-      }
-      case 'custom': {
-        const params: { start_date?: string; end_date?: string } = {};
-        if (customStartDate) {
-          params.start_date = new Date(customStartDate).toISOString();
-        }
-        if (customEndDate) {
-          params.end_date = new Date(
-            new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1,
-          ).toISOString();
-        }
-        return params;
-      }
-      default:
-        return {};
-    }
+  function normalizeLocalSale(sale: LocalSale): Sale {
+    return {
+      id: sale.id,
+      items: sale.items.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        code: item.code,
+      })),
+      total: sale.total,
+      paymentMethod: sale.paymentMethod,
+      timestamp: sale.timestamp,
+      cashierName: sale.cashierName,
+      posName: sale.posName,
+      sessionNumber: sale.sessionNumber,
+      receiptNumber: sale.receiptNumber,
+      clientName: sale.clientName || 'Passager',
+      status: sale.status,
+      synced: sale.synced,
+      isLocal: true,
+    };
   }
 
-  async function loadSales() {
-    setLoading(true);
-    try {
-      const dateParams = buildDateParams();
-      const params: any = {
-        page: currentPage,
-        limit: itemsPerPage,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        ...dateParams,
-      };
+  function combineSales() {
+    const apiNormalized = apiSales.map(normalizeApiSale);
+    const localNormalized = localSales.map(normalizeLocalSale);
+    
+    const combined = [...localNormalized, ...apiNormalized];
+    combined.sort((a, b) => b.timestamp - a.timestamp);
+    
+    setAllSales(combined);
+    setTotalCount(combined.length);
+    setTotalPages(Math.max(1, Math.ceil(combined.length / itemsPerPage)));
+  }
 
-      if (paymentFilter !== 'all') {
-        params.payment_method = paymentFilter;
+  function getDateFilteredSales(): Sale[] {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    switch (dateRange) {
+      case 'today': {
+        const start = today.getTime();
+        const end = start + 24 * 60 * 60 * 1000 - 1;
+        return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
       }
-
-      const response = await saleService.getSales(params);
-
-      const normalizedSales = (response.items || []).map(normalizeSale);
-      setSales(normalizedSales);
-      setTotalPages(Math.max(1, Math.ceil((response.total || 0) / itemsPerPage)));
-      setTotalCount(response.total || normalizedSales.length);
-    } catch (error) {
-      console.error('Erreur chargement historique:', error);
-      toast({
-        title: "Erreur",
-        description: "Impossible de charger l'historique",
-        variant: "destructive",
-      });
-      setSales([]);
-      setTotalPages(1);
-      setTotalCount(0);
-    } finally {
-      setLoading(false);
+      case 'week': {
+        const start = today.getTime() - 7 * 24 * 60 * 60 * 1000;
+        const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
+        return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
+      }
+      case 'month': {
+        const start = today.getTime() - 30 * 24 * 60 * 60 * 1000;
+        const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
+        return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
+      }
+      case 'custom': {
+        if (customStartDate && customEndDate) {
+          const start = new Date(customStartDate).getTime();
+          const end = new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1;
+          return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
+        }
+        return allSales;
+      }
+      default:
+        return allSales;
     }
   }
 
   function filterSales() {
-    if (!search.trim()) {
-      setFilteredSales(sales);
-      return;
+    let filtered = getDateFilteredSales();
+    
+    if (paymentFilter !== 'all') {
+      filtered = filtered.filter(s => s.paymentMethod === paymentFilter);
     }
-
-    const searchLower = search.toLowerCase().trim();
-    const filtered = sales.filter((sale) => {
-      const saleNumber = getSaleNumber(sale).toLowerCase();
-      const client = getClientName(sale).toLowerCase();
-      const cashier = getCashierName(sale).toLowerCase();
-      return (
-        saleNumber.includes(searchLower) ||
-        client.includes(searchLower) ||
-        cashier.includes(searchLower) ||
-        sale.items.some((item) => item.name.toLowerCase().includes(searchLower))
-      );
-    });
-
-    setFilteredSales(filtered);
+    
+    if (search.trim()) {
+      const term = search.toLowerCase().trim();
+      filtered = filtered.filter(sale => {
+        const saleNumber = getSaleNumber(sale).toLowerCase();
+        const client = getClientName(sale).toLowerCase();
+        const cashier = getCashierName(sale).toLowerCase();
+        return (
+          saleNumber.includes(term) ||
+          client.includes(term) ||
+          cashier.includes(term) ||
+          sale.items.some(item => item.name.toLowerCase().includes(term))
+        );
+      });
+    }
+    
+    const start = (currentPage - 1) * itemsPerPage;
+    const end = start + itemsPerPage;
+    setFilteredSales(filtered.slice(start, end));
+    setTotalPages(Math.max(1, Math.ceil(filtered.length / itemsPerPage)));
+    setTotalCount(filtered.length);
   }
 
   const stats = useMemo(() => {
-    const totalAmount = filteredSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-    const totalItems = filteredSales.reduce(
-      (sum, sale) =>
-        sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
+    const dateFiltered = getDateFilteredSales();
+    const totalAmount = dateFiltered.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const totalItems = dateFiltered.reduce(
+      (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
       0,
     );
-    const totalSales = filteredSales.length;
+    const totalSales = dateFiltered.length;
     const averageTicket = totalSales > 0 ? totalAmount / totalSales : 0;
 
     return { totalAmount, totalItems, totalSales, averageTicket };
-  }, [filteredSales]);
+  }, [allSales, dateRange, customStartDate, customEndDate]);
 
   function getSaleNumber(sale: Sale): string {
     return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
@@ -293,18 +312,8 @@ export default function Historique() {
 
   async function exportToCSV() {
     try {
-      let exportData = filteredSales;
-
-      if (filteredSales.length < totalCount) {
-        const dateParams = buildDateParams();
-        const response = await saleService.getSales({
-          limit: 1000,
-          ...dateParams,
-          payment_method: paymentFilter !== 'all' ? paymentFilter : undefined,
-        });
-        exportData = (response.items || []).map(normalizeSale);
-      }
-
+      const dateFiltered = getDateFilteredSales();
+      
       const headers = [
         'Numero',
         'Date',
@@ -315,9 +324,10 @@ export default function Historique() {
         'Total',
         'Paiement',
         'Statut',
+        'Synchronisé',
       ];
 
-      const csvData = exportData.map((sale) => [
+      const csvData = dateFiltered.map((sale) => [
         getSaleNumber(sale),
         formatDate(sale.timestamp),
         getClientName(sale),
@@ -327,6 +337,7 @@ export default function Historique() {
         Number(sale.total).toFixed(2),
         getPaymentMethodLabel(sale.paymentMethod),
         sale.status === 'cancelled' ? 'Annulée' : sale.status === 'pending' ? 'En attente' : 'Terminée',
+        sale.synced ? 'Oui' : 'Non',
       ]);
 
       const escapeCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
@@ -404,6 +415,15 @@ export default function Historique() {
               color: #666;
               margin: 2px 0;
             }
+            .pending-badge {
+              background: #f59e0b;
+              color: white;
+              padding: 2px 6px;
+              border-radius: 4px;
+              font-size: 10px;
+              display: inline-block;
+              margin-top: 8px;
+            }
           </style>
         </head>
         <body>
@@ -415,6 +435,7 @@ export default function Historique() {
               <div class="meta">Caissier: ${getCashierName(sale)}</div>
               <div class="meta">POS: ${getPosName(sale)}</div>
               <div class="meta">Client: ${getClientName(sale)}</div>
+              ${!sale.synced ? '<div class="pending-badge">En attente de synchronisation</div>' : ''}
             </div>
 
             ${sale.items
@@ -467,6 +488,20 @@ export default function Historique() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {pendingCount > 0 && (
+        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
+          <Loader2 size={16} className="animate-spin" />
+          {pendingCount} vente(s) en attente de synchronisation
+        </div>
+      )}
+
+      {!isOnline && pendingCount === 0 && (
+        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
+          <WifiOff size={16} />
+          Mode hors-ligne - Données locales uniquement
+        </div>
+      )}
+
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-4 md:px-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
@@ -477,23 +512,12 @@ export default function Historique() {
               <ArrowLeft size={20} />
             </Link>
             <div>
-              <h1 className="text-xl font-black text-slate-800 md:text-2xl">
-                Historique des ventes
-              </h1>
-              <p className="text-sm text-slate-400">
-                Consultation, filtres, export et impression
-              </p>
+              <h1 className="text-xl font-black text-slate-800 md:text-2xl">Historique des ventes</h1>
+              <p className="text-sm text-slate-400">Consultation, filtres, export et impression</p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {!isOnline && (
-              <span className="inline-flex items-center gap-2 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-700">
-                <WifiOff size={14} />
-                Mode hors-ligne
-              </span>
-            )}
-
             {(search || dateRange !== 'today' || paymentFilter !== 'all') && (
               <button
                 onClick={resetFilters}
@@ -504,7 +528,7 @@ export default function Historique() {
             )}
 
             <button
-              onClick={() => void loadSales()}
+              onClick={() => void loadData()}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
             >
               <RefreshCw size={18} />
@@ -593,9 +617,7 @@ export default function Historique() {
               </div>
               <div>
                 <p className="text-xs text-slate-400">Chiffre d&apos;affaires</p>
-                <p className="text-xl font-black text-slate-800">
-                  {stats.totalAmount.toFixed(2)} $
-                </p>
+                <p className="text-xl font-black text-slate-800">{stats.totalAmount.toFixed(2)} $</p>
               </div>
             </div>
           </div>
@@ -631,9 +653,7 @@ export default function Historique() {
               </div>
               <div>
                 <p className="text-xs text-slate-400">Ticket moyen</p>
-                <p className="text-xl font-black text-slate-800">
-                  {stats.averageTicket.toFixed(2)} $
-                </p>
+                <p className="text-xl font-black text-slate-800">{stats.averageTicket.toFixed(2)} $</p>
               </div>
             </div>
           </div>
@@ -643,12 +663,12 @@ export default function Historique() {
           <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
             <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
               <Clock size={20} className="text-blue-600" />
-              Transactions ({filteredSales.length})
+              Transactions ({totalCount})
             </h2>
           </div>
 
           <div className="divide-y divide-slate-100">
-            {loading ? (
+            {loading || storeLoading ? (
               <div className="flex items-center justify-center p-10 text-slate-400">
                 <Loader2 className="mr-2 animate-spin" size={20} />
                 Chargement...
@@ -657,10 +677,7 @@ export default function Historique() {
               <div className="p-10 text-center text-slate-400">Aucune vente trouvée</div>
             ) : (
               filteredSales.map((sale) => (
-                <div
-                  key={sale.id}
-                  className="p-4 transition-colors hover:bg-slate-50 md:p-5"
-                >
+                <div key={sale.id} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -668,9 +685,14 @@ export default function Historique() {
                           #{getSaleNumber(sale)}
                         </span>
 
-                        <span className="text-sm text-slate-400">
-                          {formatDate(sale.timestamp)}
-                        </span>
+                        {!sale.synced && (
+                          <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">
+                            <Loader2 size={10} className="mr-1 inline animate-spin" />
+                            En attente
+                          </span>
+                        )}
+
+                        <span className="text-sm text-slate-400">{formatDate(sale.timestamp)}</span>
 
                         <span
                           className={`rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(
@@ -707,9 +729,7 @@ export default function Historique() {
 
                         <div>
                           <p className="text-xs text-slate-400">Montant</p>
-                          <p className="text-lg font-black text-blue-600">
-                            {Number(sale.total).toFixed(2)} $
-                          </p>
+                          <p className="text-lg font-black text-blue-600">{Number(sale.total).toFixed(2)} $</p>
                         </div>
                       </div>
                     </div>
@@ -783,9 +803,13 @@ export default function Historique() {
                     <h3 className="text-lg font-black text-slate-800 md:text-xl">
                       Détails vente #{getSaleNumber(selectedSale)}
                     </h3>
-                    <p className="text-sm text-slate-400">
-                      {formatDate(selectedSale.timestamp)}
-                    </p>
+                    <p className="text-sm text-slate-400">{formatDate(selectedSale.timestamp)}</p>
+                    {!selectedSale.synced && (
+                      <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                        <Loader2 size={10} className="animate-spin" />
+                        En attente de synchronisation
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -834,10 +858,7 @@ export default function Historique() {
 
                 <div className="divide-y divide-slate-100">
                   {selectedSale.items.map((item, idx) => (
-                    <div
-                      key={`${item.id || idx}`}
-                      className="flex items-center justify-between gap-4 px-4 py-3"
-                    >
+                    <div key={`${item.id || idx}`} className="flex items-center justify-between gap-4 px-4 py-3">
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-800">{item.name}</p>
                         <p className="text-xs text-slate-400">
@@ -862,9 +883,7 @@ export default function Historique() {
               <div className="rounded-2xl bg-blue-50 p-4">
                 <div className="flex items-center justify-between text-lg font-black">
                   <span>Total</span>
-                  <span className="text-blue-600">
-                    {Number(selectedSale.total).toFixed(2)} $
-                  </span>
+                  <span className="text-blue-600">{Number(selectedSale.total).toFixed(2)} $</span>
                 </div>
               </div>
             </div>

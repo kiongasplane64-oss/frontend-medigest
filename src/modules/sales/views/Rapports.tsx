@@ -7,9 +7,9 @@ import {
   Printer, WifiOff, PieChart, Loader2
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { saleService, type SaleResponse} from '@/services/saleService';
 import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
+import { useSaleStore } from '@/store/saleStore';
 import { formatCurrency, formatDate } from '@/utils/formatters';
 
 interface ProductSales {
@@ -53,6 +53,25 @@ interface Stats {
 type Period = 'today' | 'week' | 'month' | 'year' | 'custom';
 type ReportType = 'sales' | 'products' | 'cashiers' | 'payment';
 
+interface NormalizedSale {
+  id: string;
+  created_at: string;
+  total_amount: number;
+  payment_method: string;
+  seller_name?: string;
+  client_name?: string;
+  items?: Array<{
+    product_id: string;
+    product_name: string;
+    unit_price: number;
+    quantity: number;
+    product_code?: string;
+  }>;
+  status?: string;
+  synced?: boolean;
+  isLocal?: boolean;
+}
+
 const PERIOD_OPTIONS = [
   { value: 'today', label: "Aujourd'hui" },
   { value: 'week', label: 'Cette semaine' },
@@ -77,7 +96,16 @@ export default function Rapports() {
   const isOnline = useOnline();
   const { toast } = useToast();
   
-  const [sales, setSales] = useState<SaleResponse[]>([]);
+  const { 
+    sales: apiSales, 
+    localSales, 
+    fetchSales, 
+    syncPendingSales,
+    loading: storeLoading,
+    getPendingCount
+  } = useSaleStore();
+  
+  const [normalizedSales, setNormalizedSales] = useState<NormalizedSale[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('month');
   const [customStartDate, setCustomStartDate] = useState('');
@@ -98,23 +126,27 @@ export default function Rapports() {
   const [cashierPerformance, setCashierPerformance] = useState<CashierPerformance[]>([]);
   const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
 
+  const pendingCount = getPendingCount();
+
   useEffect(() => {
     void loadData();
   }, []);
 
   useEffect(() => {
+    normalizeAllSales();
+  }, [apiSales, localSales, storeLoading]);
+
+  useEffect(() => {
     calculateStats();
-  }, [sales, period, customStartDate, customEndDate]);
+  }, [normalizedSales, period, customStartDate, customEndDate]);
 
   async function loadData() {
     setLoading(true);
     try {
-      const response = await saleService.getSales({
-        limit: 1000,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      });
-      setSales(response.items || []);
+      await fetchSales();
+      if (isOnline && pendingCount > 0) {
+        await syncPendingSales();
+      }
     } catch (error) {
       console.error('Erreur chargement données:', error);
       toast({
@@ -122,13 +154,64 @@ export default function Rapports() {
         description: "Erreur lors du chargement des données",
         variant: "destructive",
       });
-      setSales([]);
     } finally {
       setLoading(false);
     }
   }
 
-  function getFilteredSales(): SaleResponse[] {
+  function normalizeApiSale(sale: any): NormalizedSale {
+    return {
+      id: sale.id,
+      created_at: sale.created_at,
+      total_amount: sale.total_amount,
+      payment_method: sale.payment_method,
+      seller_name: sale.seller_name,
+      client_name: sale.client_name,
+      items: sale.items?.map((item: any) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        unit_price: item.unit_price,
+        quantity: item.quantity,
+        product_code: item.product_code,
+      })),
+      status: sale.status,
+      synced: true,
+      isLocal: false,
+    };
+  }
+
+  function normalizeLocalSale(sale: any): NormalizedSale {
+    return {
+      id: sale.id,
+      created_at: new Date(sale.timestamp).toISOString(),
+      total_amount: sale.total,
+      payment_method: sale.paymentMethod,
+      seller_name: sale.cashierName,
+      client_name: sale.clientName,
+      items: sale.items?.map((item: any) => ({
+        product_id: item.id,
+        product_name: item.name,
+        unit_price: item.price,
+        quantity: item.quantity,
+        product_code: item.code,
+      })),
+      status: sale.status || (sale.synced ? 'completed' : 'pending'),
+      synced: sale.synced,
+      isLocal: true,
+    };
+  }
+
+  function normalizeAllSales() {
+    const apiNormalized = apiSales.map(normalizeApiSale);
+    const localNormalized = localSales.map(normalizeLocalSale);
+    
+    const combined = [...localNormalized, ...apiNormalized];
+    combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    
+    setNormalizedSales(combined);
+  }
+
+  function getFilteredSales(): NormalizedSale[] {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
@@ -136,52 +219,48 @@ export default function Rapports() {
       case 'today': {
         const start = today.getTime();
         const end = start + 24 * 60 * 60 * 1000 - 1;
-        return sales.filter(s => {
+        return normalizedSales.filter(s => {
           const date = new Date(s.created_at).getTime();
           return date >= start && date <= end;
         });
       }
-      
       case 'week': {
         const start = today.getTime() - 7 * 24 * 60 * 60 * 1000;
         const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
-        return sales.filter(s => {
+        return normalizedSales.filter(s => {
           const date = new Date(s.created_at).getTime();
           return date >= start && date <= end;
         });
       }
-      
       case 'month': {
         const start = today.getTime() - 30 * 24 * 60 * 60 * 1000;
         const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
-        return sales.filter(s => {
+        return normalizedSales.filter(s => {
           const date = new Date(s.created_at).getTime();
           return date >= start && date <= end;
         });
       }
-      
       case 'year': {
         const start = today.getTime() - 365 * 24 * 60 * 60 * 1000;
         const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
-        return sales.filter(s => {
+        return normalizedSales.filter(s => {
           const date = new Date(s.created_at).getTime();
           return date >= start && date <= end;
         });
       }
-      
-      case 'custom':
+      case 'custom': {
         if (customStartDate && customEndDate) {
           const start = new Date(customStartDate).getTime();
           const end = new Date(customEndDate).getTime() + 24 * 60 * 60 * 1000 - 1;
-          return sales.filter(s => {
+          return normalizedSales.filter(s => {
             const date = new Date(s.created_at).getTime();
             return date >= start && date <= end;
           });
         }
-        return sales;
-      
+        return normalizedSales;
+      }
       default:
-        return sales;
+        return normalizedSales;
     }
   }
 
@@ -310,16 +389,17 @@ export default function Rapports() {
         products: productSales.slice(0, 50),
         cashiers: cashierPerformance,
         hourly: hourlyData.filter(h => h.sales > 0),
-        totalSales: sales.length,
+        totalSales: normalizedSales.length,
+        pendingCount,
         sales: filteredSales.map(s => ({
           id: s.id,
-          reference: s.reference,
           date: s.created_at,
           total: s.total_amount,
           paymentMethod: s.payment_method,
           cashier: s.seller_name,
           client: s.client_name,
-          items: s.items?.length || 0
+          items: s.items?.length || 0,
+          synced: s.synced
         }))
       };
       
@@ -366,7 +446,7 @@ export default function Rapports() {
     [hourlyData]
   );
 
-  if (loading) {
+  if (loading || storeLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
@@ -379,7 +459,14 @@ export default function Rapports() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {!isOnline && (
+      {pendingCount > 0 && (
+        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
+          <Loader2 size={16} className="animate-spin" />
+          {pendingCount} vente(s) en attente de synchronisation
+        </div>
+      )}
+
+      {!isOnline && pendingCount === 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           <WifiOff size={16} />
           Mode hors-ligne - Données locales uniquement
@@ -420,27 +507,21 @@ export default function Rapports() {
         <div className="bg-white rounded-2xl p-6 border border-slate-100 mb-6 print:hidden">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-2">
-                Période
-              </label>
+              <label className="block text-sm font-medium text-slate-400 mb-2">Période</label>
               <select
                 value={period}
                 onChange={(e) => setPeriod(e.target.value as Period)}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
               >
                 {PERIOD_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                  <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
             </div>
 
             {period === 'custom' && (
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-slate-400 mb-2">
-                  Période personnalisée
-                </label>
+                <label className="block text-sm font-medium text-slate-400 mb-2">Période personnalisée</label>
                 <div className="flex gap-3">
                   <input
                     type="date"
@@ -461,18 +542,14 @@ export default function Rapports() {
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-400 mb-2">
-                Type de rapport
-              </label>
+              <label className="block text-sm font-medium text-slate-400 mb-2">Type de rapport</label>
               <select
                 value={reportType}
                 onChange={(e) => setReportType(e.target.value as ReportType)}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white"
               >
                 {REPORT_TYPE_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                  <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
             </div>
@@ -487,9 +564,7 @@ export default function Rapports() {
               </div>
               <div>
                 <p className="text-sm text-slate-400">Chiffre d'affaires</p>
-                <p className="text-2xl font-bold text-slate-800">
-                  {formatCurrency(stats.totalRevenue)}
-                </p>
+                <p className="text-2xl font-bold text-slate-800">{formatCurrency(stats.totalRevenue)}</p>
                 <p className="text-xs text-slate-400">{stats.totalSales} vente(s)</p>
               </div>
             </div>
@@ -530,9 +605,7 @@ export default function Rapports() {
               </div>
               <div>
                 <p className="text-sm text-slate-400">Ticket moyen</p>
-                <p className="text-2xl font-bold text-slate-800">
-                  {formatCurrency(stats.averageTicket)}
-                </p>
+                <p className="text-2xl font-bold text-slate-800">{formatCurrency(stats.averageTicket)}</p>
               </div>
             </div>
           </div>
@@ -820,7 +893,16 @@ export default function Rapports() {
                   </div>
                 </div>
 
-                {!isOnline && (
+                {pendingCount > 0 && (
+                  <div className="mt-4 pt-4 border-t border-blue-200">
+                    <p className="text-xs text-amber-600 flex items-center gap-1">
+                      <Loader2 size={12} className="animate-spin" />
+                      {pendingCount} vente(s) en attente de synchronisation
+                    </p>
+                  </div>
+                )}
+
+                {!isOnline && pendingCount === 0 && (
                   <div className="mt-4 pt-4 border-t border-blue-200">
                     <p className="text-xs text-blue-600 flex items-center gap-1">
                       <WifiOff size={12} />

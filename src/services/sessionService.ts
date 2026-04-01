@@ -1,5 +1,5 @@
 // services/sessionService.ts
-import axios from 'axios';
+import api from '@/api/client';
 import { UAParser } from 'ua-parser-js';
 
 export interface UserSession {
@@ -45,19 +45,11 @@ export interface SessionSalesResponse {
 }
 
 class SessionService {
-  private baseURL: string;
-
   constructor() {
-    this.baseURL = import.meta.env.VITE_API_URL || 'https://backend-medigest.onrender.com';
+    // Pas besoin de baseURL, le client centralisé s'en charge
   }
 
-  private getHeaders() {
-    const token = localStorage.getItem('token');
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-  }
+  // Plus besoin de getHeaders(), l'intercepteur du client ajoute automatiquement le token
 
   /**
    * Détecte les informations de la plateforme actuelle
@@ -107,15 +99,13 @@ class SessionService {
     try {
       const platformInfo = this.getCurrentPlatformInfo();
       
-      const response = await axios.post(
-        `${this.baseURL}/api/v1/user/session/register`,
-        {
+      const response = await api.post('/dashboard/session/register', null, {
+        params: {
           ...platformInfo,
           location_city: ipInfo?.city,
           location_country: ipInfo?.country
-        },
-        { headers: this.getHeaders() }
-      );
+        }
+      });
       
       // Stocker l'ID de session dans localStorage
       if (response.data.session_id) {
@@ -138,9 +128,8 @@ class SessionService {
     total_count: number;
   }> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/v1/user/sessions`, {
-        headers: this.getHeaders(),
-        params: { include_inactive: includeInactive }
+      const response = await api.get('/dashboard/sessions', {
+        params: { include_inactive: includeInactive, t: Date.now() }
       });
       
       return response.data;
@@ -155,9 +144,8 @@ class SessionService {
    */
   async getSessionSales(sessionId: string, startDate?: string, endDate?: string): Promise<SessionSalesResponse> {
     try {
-      const response = await axios.get(`${this.baseURL}/api/v1/user/sessions/${sessionId}/sales`, {
-        headers: this.getHeaders(),
-        params: { start_date: startDate, end_date: endDate }
+      const response = await api.get(`/dashboard/sessions/${sessionId}/sales`, {
+        params: { start_date: startDate, end_date: endDate, t: Date.now() }
       });
       
       return response.data;
@@ -172,14 +160,9 @@ class SessionService {
    */
   async logoutSession(sessionId?: string): Promise<{ message: string; sessions_count: number }> {
     try {
-      const response = await axios.post(
-        `${this.baseURL}/api/v1/user/session/logout`,
-        null,
-        {
-          headers: this.getHeaders(),
-          params: sessionId ? { session_id: sessionId } : {}
-        }
-      );
+      const response = await api.post('/dashboard/session/logout', null, {
+        params: sessionId ? { session_id: sessionId } : {}
+      });
       
       // Si c'est la session actuelle, effacer l'ID
       const currentSessionId = localStorage.getItem('current_session_id');
@@ -202,11 +185,7 @@ class SessionService {
       const sessionId = localStorage.getItem('current_session_id');
       if (!sessionId) return;
       
-      await axios.post(
-        `${this.baseURL}/api/v1/user/session/${sessionId}/activity`,
-        {},
-        { headers: this.getHeaders() }
-      );
+      await api.post(`/dashboard/session/${sessionId}/activity`, {});
     } catch (error) {
       // Ne pas bloquer l'utilisateur si l'update échoue
       console.warn('Erreur lors de la mise à jour de l\'activité:', error);

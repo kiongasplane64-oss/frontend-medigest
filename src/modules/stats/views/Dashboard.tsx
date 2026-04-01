@@ -1,13 +1,14 @@
 /**
  * ===================================================================
  * DASHBOARD - Tableau de bord principal de l'application pharmaceutique
- * Utilisation directe de dashboardService.ts
+ * Utilisation de useActivePharmacy pour la gestion de la pharmacie active
  * ===================================================================
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useNavigate, Link } from 'react-router-dom';
+import { useActivePharmacy } from '@/hooks/useActivePharmacy';
 import {
   ShoppingBag,
   TrendingUp,
@@ -36,64 +37,13 @@ import {
 import { ExpiryWarningBanner } from '@/components/ExpiryWarningBanner';
 import { formatCurrency } from '@/utils/formatters';
 import { generateDashboardPDF, PDFData } from '@/utils/pdfGenerator';
-import api from '@/api/client';
 import { useTimezone } from '@/hooks/useTimezone';
 import { withWritePermission } from '@/hoc/withWritingPermission';
-import OutOfService from '@/modules/core/endehors';
 import { dashboardService, DashboardStats, DashboardAlert, DashboardFilters } from '@/services/dashboardService';
 
-interface PharmacyInfo {
-  id: string;
-  name: string;
-  address?: string;
-  phone?: string;
-  email?: string;
-  license_number?: string;
-  city?: string;
-  country?: string;
-  is_active?: boolean;
-}
-
-interface WorkingHours {
-  enabled: boolean;
-  startTime: string;
-  endTime: string;
-  overtimeEndTime?: string;
-  timezone?: string;
-  daysOff: {
-    monday: boolean;
-    tuesday: boolean;
-    wednesday: boolean;
-    thursday: boolean;
-    friday: boolean;
-    saturday: boolean;
-    sunday: boolean;
-  };
-}
-
-interface PharmacyConfig {
-  theme: 'light' | 'dark' | 'system';
-  workingHours: WorkingHours;
-  pharmacyInfo: PharmacyInfo;
-}
-
-interface ServiceStatus {
-  in_service: boolean;
-  restrictions_enabled: boolean;
-  current_time_utc: string;
-  current_time_local: string;
-  timezone: string;
-  current_day: string;
-  is_working_day: boolean;
-  is_within_hours: boolean;
-  working_hours: {
-    start: string;
-    end: string;
-    overtime?: string;
-  };
-  message: string;
-  next_service_time?: string;
-}
+// ===================================================================
+// TYPES ET INTERFACES
+// ===================================================================
 
 type DetailModalType =
   | 'sales'
@@ -207,6 +157,10 @@ interface ExtendedDashboardStats {
   expiring_products: ExpiringProduct[];
 }
 
+// ===================================================================
+// CONSTANTES ET UTILITAIRES
+// ===================================================================
+
 const EMPTY_STATS: ExtendedDashboardStats = {
   daily_sales: 0,
   monthly_sales: 0,
@@ -284,28 +238,8 @@ function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
-function getUserPharmacyId(user: unknown): string | null {
-  if (!isObject(user)) return null;
-
-  const pharmacyId = user.pharmacy_id;
-  if (typeof pharmacyId === 'string' && pharmacyId.trim()) return pharmacyId;
-
-  const pharmacy = user.pharmacy;
-  if (isObject(pharmacy) && typeof pharmacy.id === 'string' && pharmacy.id.trim()) {
-    return pharmacy.id;
-  }
-
-  const primaryPharmacyId = user.primary_pharmacy_id;
-  if (typeof primaryPharmacyId === 'string' && primaryPharmacyId.trim()) {
-    return primaryPharmacyId;
-  }
-
-  return null;
-}
-
 function sumMonthlyTransactions(salesHistory: unknown): number {
   if (!Array.isArray(salesHistory)) return 0;
-
   return salesHistory.reduce((sum, item) => {
     if (!isObject(item)) return sum;
     return sum + safeNumber((item as SalesHistoryItem).count, 0);
@@ -397,6 +331,10 @@ function getErrorMessage(error: unknown, fallback = 'Erreur lors du chargement d
   if (error instanceof Error && error.message.trim()) return error.message;
   return fallback;
 }
+
+// ===================================================================
+// COMPOSANTS DE MODAL
+// ===================================================================
 
 const DetailModal: React.FC<DetailModalProps> = React.memo(({
   isOpen,
@@ -799,6 +737,10 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
 
 DetailModal.displayName = 'DetailModal';
 
+// ===================================================================
+// COMPOSANTS DE CARTES ET LISTES
+// ===================================================================
+
 const DetailCard: React.FC<{
   title: string;
   value: string | number;
@@ -1034,48 +976,58 @@ const GenericDataDisplay: React.FC<{ data: unknown }> = ({ data }) => {
   );
 };
 
+// ===================================================================
+// COMPOSANT PRINCIPAL DU DASHBOARD
+// ===================================================================
+
 const DashboardContent: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isSuperAdmin } = useAuthStore();
 
-  const [pharmacyConfig, setPharmacyConfig] = useState<PharmacyConfig | null>(null);
-  const [pharmacyInfo, setPharmacyInfo] = useState<PharmacyInfo | null>(null);
-  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
-  const [configError, setConfigError] = useState<string | null>(null);
+  const {
+    id: activePharmacyId,
+    name: pharmacyName,
+    address: pharmacyAddress,
+    phone: pharmacyPhone,
+    email: pharmacyEmail,
+    serviceStatus,
+    isLoading: isLoadingPharmacy,
+    error: pharmacyError,
+    refreshActivePharmacy,
+  } = useActivePharmacy();
+
   const [selectedModal, setSelectedModal] = useState<{
     type: DetailModalType;
     title: string;
     data: unknown;
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
-
-  // Dashboard data states
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
 
   const timezoneHook = useTimezone();
   const browserTimezone = timezoneHook.timezone;
 
-  const pharmacyId = useMemo(() => getUserPharmacyId(user), [user]);
+  // 🔥 CORRECTION : Utiliser l'UUID directement, ne pas convertir en entier
+  const pharmacyId = useMemo(() => {
+    if (!activePharmacyId) return null;
+    // Retourner l'UUID tel quel - le backend accepte les UUID
+    return activePharmacyId;
+  }, [activePharmacyId]);
 
-  // Check if user is admin based on role
   const isAdmin = useMemo(() => {
     if (!isObject(user)) return false;
     const role = user.role || user.user_role;
     return role === 'admin' || role === 'super_admin';
   }, [user]);
 
-  // Check for critical alerts
   const hasCriticalAlerts = useMemo(() => {
     return alerts.some(alert => alert.severity === 'high' && !alert.is_resolved);
   }, [alerts]);
 
-  // Get pending transfers count
   const pendingTransfersCount = useMemo(() => {
     if (!isObject(stats)) return 0;
     return safeNumber(stats.pending_transfers_count);
@@ -1084,9 +1036,16 @@ const DashboardContent: React.FC = () => {
   const extendedStats = useMemo(() => normalizeStats(stats), [stats]);
   const safeAlerts = useMemo(() => safeArray<DashboardAlert>(alerts), [alerts]);
 
-  // Fetch dashboard data function
   const fetchDashboardData = useCallback(async (showBackgroundLoading = false) => {
-    if (!pharmacyId) return;
+    // 🔥 Vérification : pharmacyId peut être un UUID (string)
+    if (!pharmacyId) {
+      console.warn('fetchDashboardData: pharmacyId invalide (null)', pharmacyId);
+      setIsLoading(false);
+      setIsFetching(false);
+      return;
+    }
+
+    console.log('📊 fetchDashboardData: pharmacyId =', pharmacyId, 'type:', typeof pharmacyId);
 
     if (showBackgroundLoading) {
       setIsFetching(true);
@@ -1095,15 +1054,19 @@ const DashboardContent: React.FC = () => {
     }
 
     try {
+      // 🔥 Les filtres acceptent maintenant des string (UUID)
       const filters: DashboardFilters = {
-        pharmacy_id: parseInt(pharmacyId, 10),
+        pharmacy_id: pharmacyId as any, // Le backend accepte les UUID
       };
+
+      console.log('📊 Appel API dashboard/stats avec pharmacy_id:', pharmacyId);
 
       const [statsData, alertsData] = await Promise.all([
         dashboardService.getDashboardStats(filters),
         dashboardService.getAlerts({ ...filters, limit: 50, include_resolved: false })
       ]);
 
+      console.log('📊 Données dashboard reçues:', statsData ? 'OK' : 'vide');
       setStats(statsData);
       setAlerts(alertsData.alerts || []);
       setError(null);
@@ -1115,27 +1078,6 @@ const DashboardContent: React.FC = () => {
       setIsFetching(false);
     }
   }, [pharmacyId]);
-
-  const applyTheme = useCallback((theme: 'light' | 'dark' | 'system') => {
-    const root = document.documentElement;
-    let cleanup: (() => void) | undefined;
-
-    if (theme === 'system') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-      root.classList.toggle('dark', mediaQuery.matches);
-
-      const handler = (e: MediaQueryListEvent) => {
-        root.classList.toggle('dark', e.matches);
-      };
-
-      mediaQuery.addEventListener('change', handler);
-      cleanup = () => mediaQuery.removeEventListener('change', handler);
-    } else {
-      root.classList.toggle('dark', theme === 'dark');
-    }
-
-    return cleanup;
-  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1149,89 +1091,17 @@ const DashboardContent: React.FC = () => {
   }, [isAuthenticated, isSuperAdmin, navigate]);
 
   useEffect(() => {
-    let mounted = true;
-    let themeCleanup: (() => void) | undefined;
+    // 🔥 Vérifier si pharmacyId est valide (string non vide)
+    if (!pharmacyId) {
+      console.log('Dashboard: En attente d\'un pharmacyId valide...');
+      setIsLoading(false);
+      return;
+    }
 
-    const loadPharmacyData = async () => {
-      if (!pharmacyId) {
-        if (mounted) {
-          setConfigError(null);
-          setIsBootstrapping(false);
-        }
-        return;
-      }
-
-      try {
-        setIsBackgroundLoading(true);
-
-        const results = await Promise.allSettled([
-          api.get<PharmacyInfo>(`/pharmacies/${pharmacyId}`),
-          api.get<{ config: PharmacyConfig }>(`/pharmacies/${pharmacyId}/config`),
-          api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`),
-        ]);
-
-        if (!mounted) return;
-
-        const [pharmacyResponse, configResponse, statusResponse] = results;
-
-        if (pharmacyResponse.status === 'fulfilled') {
-          setPharmacyInfo(pharmacyResponse.value.data || null);
-        }
-
-        if (configResponse.status === 'fulfilled') {
-          const config = configResponse.value.data?.config ?? null;
-          setPharmacyConfig(config);
-
-          if (config?.theme) {
-            themeCleanup = applyTheme(config.theme) || undefined;
-          }
-        }
-
-        if (statusResponse.status === 'fulfilled') {
-          setServiceStatus(statusResponse.value.data || null);
-        }
-
-        const rejected = results.find((r) => r.status === 'rejected');
-        setConfigError(rejected ? getErrorMessage(rejected.reason, 'Synchronisation partielle') : null);
-      } finally {
-        if (mounted) {
-          setIsBackgroundLoading(false);
-          setIsBootstrapping(false);
-        }
-      }
-    };
-
-    loadPharmacyData();
-
-    return () => {
-      mounted = false;
-      if (themeCleanup) themeCleanup();
-    };
-  }, [pharmacyId, applyTheme]);
-
-  // Initial fetch of dashboard data
-  useEffect(() => {
-    if (!pharmacyId) return;
-
+    console.log('Dashboard: pharmacyId valide, chargement des données:', pharmacyId);
     fetchDashboardData(false);
   }, [pharmacyId, fetchDashboardData]);
 
-  useEffect(() => {
-    if (!pharmacyId) return;
-
-    const interval = window.setInterval(async () => {
-      try {
-        const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
-        setServiceStatus(response.data);
-      } catch (err) {
-        console.error('Erreur vérification service:', err);
-      }
-    }, 60000);
-
-    return () => window.clearInterval(interval);
-  }, [pharmacyId]);
-
-  // Background refresh interval
   useEffect(() => {
     if (!pharmacyId) return;
 
@@ -1249,13 +1119,14 @@ const DashboardContent: React.FC = () => {
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
+      await refreshActivePharmacy();
       await fetchDashboardData(false);
     } catch (err) {
       console.error('Erreur actualisation dashboard:', err);
     } finally {
       window.setTimeout(() => setIsRefreshing(false), 400);
     }
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, refreshActivePharmacy]);
 
   const handleExportPDF = useCallback((type: string, data: unknown): void => {
     if (!data) return;
@@ -1264,10 +1135,10 @@ const DashboardContent: React.FC = () => {
       type,
       data,
       userName: isObject(user) && typeof user.nom_complet === 'string' ? user.nom_complet : 'Non spécifié',
-      pharmacyName: pharmacyInfo?.name || pharmacyConfig?.pharmacyInfo?.name || 'Pharmacie non spécifiée',
-      pharmacyAddress: pharmacyInfo?.address || pharmacyConfig?.pharmacyInfo?.address,
-      pharmacyPhone: pharmacyInfo?.phone || pharmacyConfig?.pharmacyInfo?.phone,
-      pharmacyEmail: pharmacyInfo?.email || pharmacyConfig?.pharmacyInfo?.email,
+      pharmacyName: pharmacyName || 'Pharmacie non spécifiée',
+      pharmacyAddress: pharmacyAddress || undefined,
+      pharmacyPhone: pharmacyPhone || undefined,
+      pharmacyEmail: pharmacyEmail || undefined,
     };
 
     try {
@@ -1276,7 +1147,7 @@ const DashboardContent: React.FC = () => {
       console.error('Erreur lors de l’export PDF:', err);
       alert('Une erreur est survenue lors de la génération du PDF');
     }
-  }, [user, pharmacyInfo, pharmacyConfig]);
+  }, [user, pharmacyName, pharmacyAddress, pharmacyPhone, pharmacyEmail]);
 
   const dashboardCards = useMemo((): DashboardCard[] => {
     const dailyProfit = extendedStats.daily_profit || extendedStats.daily_sales * 0.3;
@@ -1366,30 +1237,6 @@ const DashboardContent: React.FC = () => {
     ];
   }, [extendedStats, safeAlerts]);
 
-  const convertWorkingHoursForOutOfService = useCallback((config: PharmacyConfig | null) => {
-    if (!config?.workingHours) return undefined;
-
-    return {
-      enabled: config.workingHours.enabled,
-      startTime: config.workingHours.startTime,
-      endTime: config.workingHours.endTime,
-      overtimeEndTime: config.workingHours.overtimeEndTime,
-      daysOff: config.workingHours.daysOff,
-    };
-  }, []);
-
-  if (serviceStatus && !serviceStatus.in_service) {
-    const workingHoursForDisplay = convertWorkingHoursForOutOfService(pharmacyConfig);
-
-    return (
-      <OutOfService
-        workingHours={workingHoursForDisplay}
-        message={serviceStatus.message}
-        nextServiceTime={serviceStatus.next_service_time}
-      />
-    );
-  }
-
   const userFullName =
     isObject(user) && typeof user.nom_complet === 'string'
       ? user.nom_complet
@@ -1410,21 +1257,21 @@ const DashboardContent: React.FC = () => {
             <div className="flex items-center gap-2">
               <Building2 size={16} className="text-blue-500 dark:text-blue-400" />
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                {pharmacyInfo?.name || pharmacyConfig?.pharmacyInfo?.name || 'Pharmacie non spécifiée'}
+                {pharmacyName || 'Pharmacie non spécifiée'}
               </p>
             </div>
 
-            {pharmacyInfo?.address && (
+            {pharmacyAddress && (
               <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                 <MapPin size={12} />
-                <span className="max-w-48 truncate">{pharmacyInfo.address}</span>
+                <span className="max-w-48 truncate">{pharmacyAddress}</span>
               </div>
             )}
 
-            {pharmacyInfo?.phone && (
+            {pharmacyPhone && (
               <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                 <Phone size={12} />
-                <span>{pharmacyInfo.phone}</span>
+                <span>{pharmacyPhone}</span>
               </div>
             )}
           </div>
@@ -1450,26 +1297,27 @@ const DashboardContent: React.FC = () => {
               <span className="text-[10px]">Fuseau: {browserTimezone}</span>
             </div>
 
-            {isBootstrapping && (
+            {(isLoadingPharmacy || isLoading) && (
               <div className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <span className="text-[10px] font-bold">Ouverture...</span>
+                <RefreshCw size={10} className="animate-spin" />
+                <span className="text-[10px] font-bold">Chargement...</span>
               </div>
             )}
 
-            {(isBackgroundLoading || isFetching || isLoading) && (
+            {isFetching && (
               <div className="flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
                 <RefreshCw size={10} className="animate-spin" />
-                <span className="text-[10px] font-bold">Actualisation arrière-plan</span>
+                <span className="text-[10px] font-bold">Actualisation</span>
               </div>
             )}
 
-            {configError && (
+            {pharmacyError && (
               <div className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
-                <span className="text-[10px] font-bold">{configError}</span>
+                <span className="text-[10px] font-bold">{getErrorMessage(pharmacyError, 'Erreur pharmacie')}</span>
               </div>
             )}
 
-            {error && !configError && (
+            {error && !pharmacyError && (
               <div className="flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-red-700 dark:bg-red-900 dark:text-red-300">
                 <span className="text-[10px] font-bold">
                   {getErrorMessage(error, 'Erreur de synchronisation')}
@@ -1596,10 +1444,10 @@ const DashboardContent: React.FC = () => {
           type={selectedModal.type}
           onExportPDF={() => handleExportPDF(selectedModal.title, selectedModal.data)}
           userName={userFullName}
-          pharmacyName={pharmacyInfo?.name || pharmacyConfig?.pharmacyInfo?.name}
-          pharmacyAddress={pharmacyInfo?.address || pharmacyConfig?.pharmacyInfo?.address}
-          pharmacyPhone={pharmacyInfo?.phone || pharmacyConfig?.pharmacyInfo?.phone}
-          pharmacyEmail={pharmacyInfo?.email || pharmacyConfig?.pharmacyInfo?.email}
+          pharmacyName={pharmacyName || undefined}
+          pharmacyAddress={pharmacyAddress || undefined}
+          pharmacyPhone={pharmacyPhone || undefined}
+          pharmacyEmail={pharmacyEmail || undefined}
         />
       )}
     </div>
