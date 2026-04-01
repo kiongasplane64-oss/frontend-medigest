@@ -770,40 +770,87 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   const handleCreateBranch = async () => {
-    if (!branchFormData.name) {
-      setError("Le nom de la succursale est requis");
-      return;
-    }
+  if (!branchFormData.name) {
+    setError("Le nom de la succursale est requis");
+    return;
+  }
 
-    try {
-      const response = await api.post(`/pharmacies/${pharmacyId}/branches`, {
-        name: branchFormData.name,
-        address: branchFormData.address || '',
-        city: branchFormData.city || '',
-        country: branchFormData.country || 'CD',
-        phone: branchFormData.phone || '',
-        email: branchFormData.email || '',
-        manager_id: branchFormData.manager_id,
-      });
-      
-      setConfig({
-        ...config,
-        branchConfig: {
-          ...config.branchConfig,
-          currentBranches: (config.branchConfig.currentBranches || 0) + 1,
-          branches: [...(config.branchConfig.branches || []), response.data],
-        },
-      });
-      
-      setShowBranchModal(false);
-      setSuccess("Succursale créée avec succès !");
-      setTimeout(() => setSuccess(null), 3000);
-      
-    } catch (err: any) {
-      console.error('Erreur lors de la création de la succursale:', err);
-      setError(err.response?.data?.detail || "Erreur lors de la création de la succursale");
+  try {
+    // Récupérer le manager sélectionné
+    const selectedManager = availableUsers.find(u => u.id === branchFormData.manager_id);
+    
+    // Construire l'objet complet pour l'API
+    const branchData = {
+      name: branchFormData.name.trim(),
+      code: branchFormData.code || `${pharmacyData?.name?.substring(0, 3).toUpperCase() || 'BR'}_${Date.now()}`,
+      address: branchFormData.address || '',
+      city: branchFormData.city || '',
+      country: branchFormData.country || 'CD',
+      phone: branchFormData.phone || '',
+      email: branchFormData.email || '',
+      manager_id: branchFormData.manager_id || null,
+      manager_name: selectedManager?.nom_complet || null,
+      latitude: null,
+      longitude: null,
+      opening_hours: null,
+      config: {
+        // Hériter de la configuration de la pharmacie
+        workingHours: config.workingHours,
+        marginConfig: config.marginConfig,
+        automaticPricing: config.automaticPricing,
+        rounding: config.rounding,
+        invoice: config.invoice,
+        report: config.report,
+        // Marquer comme ayant hérité de la config parente
+        inheritedFromParent: true
+      },
+      is_active: true
+    };
+
+    console.log('Envoi des données de succursale:', branchData);
+
+    const response = await api.post(`/pharmacies/${pharmacyId}/branches`, branchData);
+    
+    setConfig({
+      ...config,
+      branchConfig: {
+        ...config.branchConfig,
+        currentBranches: (config.branchConfig.currentBranches || 0) + 1,
+        branches: [...(config.branchConfig.branches || []), response.data],
+      },
+    });
+    
+    setShowBranchModal(false);
+    // Réinitialiser le formulaire
+    setBranchFormData({
+      name: '',
+      code: '',
+      address: '',
+      city: '',
+      country: 'CD',
+      phone: '',
+      email: '',
+      manager_id: '',
+    });
+    setSuccess("Succursale créée avec succès !");
+    setTimeout(() => setSuccess(null), 3000);
+    
+  } catch (err: any) {
+    console.error('Erreur lors de la création de la succursale:', err);
+    // Afficher les détails de l'erreur pour le débogage
+    if (err.response?.data) {
+      console.error('Détails de l\'erreur:', err.response.data);
+      // Si c'est une erreur de validation Pydantic
+      if (err.response.data.detail) {
+        setError(`Erreur: ${JSON.stringify(err.response.data.detail)}`);
+      } else {
+        setError(`Erreur: ${err.response.data.message || 'Données invalides'}`);
+      }
+    } else {
+      setError(err.message || "Erreur lors de la création de la succursale");
     }
-  };
+  }
+};
 
   const handleUpdateBranch = async () => {
     if (!editingBranch || !branchFormData.name) return;
