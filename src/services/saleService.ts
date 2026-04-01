@@ -15,6 +15,7 @@ export interface SaleItemCreate {
   product_id: string;
   quantity: number;
   discount_percent?: number;
+  product_code?: string; 
   batch_number?: string;
   expiry_date?: string;
 }

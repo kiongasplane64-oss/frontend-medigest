@@ -136,6 +136,7 @@ export interface SaleData {
 
 const SCAN_COOLDOWN = 1500;
 const VIBRATION_DURATION = 80;
+const SYNC_INTERVAL_MS = 30000; // 30 secondes
 
 // ============================================
 // SERVICE PRINCIPAL
@@ -195,6 +196,9 @@ export class PosService {
   isOnline = true;
   
   clientName = 'Passager';
+  
+  // Timer pour synchronisation périodique
+  private syncIntervalId: NodeJS.Timeout | null = null;
 
   // Callbacks
   private onCartChange?: (cart: CartItem[]) => void;
@@ -205,6 +209,7 @@ export class PosService {
   private onCategoriesChange?: (categories: Category[]) => void;
   private onConfigChange?: (config: PharmacyConfig) => void;
   private onStatsChange?: (stats: DailyStats) => void;
+  private onSyncStatusChange?: (isSyncing: boolean) => void;
 
   constructor() {
     makeObservable(this, {
@@ -257,6 +262,8 @@ export class PosService {
       loadInitialData: action,
       filterProducts: action,
       setClientName: action,
+      startPeriodicSync: action,
+      stopPeriodicSync: action,
     });
   }
 
@@ -294,6 +301,7 @@ export class PosService {
     onCategoriesChange?: (categories: Category[]) => void;
     onConfigChange?: (config: PharmacyConfig) => void;
     onStatsChange?: (stats: DailyStats) => void;
+    onSyncStatusChange?: (isSyncing: boolean) => void;
   }) {
     this.onCartChange = callbacks.onCartChange;
     this.onProcessingChange = callbacks.onProcessingChange;
@@ -303,6 +311,7 @@ export class PosService {
     this.onCategoriesChange = callbacks.onCategoriesChange;
     this.onConfigChange = callbacks.onConfigChange;
     this.onStatsChange = callbacks.onStatsChange;
+    this.onSyncStatusChange = callbacks.onSyncStatusChange;
   }
 
   setLoading(loading: boolean) {
@@ -374,9 +383,89 @@ export class PosService {
   }
 
   setOnlineStatus(isOnline: boolean) {
+    const wasOffline = !this.isOnline;
     this.isOnline = isOnline;
+    
+    // Synchronisation au retour en ligne
+    if (wasOffline && isOnline) {
+      console.log('🔄 Connexion rétablie, synchronisation des ventes...');
+      this.syncOnReconnect();
+    }
+    
+    // Gestion de la synchronisation périodique
     if (isOnline) {
-      useSaleStore.getState().syncPendingSales();
+      this.startPeriodicSync();
+    } else {
+      this.stopPeriodicSync();
+    }
+  }
+  
+  /**
+   * Démarre la synchronisation périodique (toutes les 30 secondes)
+   */
+  startPeriodicSync() {
+    if (this.syncIntervalId) {
+      return; // Déjà démarré
+    }
+    
+    console.log('🔄 Démarrage synchronisation périodique (toutes les 30s)');
+    
+    this.syncIntervalId = setInterval(() => {
+      const pendingCount = useSaleStore.getState().getPendingCount();
+      const syncInProgress = useSaleStore.getState().syncInProgress;
+      
+      if (this.isOnline && pendingCount > 0 && !syncInProgress) {
+        console.log(`🔄 Synchronisation périodique: ${pendingCount} vente(s) en attente`);
+        this.triggerSync();
+      }
+    }, SYNC_INTERVAL_MS);
+  }
+  
+  /**
+   * Arrête la synchronisation périodique
+   */
+  stopPeriodicSync() {
+    if (this.syncIntervalId) {
+      clearInterval(this.syncIntervalId);
+      this.syncIntervalId = null;
+      console.log('⏹️ Synchronisation périodique arrêtée');
+    }
+  }
+  
+  /**
+   * Synchronisation au retour en ligne
+   */
+  async syncOnReconnect() {
+    const pendingCount = useSaleStore.getState().getPendingCount();
+    const syncInProgress = useSaleStore.getState().syncInProgress;
+    
+    if (pendingCount > 0 && !syncInProgress) {
+      console.log(`🔄 Synchronisation au retour en ligne: ${pendingCount} vente(s)`);
+      await this.triggerSync();
+    }
+  }
+  
+  /**
+   * Déclenche la synchronisation via le store
+   */
+  async triggerSync() {
+    this.onSyncStatusChange?.(true);
+    try {
+      await useSaleStore.getState().syncPendingSales();
+    } finally {
+      this.onSyncStatusChange?.(false);
+    }
+  }
+  
+  /**
+   * Vérifie et déclenche une synchronisation si nécessaire
+   */
+  checkAndSync() {
+    const pendingCount = useSaleStore.getState().getPendingCount();
+    const syncInProgress = useSaleStore.getState().syncInProgress;
+    
+    if (this.isOnline && pendingCount > 0 && !syncInProgress) {
+      this.triggerSync();
     }
   }
 
@@ -408,6 +497,16 @@ export class PosService {
       await this.loadDailyStats();
       
       localStorage.setItem('pharmacy_config', JSON.stringify(this.config));
+      
+      // Démarrer la synchronisation périodique si en ligne
+      if (this.isOnline) {
+        this.startPeriodicSync();
+      }
+      
+      // Vérifier les ventes en attente au chargement
+      setTimeout(() => {
+        this.checkAndSync();
+      }, 1000);
       
       console.log('✅ Données chargées depuis le serveur');
       
@@ -797,78 +896,82 @@ export class PosService {
   // VALIDATION DE LA VENTE - AVEC SALE STORE
   // ============================================
 
-  // Dans posService.ts
-async validateSale() {
-  if (this.cart.length === 0) {
-    toast.error('Panier vide');
-    return;
+  async validateSale() {
+    if (this.cart.length === 0) {
+      toast.error('Panier vide');
+      return;
+    }
+    
+    if (this.isProcessing) {
+      toast.error('Une vente est déjà en cours');
+      return;
+    }
+
+    this.setProcessing(true);
+
+    const cartSnapshot = this.cart.map(item => ({ ...item }));
+    const clientNameSnapshot = this.clientName;
+    const paymentMethodSnapshot = this.paymentMethod;
+    const timestamp = Date.now();
+    const tempId = `temp-${timestamp}`;
+
+    const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
+    const totalAmount = this.config.sellByExchangeRate
+      ? rawTotal / this.activeCurrency.exchangeRate
+      : rawTotal;
+
+    const localSale: LocalSale = {
+      id: tempId,
+      tempId: tempId,
+      receiptNumber: `TEMP-${timestamp}`,
+      items: cartSnapshot.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.unitPrice,
+        quantity: item.quantity,
+        code: item.code,
+      })),
+      total: totalAmount,
+      paymentMethod: paymentMethodSnapshot,
+      timestamp: timestamp,
+      cashierName: this.cashierInfo.name,
+      posName: this.cashierInfo.posName,
+      sessionNumber: this.cashierInfo.sessionNumber,
+      clientName: clientNameSnapshot,
+      status: 'pending',
+      synced: false,
+    };
+
+    // Ajouter au store (cela déclenchera une synchronisation)
+    useSaleStore.getState().addLocalSale(localSale);
+
+    // Vider le panier
+    this.setCart([]);
+    
+    // Afficher la facture
+    this.setCurrentSale(localSale);
+    this.setShowInvoice(true);
+    
+    // Mettre à jour les stats
+    this.updateStats({
+      total: this.stats.total + totalAmount,
+      salesCount: this.stats.salesCount + 1,
+      currentClient: clientNameSnapshot,
+    });
+
+    if (this.config.invoice.autoPrint) {
+      setTimeout(() => window.print(), 100);
+    }
+
+    toast.success('Vente enregistrée !');
+    
+    this.setProcessing(false);
+    
+    // Vérifier la synchronisation après la vente
+    setTimeout(() => {
+      this.checkAndSync();
+    }, 500);
   }
-  
-  if (this.isProcessing) {
-    toast.error('Une vente est déjà en cours');
-    return;
-  }
-
-  this.setProcessing(true);
-
-  const cartSnapshot = this.cart.map(item => ({ ...item }));
-  const clientNameSnapshot = this.clientName;
-  const paymentMethodSnapshot = this.paymentMethod;
-  const timestamp = Date.now();
-  const tempId = `temp-${timestamp}`;
-
-  const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-  const totalAmount = this.config.sellByExchangeRate
-    ? rawTotal / this.activeCurrency.exchangeRate
-    : rawTotal;
-
-  const localSale: LocalSale = {
-    id: tempId,
-    tempId: tempId,
-    receiptNumber: `TEMP-${timestamp}`,
-    items: cartSnapshot.map(item => ({
-      id: item.id,
-      name: item.name,
-      price: item.unitPrice,
-      quantity: item.quantity,
-      code: item.code,
-    })),
-    total: totalAmount,
-    paymentMethod: paymentMethodSnapshot,
-    timestamp: timestamp,
-    cashierName: this.cashierInfo.name,
-    posName: this.cashierInfo.posName,
-    sessionNumber: this.cashierInfo.sessionNumber,
-    clientName: clientNameSnapshot,
-    status: 'pending',
-    synced: false,
-  };
-
-  // Ajouter au store (cela déclenchera une synchronisation)
-  useSaleStore.getState().addLocalSale(localSale);
-
-  // Vider le panier
-  this.setCart([]);
-  
-  // Afficher la facture
-  this.setCurrentSale(localSale);
-  this.setShowInvoice(true);
-  
-  // Mettre à jour les stats
-  this.updateStats({
-    total: this.stats.total + totalAmount,
-    salesCount: this.stats.salesCount + 1,
-    currentClient: clientNameSnapshot,
-  });
-
-  if (this.config.invoice.autoPrint) {
-    setTimeout(() => window.print(), 100);
-  }
-
-  toast.success('Vente enregistrée !');
-  
-  this.setProcessing(false);
-}
 
   // ============================================
   // UTILITAIRES
@@ -916,6 +1019,7 @@ async validateSale() {
     this.categories = [];
     this.filteredProducts = [];
     this.clientName = 'Passager';
+    this.stopPeriodicSync();
   }
 }
 

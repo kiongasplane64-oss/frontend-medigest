@@ -1,4 +1,4 @@
-// stores/saleStore.ts - Version corrigée
+// stores/saleStore.ts - Version entièrement corrigée
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { saleService, type SaleResponse, type SaleCreate } from '@/services/saleService';
@@ -29,6 +29,7 @@ export interface LocalSale {
   syncing?: boolean;
   retryCount?: number;
   lastSyncError?: string;
+  pharmacy_id?: string;
 }
 
 interface SaleStore {
@@ -38,7 +39,8 @@ interface SaleStore {
   syncing: boolean;
   error: string | null;
   maxRetries: number;
-  syncInProgress: boolean; // Nouveau flag pour éviter les synchronisations concurrentes
+  syncInProgress: boolean;
+  lastSyncAttempt: number | null;
   
   fetchSales: () => Promise<void>;
   addLocalSale: (sale: LocalSale) => void;
@@ -52,6 +54,9 @@ interface SaleStore {
   resetFailedSales: () => void;
 }
 
+const SYNC_DELAY_MS = 5000;
+const MIN_SYNC_INTERVAL_MS = 10000;
+
 export const useSaleStore = create<SaleStore>()(
   persist(
     (set, get) => ({
@@ -62,11 +67,11 @@ export const useSaleStore = create<SaleStore>()(
       error: null,
       maxRetries: 3,
       syncInProgress: false,
+      lastSyncAttempt: null,
 
       fetchSales: async () => {
         set({ loading: true, error: null });
         try {
-          // Correction: enlever le slash final
           const response = await saleService.getSales({
             limit: 1000,
             sort_by: 'created_at',
@@ -94,40 +99,39 @@ export const useSaleStore = create<SaleStore>()(
           localSales: [newSale, ...state.localSales],
         }));
         
-        // Déclencher la synchronisation après un court délai
+        // Ne pas déclencher immédiatement pour éviter les appels multiples
         setTimeout(() => {
           get().syncPendingSales();
         }, 100);
       },
 
-      // Version corrigée avec vérification des doublons
       addSaleFromApi: (sale, localId) => {
         set((state) => {
-          // Vérifier si la vente existe déjà dans sales
           const saleExists = state.sales.some(s => s.id === sale.id);
           if (saleExists) {
             console.warn(`⚠️ Vente ${sale.id} déjà présente, ignorée`);
             return state;
           }
           
+          // Supprimer la vente locale correspondante
+          let newLocalSales = state.localSales;
+          if (localId) {
+            newLocalSales = state.localSales.filter(local => local.id !== localId);
+          } else {
+            newLocalSales = state.localSales.filter(local => 
+              local.id !== sale.id && 
+              local.receiptNumber !== sale.receipt_number && 
+              local.tempId !== sale.id
+            );
+          }
+          
+          console.log(`✅ Vente synchronisée: ${sale.reference || sale.id}`);
+          
           return {
             sales: [sale, ...state.sales],
-            localSales: state.localSales.filter(
-              (local) => {
-                // Ne pas supprimer si c'est une autre vente
-                if (localId) {
-                  return local.id !== localId;
-                }
-                // Sinon, supprimer si correspond par ID ou numéro
-                return local.id !== sale.id && 
-                       local.receiptNumber !== sale.receipt_number && 
-                       local.tempId !== sale.id;
-              }
-            ),
+            localSales: newLocalSales,
           };
         });
-        
-        console.log('✅ Vente ajoutée au store API:', sale.reference || sale.id);
       },
 
       updateLocalSaleStatus: (id, status) => {
@@ -138,12 +142,19 @@ export const useSaleStore = create<SaleStore>()(
         }));
       },
 
-      // Version corrigée avec flag d'exclusion mutuelle
       syncPendingSales: async () => {
-        const { syncInProgress, localSales, maxRetries } = get();
+        const { syncInProgress, lastSyncAttempt, localSales, maxRetries } = get();
         
+        // Éviter les synchronisations concurrentes
         if (syncInProgress) {
           console.log('🔄 Synchronisation déjà en cours, ignorée');
+          return;
+        }
+        
+        // Éviter les synchronisations trop fréquentes
+        const now = Date.now();
+        if (lastSyncAttempt && (now - lastSyncAttempt) < MIN_SYNC_INTERVAL_MS) {
+          console.log('⏳ Dernière synchronisation trop récente, ignorée');
           return;
         }
         
@@ -155,11 +166,11 @@ export const useSaleStore = create<SaleStore>()(
           return;
         }
         
-        set({ syncInProgress: true, syncing: true });
+        console.log(`🔄 Début synchronisation de ${pendingSales.length} vente(s)`);
+        set({ syncInProgress: true, syncing: true, lastSyncAttempt: now });
         
-        // Traiter chaque vente séquentiellement
         for (const pendingSale of pendingSales) {
-          // Marquer comme en cours
+          // Marquer comme en cours de synchronisation
           set((state) => ({
             localSales: state.localSales.map((sale) =>
               sale.id === pendingSale.id 
@@ -176,17 +187,19 @@ export const useSaleStore = create<SaleStore>()(
                 product_id: item.id,
                 quantity: item.quantity,
                 discount_percent: 0,
+                product_code: item.code,
               })),
               payment_method: pendingSale.paymentMethod,
               client_name: pendingSale.clientName || 'Passager',
             };
             
+            // Appel API réel
             const response = await saleService.createSale(saleData);
             
             // Extraire la vente créée
             let createdSale: SaleResponse | null = null;
             
-            if (response && typeof response === 'object') {
+            if (response) {
               if ('sale' in response && response.sale) {
                 createdSale = response.sale;
               } else if ('data' in response && response.data) {
@@ -205,7 +218,6 @@ export const useSaleStore = create<SaleStore>()(
             
             if (createdSale && (createdSale.id || createdSale.reference)) {
               console.log(`✅ Vente synchronisée: ${createdSale.reference || createdSale.id}`);
-              // Passer l'ID local pour suppression ciblée
               get().addSaleFromApi(createdSale, pendingSale.id);
             } else {
               // Marquer comme synchronisée même sans réponse structurée
@@ -221,14 +233,18 @@ export const useSaleStore = create<SaleStore>()(
           } catch (error: any) {
             console.error(`❌ Erreur synchronisation vente ${pendingSale.id}:`, error.message);
             
+            const newRetryCount = (pendingSale.retryCount || 0) + 1;
+            const isFailed = newRetryCount >= maxRetries;
+            
             set((state) => ({
               localSales: state.localSales.map((sale) =>
                 sale.id === pendingSale.id 
                   ? { 
                       ...sale, 
                       syncing: false,
-                      retryCount: (sale.retryCount || 0) + 1,
-                      lastSyncError: error.message || 'Erreur inconnue'
+                      retryCount: newRetryCount,
+                      lastSyncError: error.message || 'Erreur de connexion',
+                      status: isFailed ? 'cancelled' : sale.status
                     } 
                   : sale
               ),
@@ -244,10 +260,10 @@ export const useSaleStore = create<SaleStore>()(
         );
         
         if (remainingPending.length > 0) {
-          console.log(`🔄 ${remainingPending.length} vente(s) restantes, nouvelle tentative dans 5 secondes`);
+          console.log(`🔄 ${remainingPending.length} vente(s) restantes, nouvelle tentative dans ${SYNC_DELAY_MS/1000}s`);
           setTimeout(() => {
             get().syncPendingSales();
-          }, 5000);
+          }, SYNC_DELAY_MS);
         }
       },
 
@@ -257,7 +273,7 @@ export const useSaleStore = create<SaleStore>()(
         set((state) => ({
           localSales: state.localSales.map((sale) =>
             !sale.synced && (sale.retryCount || 0) >= state.maxRetries
-              ? { ...sale, retryCount: 0, syncing: false, lastSyncError: undefined }
+              ? { ...sale, retryCount: 0, syncing: false, lastSyncError: undefined, status: 'pending' }
               : sale
           ),
         }));

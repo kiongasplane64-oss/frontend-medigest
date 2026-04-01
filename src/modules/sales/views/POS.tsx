@@ -207,17 +207,163 @@ const CartItemComponent = memo(({
 
 CartItemComponent.displayName = 'CartItemComponent';
 
+// Composant d'auto-complétion pour la recherche - CORRIGÉ
+const SearchAutocomplete = memo(({ 
+  searchValue, 
+  suggestions, 
+  onSelectSuggestion,
+  inputRef
+}: {
+  searchValue: string;
+  suggestions: Product[];
+  onSelectSuggestion: (product: Product) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) => {
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const isSelectingRef = useRef(false);
+
+  // Filtrer les suggestions basées sur la recherche
+  const filteredSuggestions = useMemo(() => {
+    if (!searchValue.trim()) return [];
+    const term = searchValue.toLowerCase().trim();
+    return suggestions
+      .filter(p => 
+        p.name.toLowerCase().includes(term) ||
+        p.code?.toLowerCase().includes(term) ||
+        p.barcode?.toLowerCase().includes(term)
+      )
+      .slice(0, 8);
+  }, [suggestions, searchValue]);
+
+  // Afficher les suggestions quand la recherche a du contenu
+  useEffect(() => {
+    setShowSuggestions(filteredSuggestions.length > 0);
+    setSelectedIndex(-1);
+  }, [filteredSuggestions]);
+
+  // Fermer les suggestions quand on clique dehors
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(event.target as Node)) {
+        if (!isSelectingRef.current) {
+          setShowSuggestions(false);
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Gestionnaire d'événements clavier pour le champ de recherche
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!showSuggestions || filteredSuggestions.length === 0) return;
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setSelectedIndex(prev => (prev + 1) % filteredSuggestions.length);
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setSelectedIndex(prev => (prev - 1 + filteredSuggestions.length) % filteredSuggestions.length);
+        break;
+      case 'Enter':
+        e.preventDefault();
+        if (selectedIndex >= 0 && filteredSuggestions[selectedIndex]) {
+          isSelectingRef.current = true;
+          onSelectSuggestion(filteredSuggestions[selectedIndex]);
+          setShowSuggestions(false);
+          setSelectedIndex(-1);
+          setTimeout(() => {
+            isSelectingRef.current = false;
+          }, 200);
+        }
+        break;
+      case 'Escape':
+        setShowSuggestions(false);
+        setSelectedIndex(-1);
+        break;
+    }
+  }, [showSuggestions, filteredSuggestions, selectedIndex, onSelectSuggestion]);
+
+  // Ajouter l'écouteur d'événements clavier sur le champ de recherche
+  useEffect(() => {
+    const inputElement = inputRef.current;
+    if (!inputElement) return;
+
+    inputElement.addEventListener('keydown', handleKeyDown);
+    return () => {
+      inputElement.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [inputRef, handleKeyDown]);
+
+  if (!showSuggestions) return null;
+
+  return (
+    <div ref={suggestionsRef} className="absolute left-0 right-0 top-full z-50 mt-1">
+      <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-600 dark:bg-slate-800">
+        {filteredSuggestions.map((product, index) => (
+          <button
+            key={product.id}
+            onClick={() => {
+              isSelectingRef.current = true;
+              onSelectSuggestion(product);
+              setShowSuggestions(false);
+              setSelectedIndex(-1);
+              setTimeout(() => {
+                isSelectingRef.current = false;
+              }, 200);
+            }}
+            onMouseEnter={() => setSelectedIndex(index)}
+            className={`
+              w-full px-4 py-2 text-left transition-colors
+              ${index === selectedIndex 
+                ? 'bg-blue-50 dark:bg-blue-900/50' 
+                : 'hover:bg-slate-50 dark:hover:bg-slate-700'
+              }
+              ${index !== filteredSuggestions.length - 1 ? 'border-b border-slate-100 dark:border-slate-700' : ''}
+            `}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  {product.name}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Code: {product.code} {product.barcode && `· Barre: ${product.barcode}`}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-bold text-blue-600">
+                  {posService.activeCurrency?.symbol || 'FC'} {(product.selling_price / (posService.activeCurrency?.exchangeRate || 1)).toFixed(2)}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Stock: {product.quantity}
+                </p>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+SearchAutocomplete.displayName = 'SearchAutocomplete';
+
 const POS = observer(() => {
   const location = useLocation();
   const isOnline = useOnline();
   const { toast } = useToast();
   
-  // Utilisation correcte du saleStore
   const { 
     getPendingCount, 
     syncPendingSales,
     resetFailedSales,
-    localSales 
+    localSales,
+    syncInProgress: storeSyncInProgress
   } = useSaleStore();
 
   const [loading, setLoading] = useState(true);
@@ -225,12 +371,13 @@ const POS = observer(() => {
   const [showInvoice, setShowInvoice] = useState(false);
   const [globalDiscount, setGlobalDiscount] = useState(0);
   const [isProcessingSale, setIsProcessingSale] = useState(false);
+  const [syncInProgress, setSyncInProgress] = useState(false);
+  const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
 
   const scanInputRef = useRef<HTMLInputElement>(null);
   const cartContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // États depuis posService
   const products = posService.products;
   const filteredProducts = posService.filteredProducts;
   const categories = posService.categories;
@@ -249,11 +396,22 @@ const POS = observer(() => {
 
   const pendingCount = getPendingCount();
   
-  // Ventes en échec
   const failedSales = useMemo(() => 
     localSales.filter(s => !s.synced && (s.retryCount || 0) >= 3),
     [localSales]
   );
+
+  useEffect(() => {
+    setSyncInProgress(storeSyncInProgress);
+  }, [storeSyncInProgress]);
+
+  useEffect(() => {
+    posService.setCallbacks({
+      onSyncStatusChange: (isSyncing) => {
+        setSyncInProgress(isSyncing);
+      }
+    });
+  }, []);
 
   const cartVirtualizer = useVirtualizer({
     count: cart.length,
@@ -290,7 +448,6 @@ const POS = observer(() => {
     [cart],
   );
 
-  // Chargement initial
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -314,19 +471,36 @@ const POS = observer(() => {
     loadData();
   }, [toast, isOnline, syncPendingSales]);
 
-  // Application du thème
   useEffect(() => {
     posService.applyTheme();
   }, [config.theme]);
 
-  // Synchronisation automatique quand en ligne
   useEffect(() => {
-    if (isOnline && pendingCount > 0) {
+    if (isOnline && pendingCount > 0 && !syncInProgress) {
       syncPendingSales();
     }
-  }, [isOnline, pendingCount, syncPendingSales]);
+  }, [isOnline, pendingCount, syncPendingSales, syncInProgress]);
 
-  // Raccourcis clavier
+  useEffect(() => {
+    if (!isOnline) return;
+    
+    const interval = setInterval(() => {
+      if (pendingCount > 0 && !syncInProgress) {
+        console.log('🔄 Synchronisation périodique déclenchée');
+        syncPendingSales();
+      }
+    }, 30000);
+    
+    return () => clearInterval(interval);
+  }, [isOnline, pendingCount, syncPendingSales, syncInProgress]);
+
+  useEffect(() => {
+    if (isOnline && pendingCount > 0 && !syncInProgress) {
+      console.log('🔄 Synchronisation au retour en ligne');
+      syncPendingSales();
+    }
+  }, [isOnline, pendingCount, syncPendingSales, syncInProgress]);
+
   useHotkeys('ctrl+k', () => {
     searchInputRef.current?.focus();
   });
@@ -344,13 +518,30 @@ const POS = observer(() => {
   useHotkeys('escape', () => {
     setShowScanner(false);
     setShowInvoice(false);
+    setShowSearchSuggestions(false);
     posService.setShowScanner(false);
   });
 
-  // Handlers
+  // Handlers - CORRIGÉS
   const handleSearch = useCallback((value: string) => {
     posService.setSearch(value);
+    setShowSearchSuggestions(true);
   }, []);
+
+  const handleSelectSuggestion = useCallback((product: Product) => {
+    console.log('🛒 Sélection produit:', product.name);
+    posService.addToCart(product);
+    posService.setSearch('');
+    setShowSearchSuggestions(false);
+    setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 100);
+    toast({
+      title: "Ajouté au panier",
+      description: `${product.name} a été ajouté`,
+      variant: "success",
+    });
+  }, [toast]);
 
   const handleCategoryChange = useCallback((categoryId: string) => {
     posService.setSelectedCategory(categoryId);
@@ -404,7 +595,6 @@ const POS = observer(() => {
       return;
     }
 
-    // Appliquer la remise globale
     if (globalDiscount > 0) {
       const newCart = cart.map(item => ({
         ...item,
@@ -418,7 +608,6 @@ const POS = observer(() => {
     try {
       await posService.validateSale();
       
-      // La vente est maintenant dans le store via posService.validateSale()
       if (posService.currentSale) {
         setShowInvoice(true);
         setGlobalDiscount(0);
@@ -476,13 +665,12 @@ const POS = observer(() => {
     posService.setShowInvoice(false);
   }, []);
 
-  
   const handleResetFailedSales = useCallback(() => {
     resetFailedSales();
     toast({
       title: "Réessai",
       description: "Tentative de synchronisation des ventes en échec",
-      variant: "default",  // Changé de "info" à "default"
+      variant: "default",
     });
   }, [resetFailedSales, toast]);
 
@@ -512,15 +700,18 @@ const POS = observer(() => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <Toaster />
 
-      {/* Bannière de synchronisation */}
       {pendingCount > 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          <Loader2 size={16} className="animate-spin" />
+          {syncInProgress ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <RefreshCw size={16} className="animate-spin" />
+          )}
           {pendingCount} vente(s) en attente de synchronisation
+          {syncInProgress && " (en cours...)"}
         </div>
       )}
 
-      {/* Bannière d'échec de synchronisation */}
       {failedSales.length > 0 && !pendingCount && (
         <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-red-500 px-4 py-2 text-sm font-medium text-white">
           <div className="flex items-center gap-2">
@@ -537,7 +728,6 @@ const POS = observer(() => {
         </div>
       )}
 
-      {/* Bannière hors-ligne */}
       {!isOnline && pendingCount === 0 && failedSales.length === 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           <WifiOff size={16} />
@@ -611,7 +801,6 @@ const POS = observer(() => {
         </div>
       </nav>
 
-      {/* Scanner Modal */}
       {showScanner && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-800">
@@ -722,7 +911,6 @@ const POS = observer(() => {
 
       <main className="p-4 md:p-6">
         <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
-          {/* Section produits */}
           <section>
             <div className="mb-4 flex flex-col gap-3 md:flex-row">
               <div className="relative flex-1">
@@ -734,7 +922,16 @@ const POS = observer(() => {
                   placeholder="Rechercher un produit (nom, code, code-barres...)"
                   value={search}
                   onChange={(e) => handleSearch(e.target.value)}
+                  onFocus={() => setShowSearchSuggestions(true)}
                 />
+                {showSearchSuggestions && (
+                  <SearchAutocomplete
+                    searchValue={search}
+                    suggestions={products}
+                    onSelectSuggestion={handleSelectSuggestion}
+                    inputRef={searchInputRef}
+                  />
+                )}
               </div>
 
               <button
@@ -866,7 +1063,6 @@ const POS = observer(() => {
             )}
           </section>
 
-          {/* Panier et caisse */}
           <aside>
             <div className="sticky top-4 space-y-4">
               <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">

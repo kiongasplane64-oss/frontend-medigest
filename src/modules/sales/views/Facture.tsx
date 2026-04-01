@@ -18,6 +18,7 @@ import { useToast } from '@/hooks/useToast';
 import { useSaleStore, type LocalSale } from '@/store/saleStore';
 import { type SaleResponse } from '@/services/saleService';
 
+// Types unifiés pour l'affichage
 interface Invoice {
   id: string;
   receiptNumber?: string;
@@ -36,14 +37,22 @@ interface Invoice {
   sessionNumber?: string;
   clientName?: string;
   status?: string;
-  synced?: boolean;
+  synced: boolean;
+  isLocal?: boolean;
 }
 
 export default function Facture() {
   const { toast } = useToast();
-  const { sales: apiSales, localSales, fetchSales, syncPendingSales, loading: storeLoading, getPendingCount } = useSaleStore();
-  
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const {
+    sales: apiSales,
+    localSales,
+    fetchSales,
+    syncPendingSales,
+    loading: storeLoading,
+    getPendingCount,
+    resetFailedSales, // getSalesWithLocal retiré
+  } = useSaleStore();
+
   const [search, setSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [filterDate, setFilterDate] = useState('');
@@ -51,18 +60,16 @@ export default function Facture() {
 
   const pendingCount = getPendingCount();
 
+  // Chargement initial
   useEffect(() => {
     void loadInvoices();
   }, []);
-
-  useEffect(() => {
-    combineInvoices();
-  }, [apiSales, localSales, storeLoading]);
 
   async function loadInvoices() {
     setLoading(true);
     try {
       await fetchSales();
+      // Tenter de synchroniser les ventes en attente
       await syncPendingSales();
     } catch (error) {
       console.error('Erreur chargement factures:', error);
@@ -76,6 +83,37 @@ export default function Facture() {
     }
   }
 
+  // Fonction de rafraîchissement manuel
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await fetchSales();
+      await syncPendingSales();
+      toast({
+        title: "Succès",
+        description: "Factures mises à jour",
+      });
+    } catch (error) {
+      toast({
+        title: "Erreur",
+        description: "Erreur lors du rafraîchissement",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Réessayer les ventes en échec
+  const handleRetryFailed = () => {
+    resetFailedSales();
+    toast({
+      title: "Réessai",
+      description: "Tentative de re-synchronisation des ventes échouées",
+    });
+  };
+
+  // Normalisation d'une vente API vers Invoice
   function normalizeApiSaleToInvoice(sale: SaleResponse): Invoice {
     return {
       id: sale.id,
@@ -96,9 +134,11 @@ export default function Facture() {
       clientName: sale.client_name || 'Passager',
       status: sale.status,
       synced: true,
+      isLocal: false,
     };
   }
 
+  // Normalisation d'une vente locale vers Invoice
   function normalizeLocalSaleToInvoice(sale: LocalSale): Invoice {
     return {
       id: sale.id,
@@ -119,19 +159,51 @@ export default function Facture() {
       clientName: sale.clientName || 'Passager',
       status: sale.status,
       synced: sale.synced,
+      isLocal: true,
     };
   }
 
-  function combineInvoices() {
+  // Récupération et combinaison des factures
+  const invoices = useMemo(() => {
     const apiInvoices = apiSales.map(normalizeApiSaleToInvoice);
     const localInvoices = localSales.map(normalizeLocalSaleToInvoice);
     
+    // Combiner et trier par date décroissante
     const combined = [...localInvoices, ...apiInvoices];
     combined.sort((a, b) => b.timestamp - a.timestamp);
     
-    setInvoices(combined);
-  }
+    return combined;
+  }, [apiSales, localSales]);
 
+  // Filtrage des factures
+  const filteredInvoices = useMemo(() => {
+    let result = [...invoices];
+
+    if (filterDate) {
+      result = result.filter((invoice) => {
+        const invoiceDate = new Date(invoice.timestamp).toISOString().slice(0, 10);
+        return invoiceDate === filterDate;
+      });
+    }
+
+    if (search.trim()) {
+      const term = search.trim().toLowerCase();
+      result = result.filter((invoice) => {
+        const invoiceNumber = getInvoiceNumber(invoice).toLowerCase();
+        const client = getClientName(invoice).toLowerCase();
+        const cashier = getCashierName(invoice).toLowerCase();
+        return (
+          invoiceNumber.includes(term) ||
+          client.includes(term) ||
+          cashier.includes(term)
+        );
+      });
+    }
+
+    return result;
+  }, [invoices, search, filterDate]);
+
+  // Helpers d'affichage
   function getInvoiceNumber(invoice: Invoice): string {
     return invoice.receiptNumber || invoice.id.slice(0, 8) || 'N/A';
   }
@@ -172,33 +244,7 @@ export default function Facture() {
     });
   }
 
-  const filteredInvoices = useMemo(() => {
-    let result = [...invoices];
-
-    if (filterDate) {
-      result = result.filter((invoice) => {
-        const invoiceDate = new Date(invoice.timestamp).toISOString().slice(0, 10);
-        return invoiceDate === filterDate;
-      });
-    }
-
-    if (search.trim()) {
-      const term = search.trim().toLowerCase();
-      result = result.filter((invoice) => {
-        const invoiceNumber = getInvoiceNumber(invoice).toLowerCase();
-        const client = getClientName(invoice).toLowerCase();
-        const cashier = getCashierName(invoice).toLowerCase();
-        return (
-          invoiceNumber.includes(term) ||
-          client.includes(term) ||
-          cashier.includes(term)
-        );
-      });
-    }
-
-    return result;
-  }, [invoices, search, filterDate]);
-
+  // Impression
   function printInvoice(invoice: Invoice) {
     const printWindow = window.open('', '_blank', 'width=420,height=720');
     if (!printWindow) return;
@@ -298,7 +344,7 @@ export default function Facture() {
                 .map(
                   (item) => `
                     <div class="item">
-                      <span class="item-name">${item.quantity} × ${item.name}</span>
+                      <span class="item-name">${item.quantity} × ${escapeHtml(item.name)}</span>
                       <span>${(item.price * item.quantity).toFixed(2)} $</span>
                     </div>
                   `,
@@ -330,6 +376,7 @@ export default function Facture() {
     printWindow.print();
   }
 
+  // Téléchargement
   function downloadInvoice(invoice: Invoice) {
     const content = `========================================
 FACTURE #${getInvoiceNumber(invoice)}
@@ -362,31 +409,66 @@ Merci de votre visite
     URL.revokeObjectURL(url);
   }
 
+  // Helper pour échapper le HTML
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  const isLoading = loading || storeLoading;
+
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Bannière de synchronisation */}
       {pendingCount > 0 && (
-        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          <Loader2 size={16} className="animate-spin" />
-          {pendingCount} facture(s) en attente de synchronisation
+        <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
+          <div className="flex items-center gap-2">
+            <Loader2 size={16} className="animate-spin" />
+            {pendingCount} facture(s) en attente de synchronisation
+          </div>
+          <button
+            onClick={handleRetryFailed}
+            className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
+          >
+            Réessayer
+          </button>
         </div>
       )}
 
       <header className="border-b border-slate-200 bg-white px-4 py-4 md:px-6 sticky top-0 z-10">
-        <div className="flex items-center gap-4">
-          <Link
-            to="/pos"
-            className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-          >
-            <ArrowLeft size={20} />
-          </Link>
-          <div>
-            <h1 className="text-xl font-black text-slate-800 md:text-2xl">Gestion des factures</h1>
-            <p className="text-sm text-slate-400">Historique des ventes et impressions</p>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link
+              to="/pos"
+              className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            >
+              <ArrowLeft size={20} />
+            </Link>
+            <div>
+              <h1 className="text-xl font-black text-slate-800 md:text-2xl">Gestion des factures</h1>
+              <p className="text-sm text-slate-400">Historique des ventes et impressions</p>
+            </div>
           </div>
+          <button
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {isLoading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              'Actualiser'
+            )}
+          </button>
         </div>
       </header>
 
       <main className="p-4 md:p-6">
+        {/* Filtres */}
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center">
           <div className="relative flex-1">
             <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
@@ -422,6 +504,7 @@ Merci de votre visite
           </div>
         </div>
 
+        {/* Liste des factures */}
         <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
             <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
@@ -433,7 +516,7 @@ Merci de votre visite
             </span>
           </div>
 
-          {loading || storeLoading ? (
+          {isLoading ? (
             <div className="flex items-center justify-center p-10 text-slate-400">
               <Loader2 className="mr-2 animate-spin" size={20} />
               Chargement...
@@ -443,7 +526,7 @@ Merci de votre visite
           ) : (
             <div className="divide-y divide-slate-100">
               {filteredInvoices.map((invoice) => (
-                <div key={invoice.id} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
+                <div key={`${invoice.isLocal ? 'local-' : 'api-'}${invoice.id}`} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -455,6 +538,12 @@ Merci de votre visite
                           <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">
                             <Loader2 size={10} className="mr-1 inline animate-spin" />
                             En attente
+                          </span>
+                        )}
+
+                        {invoice.isLocal && invoice.synced && (
+                          <span className="rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                            Synchronisé
                           </span>
                         )}
 
@@ -535,6 +624,7 @@ Merci de votre visite
         </section>
       </main>
 
+      {/* Modal de détails */}
       {selectedInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
@@ -550,7 +640,7 @@ Merci de votre visite
                     </h3>
                     <p className="text-sm text-slate-400">{formatDate(selectedInvoice.timestamp)}</p>
                     {!selectedInvoice.synced && (
-                      <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
                         <Loader2 size={10} className="animate-spin" />
                         En attente de synchronisation
                       </p>

@@ -65,12 +65,10 @@ export default function Historique() {
     fetchSales, 
     syncPendingSales,
     loading: storeLoading,
-    getPendingCount
+    getPendingCount,
+    resetFailedSales,
   } = useSaleStore();
 
-  const [allSales, setAllSales] = useState<Sale[]>([]);
-  const [filteredSales, setFilteredSales] = useState<Sale[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>('today');
@@ -78,29 +76,15 @@ export default function Historique() {
   const [customEndDate, setCustomEndDate] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   const itemsPerPage = 20;
   const pendingCount = getPendingCount();
 
+  // Chargement initial
   useEffect(() => {
     void loadData();
   }, []);
-
-  useEffect(() => {
-    combineSales();
-  }, [apiSales, localSales, storeLoading]);
-
-  useEffect(() => {
-    filterSales();
-  }, [allSales, search]);
-
-  useEffect(() => {
-    if (dateRange !== 'custom') {
-      setCurrentPage(1);
-    }
-  }, [dateRange, paymentFilter]);
 
   async function loadData() {
     setLoading(true);
@@ -121,6 +105,39 @@ export default function Historique() {
     }
   }
 
+  // Fonction de rafraîchissement manuel
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await fetchSales();
+      if (isOnline) {
+        await syncPendingSales();
+      }
+      toast({
+        title: "Succès",
+        description: "Historique mis à jour",
+      });
+    } catch (error) {
+      toast({
+        title: "Erreur",
+        description: "Erreur lors du rafraîchissement",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Réessayer les ventes en échec
+  const handleRetryFailed = () => {
+    resetFailedSales();
+    toast({
+      title: "Réessai",
+      description: "Tentative de re-synchronisation des ventes échouées",
+    });
+  };
+
+  // Normalisation d'une vente API
   function normalizeApiSale(sale: SaleResponse): Sale {
     return {
       id: sale.id,
@@ -145,6 +162,7 @@ export default function Historique() {
     };
   }
 
+  // Normalisation d'une vente locale
   function normalizeLocalSale(sale: LocalSale): Sale {
     return {
       id: sale.id,
@@ -169,19 +187,19 @@ export default function Historique() {
     };
   }
 
-  function combineSales() {
+  // Récupération et combinaison des ventes avec useMemo pour optimisation
+  const allSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);
     const localNormalized = localSales.map(normalizeLocalSale);
     
     const combined = [...localNormalized, ...apiNormalized];
     combined.sort((a, b) => b.timestamp - a.timestamp);
     
-    setAllSales(combined);
-    setTotalCount(combined.length);
-    setTotalPages(Math.max(1, Math.ceil(combined.length / itemsPerPage)));
-  }
+    return combined;
+  }, [apiSales, localSales]);
 
-  function getDateFilteredSales(): Sale[] {
+  // Filtrage par date
+  const getDateFilteredSales = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
@@ -212,15 +230,18 @@ export default function Historique() {
       default:
         return allSales;
     }
-  }
+  }, [allSales, dateRange, customStartDate, customEndDate]);
 
-  function filterSales() {
-    let filtered = getDateFilteredSales();
+  // Filtrage par paiement et recherche
+  const filteredAndPaginated = useMemo(() => {
+    let filtered = getDateFilteredSales;
     
+    // Filtre par méthode de paiement
     if (paymentFilter !== 'all') {
       filtered = filtered.filter(s => s.paymentMethod === paymentFilter);
     }
     
+    // Filtre par recherche
     if (search.trim()) {
       const term = search.toLowerCase().trim();
       filtered = filtered.filter(sale => {
@@ -236,15 +257,22 @@ export default function Historique() {
       });
     }
     
+    const totalFilteredCount = filtered.length;
     const start = (currentPage - 1) * itemsPerPage;
     const end = start + itemsPerPage;
-    setFilteredSales(filtered.slice(start, end));
-    setTotalPages(Math.max(1, Math.ceil(filtered.length / itemsPerPage)));
-    setTotalCount(filtered.length);
-  }
+    const paginatedItems = filtered.slice(start, end);
+    const totalPages = Math.max(1, Math.ceil(totalFilteredCount / itemsPerPage));
+    
+    return {
+      items: paginatedItems,
+      totalCount: totalFilteredCount,
+      totalPages,
+    };
+  }, [getDateFilteredSales, paymentFilter, search, currentPage]);
 
+  // Statistiques
   const stats = useMemo(() => {
-    const dateFiltered = getDateFilteredSales();
+    const dateFiltered = getDateFilteredSales;
     const totalAmount = dateFiltered.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
     const totalItems = dateFiltered.reduce(
       (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
@@ -254,8 +282,9 @@ export default function Historique() {
     const averageTicket = totalSales > 0 ? totalAmount / totalSales : 0;
 
     return { totalAmount, totalItems, totalSales, averageTicket };
-  }, [allSales, dateRange, customStartDate, customEndDate]);
+  }, [getDateFilteredSales]);
 
+  // Helpers d'affichage
   function getSaleNumber(sale: Sale): string {
     return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
   }
@@ -310,9 +339,10 @@ export default function Historique() {
     }
   }
 
+  // Export CSV
   async function exportToCSV() {
     try {
-      const dateFiltered = getDateFilteredSales();
+      const dateFiltered = getDateFilteredSales;
       
       const headers = [
         'Numero',
@@ -369,11 +399,12 @@ export default function Historique() {
     }
   }
 
+  // Impression
   function printSale(sale: Sale) {
     const printWindow = window.open('', '_blank', 'width=420,height=720');
     if (!printWindow) return;
 
-    printWindow.document.write(`
+    const html = `
       <!DOCTYPE html>
       <html>
         <head>
@@ -442,7 +473,7 @@ export default function Historique() {
               .map(
                 (item) => `
                   <div class="row">
-                    <span>${item.quantity} x ${item.name}</span>
+                    <span>${item.quantity} x ${escapeHtml(item.name)}</span>
                     <span>${(Number(item.price) * Number(item.quantity)).toFixed(2)} $</span>
                   </div>
                 `,
@@ -460,13 +491,25 @@ export default function Historique() {
           </div>
         </body>
       </html>
-    `);
+    `;
 
+    printWindow.document.write(html);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
   }
 
+  // Helper pour échapper le HTML
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Gestionnaires d'événements
   function handleDateRangeChange(e: React.ChangeEvent<HTMLSelectElement>) {
     setDateRange(e.target.value as DateRange);
     setCurrentPage(1);
@@ -486,12 +529,23 @@ export default function Historique() {
     setCurrentPage(1);
   }
 
+  const isLoading = loading || storeLoading;
+
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Bannière de synchronisation */}
       {pendingCount > 0 && (
-        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          <Loader2 size={16} className="animate-spin" />
-          {pendingCount} vente(s) en attente de synchronisation
+        <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
+          <div className="flex items-center gap-2">
+            <Loader2 size={16} className="animate-spin" />
+            {pendingCount} vente(s) en attente de synchronisation
+          </div>
+          <button
+            onClick={handleRetryFailed}
+            className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
+          >
+            Réessayer
+          </button>
         </div>
       )}
 
@@ -528,10 +582,11 @@ export default function Historique() {
             )}
 
             <button
-              onClick={() => void loadData()}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
-              <RefreshCw size={18} />
+              <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
               Actualiser
             </button>
 
@@ -547,6 +602,7 @@ export default function Historique() {
       </header>
 
       <main className="p-4 md:p-6">
+        {/* Filtres */}
         <div className="mb-6 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <div className="relative">
@@ -609,6 +665,7 @@ export default function Historique() {
           </div>
         </div>
 
+        {/* Statistiques */}
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
@@ -659,25 +716,26 @@ export default function Historique() {
           </div>
         </div>
 
+        {/* Liste des ventes */}
         <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
             <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
               <Clock size={20} className="text-blue-600" />
-              Transactions ({totalCount})
+              Transactions ({filteredAndPaginated.totalCount})
             </h2>
           </div>
 
           <div className="divide-y divide-slate-100">
-            {loading || storeLoading ? (
+            {isLoading ? (
               <div className="flex items-center justify-center p-10 text-slate-400">
                 <Loader2 className="mr-2 animate-spin" size={20} />
                 Chargement...
               </div>
-            ) : filteredSales.length === 0 ? (
+            ) : filteredAndPaginated.items.length === 0 ? (
               <div className="p-10 text-center text-slate-400">Aucune vente trouvée</div>
             ) : (
-              filteredSales.map((sale) => (
-                <div key={sale.id} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
+              filteredAndPaginated.items.map((sale) => (
+                <div key={`${sale.isLocal ? 'local-' : 'api-'}${sale.id}`} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
                   <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -757,11 +815,11 @@ export default function Historique() {
             )}
           </div>
 
-          {totalPages > 1 && (
+          {filteredAndPaginated.totalPages > 1 && (
             <div className="flex flex-col gap-4 border-t border-slate-100 p-4 md:flex-row md:items-center md:justify-between">
               <p className="text-sm text-slate-400">
                 Affichage {(currentPage - 1) * itemsPerPage + 1} à{' '}
-                {Math.min(currentPage * itemsPerPage, totalCount)} sur {totalCount} ventes
+                {Math.min(currentPage * itemsPerPage, filteredAndPaginated.totalCount)} sur {filteredAndPaginated.totalCount} ventes
               </p>
 
               <div className="flex items-center gap-2">
@@ -774,12 +832,12 @@ export default function Historique() {
                 </button>
 
                 <span className="px-3 py-2 text-sm font-medium text-slate-700">
-                  Page {currentPage} / {totalPages}
+                  Page {currentPage} / {filteredAndPaginated.totalPages}
                 </span>
 
                 <button
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(filteredAndPaginated.totalPages, p + 1))}
+                  disabled={currentPage === filteredAndPaginated.totalPages}
                   className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <ChevronRight size={18} />
@@ -790,6 +848,7 @@ export default function Historique() {
         </section>
       </main>
 
+      {/* Modal de détails */}
       {selectedSale && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
@@ -805,7 +864,7 @@ export default function Historique() {
                     </h3>
                     <p className="text-sm text-slate-400">{formatDate(selectedSale.timestamp)}</p>
                     {!selectedSale.synced && (
-                      <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
                         <Loader2 size={10} className="animate-spin" />
                         En attente de synchronisation
                       </p>

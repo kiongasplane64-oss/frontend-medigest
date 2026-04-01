@@ -1,5 +1,5 @@
 // Rapports.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   BarChart3, TrendingUp, Package, Users, 
   CreditCard, Download, ArrowLeft,
@@ -9,7 +9,8 @@ import {
 import { Link } from 'react-router-dom';
 import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
-import { useSaleStore } from '@/store/saleStore';
+import { useSaleStore, type LocalSale } from '@/store/saleStore';
+import { type SaleResponse } from '@/services/saleService';
 import { formatCurrency, formatDate } from '@/utils/formatters';
 
 interface ProductSales {
@@ -28,30 +29,11 @@ interface CashierPerformance {
   average: number;
 }
 
-interface HourlyData {
-  hour: string;
-  sales: number;
-  revenue: number;
-}
-
 interface PaymentBreakdown {
   cash: number;
   mobile: number;
   account: number;
 }
-
-interface Stats {
-  totalRevenue: number;
-  totalSales: number;
-  totalItems: number;
-  averageTicket: number;
-  topProduct: { name: string; quantity: number; revenue: number };
-  bestCashier: { name: string; sales: number; revenue: number };
-  paymentBreakdown: PaymentBreakdown;
-}
-
-type Period = 'today' | 'week' | 'month' | 'year' | 'custom';
-type ReportType = 'sales' | 'products' | 'cashiers' | 'payment';
 
 interface NormalizedSale {
   id: string;
@@ -71,6 +53,9 @@ interface NormalizedSale {
   synced?: boolean;
   isLocal?: boolean;
 }
+
+type Period = 'today' | 'week' | 'month' | 'year' | 'custom';
+type ReportType = 'sales' | 'products' | 'cashiers' | 'payment';
 
 const PERIOD_OPTIONS = [
   { value: 'today', label: "Aujourd'hui" },
@@ -102,43 +87,22 @@ export default function Rapports() {
     fetchSales, 
     syncPendingSales,
     loading: storeLoading,
-    getPendingCount
+    getPendingCount,
+    resetFailedSales,
   } = useSaleStore();
   
-  const [normalizedSales, setNormalizedSales] = useState<NormalizedSale[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<Period>('month');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [reportType, setReportType] = useState<ReportType>('sales');
-  
-  const [stats, setStats] = useState<Stats>({
-    totalRevenue: 0,
-    totalSales: 0,
-    totalItems: 0,
-    averageTicket: 0,
-    topProduct: { name: '', quantity: 0, revenue: 0 },
-    bestCashier: { name: '', sales: 0, revenue: 0 },
-    paymentBreakdown: { cash: 0, mobile: 0, account: 0 }
-  });
-
-  const [productSales, setProductSales] = useState<ProductSales[]>([]);
-  const [cashierPerformance, setCashierPerformance] = useState<CashierPerformance[]>([]);
-  const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
 
   const pendingCount = getPendingCount();
 
+  // Chargement initial
   useEffect(() => {
     void loadData();
   }, []);
-
-  useEffect(() => {
-    normalizeAllSales();
-  }, [apiSales, localSales, storeLoading]);
-
-  useEffect(() => {
-    calculateStats();
-  }, [normalizedSales, period, customStartDate, customEndDate]);
 
   async function loadData() {
     setLoading(true);
@@ -159,7 +123,40 @@ export default function Rapports() {
     }
   }
 
-  function normalizeApiSale(sale: any): NormalizedSale {
+  // Fonction de rafraîchissement manuel
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await fetchSales();
+      if (isOnline) {
+        await syncPendingSales();
+      }
+      toast({
+        title: "Succès",
+        description: "Données mises à jour",
+      });
+    } catch (error) {
+      toast({
+        title: "Erreur",
+        description: "Erreur lors du rafraîchissement",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Réessayer les ventes en échec
+  const handleRetryFailed = () => {
+    resetFailedSales();
+    toast({
+      title: "Réessai",
+      description: "Tentative de re-synchronisation des ventes échouées",
+    });
+  };
+
+  // Normalisation d'une vente API
+  function normalizeApiSale(sale: SaleResponse): NormalizedSale {
     return {
       id: sale.id,
       created_at: sale.created_at,
@@ -180,7 +177,8 @@ export default function Rapports() {
     };
   }
 
-  function normalizeLocalSale(sale: any): NormalizedSale {
+  // Normalisation d'une vente locale
+  function normalizeLocalSale(sale: LocalSale): NormalizedSale {
     return {
       id: sale.id,
       created_at: new Date(sale.timestamp).toISOString(),
@@ -201,17 +199,19 @@ export default function Rapports() {
     };
   }
 
-  function normalizeAllSales() {
+  // Récupération et combinaison des ventes avec useMemo
+  const normalizedSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);
     const localNormalized = localSales.map(normalizeLocalSale);
     
     const combined = [...localNormalized, ...apiNormalized];
     combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     
-    setNormalizedSales(combined);
-  }
+    return combined;
+  }, [apiSales, localSales]);
 
-  function getFilteredSales(): NormalizedSale[] {
+  // Filtrage par période
+  const filteredSales = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
@@ -262,11 +262,10 @@ export default function Rapports() {
       default:
         return normalizedSales;
     }
-  }
+  }, [normalizedSales, period, customStartDate, customEndDate]);
 
-  const calculateStats = useCallback(() => {
-    const filteredSales = getFilteredSales();
-    
+  // Calcul des statistiques
+  const stats = useMemo(() => {
     const totalRevenue = filteredSales.reduce((sum, sale) => sum + (sale.total_amount || 0), 0);
     const totalSales = filteredSales.length;
     const totalItems = filteredSales.reduce((sum, sale) => 
@@ -280,6 +279,7 @@ export default function Rapports() {
       account: filteredSales.filter(s => s.payment_method === 'account').reduce((sum, s) => sum + (s.total_amount || 0), 0)
     };
 
+    // Calcul des produits
     const productsMap = new Map<string, ProductSales>();
     filteredSales.forEach(sale => {
       if (sale.items) {
@@ -304,9 +304,8 @@ export default function Rapports() {
       quantity: 0, 
       revenue: 0 
     };
-    
-    setProductSales(products.sort((a, b) => b.quantity - a.quantity));
 
+    // Calcul des caissiers
     const cashiersMap = new Map<string, CashierPerformance>();
     filteredSales.forEach(sale => {
       const cashierName = sale.seller_name || 'Inconnu';
@@ -330,9 +329,30 @@ export default function Rapports() {
       revenue: 0, 
       average: 0 
     };
-    
-    setCashierPerformance(cashiers.sort((a, b) => b.revenue - a.revenue));
 
+    return {
+      totalRevenue,
+      totalSales,
+      totalItems,
+      averageTicket,
+      topProduct: {
+        name: topProduct.name,
+        quantity: topProduct.quantity,
+        revenue: topProduct.revenue
+      },
+      bestCashier: {
+        name: bestCashier.name,
+        sales: bestCashier.sales,
+        revenue: bestCashier.revenue
+      },
+      paymentBreakdown,
+      products: products.sort((a, b) => b.quantity - a.quantity),
+      cashiers: cashiers.sort((a, b) => b.revenue - a.revenue),
+    };
+  }, [filteredSales]);
+
+  // Calcul des données horaires
+  const hourlyData = useMemo(() => {
     const hourlyMap = new Map<string, { sales: number; revenue: number }>();
     for (let i = 0; i < 24; i++) {
       hourlyMap.set(`${i}h`, { sales: 0, revenue: 0 });
@@ -348,36 +368,35 @@ export default function Rapports() {
       }
     });
     
-    setHourlyData(
-      Array.from(hourlyMap.entries()).map(([hour, data]) => ({
-        hour,
-        sales: data.sales,
-        revenue: data.revenue
-      }))
-    );
+    return Array.from(hourlyMap.entries()).map(([hour, data]) => ({
+      hour,
+      sales: data.sales,
+      revenue: data.revenue
+    }));
+  }, [filteredSales]);
 
-    setStats({
-      totalRevenue,
-      totalSales,
-      totalItems,
-      averageTicket,
-      topProduct: {
-        name: topProduct.name,
-        quantity: topProduct.quantity,
-        revenue: topProduct.revenue
-      },
-      bestCashier: {
-        name: bestCashier.name,
-        sales: bestCashier.sales,
-        revenue: bestCashier.revenue
-      },
-      paymentBreakdown
-    });
-  }, [getFilteredSales]);
+  // Mode de paiement principal
+  const mainPaymentMethod = useMemo(() => {
+    const entries = Object.entries(stats.paymentBreakdown) as [keyof PaymentBreakdown, number][];
+    const maxEntry = entries.reduce((max, entry) => entry[1] > max[1] ? entry : max, entries[0] || ['cash', 0]);
+    
+    switch (maxEntry[0]) {
+      case 'cash': return 'Espèces';
+      case 'mobile': return 'Mobile Money';
+      case 'account': return 'Compte Client';
+      default: return 'Non défini';
+    }
+  }, [stats.paymentBreakdown]);
 
+  // Maximum horaire pour la barre de progression
+  const maxHourlySales = useMemo(() => 
+    Math.max(...hourlyData.map(h => h.sales), 1),
+    [hourlyData]
+  );
+
+  // Export du rapport
   function exportReport() {
     try {
-      const filteredSales = getFilteredSales();
       const reportData = {
         period,
         generatedAt: new Date().toISOString(),
@@ -385,11 +404,19 @@ export default function Rapports() {
           customStartDate: customStartDate || undefined,
           customEndDate: customEndDate || undefined
         },
-        summary: stats,
-        products: productSales.slice(0, 50),
-        cashiers: cashierPerformance,
+        summary: {
+          totalRevenue: stats.totalRevenue,
+          totalSales: stats.totalSales,
+          totalItems: stats.totalItems,
+          averageTicket: stats.averageTicket,
+          topProduct: stats.topProduct,
+          bestCashier: stats.bestCashier,
+          paymentBreakdown: stats.paymentBreakdown
+        },
+        products: stats.products.slice(0, 50),
+        cashiers: stats.cashiers,
         hourly: hourlyData.filter(h => h.sales > 0),
-        totalSales: normalizedSales.length,
+        totalSalesCount: normalizedSales.length,
         pendingCount,
         sales: filteredSales.map(s => ({
           id: s.id,
@@ -429,24 +456,9 @@ export default function Rapports() {
     window.print();
   }
 
-  const mainPaymentMethod = useMemo(() => {
-    const entries = Object.entries(stats.paymentBreakdown) as [keyof PaymentBreakdown, number][];
-    const maxEntry = entries.reduce((max, entry) => entry[1] > max[1] ? entry : max, entries[0] || ['cash', 0]);
-    
-    switch (maxEntry[0]) {
-      case 'cash': return 'Espèces';
-      case 'mobile': return 'Mobile Money';
-      case 'account': return 'Compte Client';
-      default: return 'Non défini';
-    }
-  }, [stats.paymentBreakdown]);
+  const isLoading = loading || storeLoading;
 
-  const maxHourlySales = useMemo(() => 
-    Math.max(...hourlyData.map(h => h.sales), 1),
-    [hourlyData]
-  );
-
-  if (loading || storeLoading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-center">
@@ -459,10 +471,19 @@ export default function Rapports() {
 
   return (
     <div className="min-h-screen bg-slate-50">
+      {/* Bannière de synchronisation */}
       {pendingCount > 0 && (
-        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          <Loader2 size={16} className="animate-spin" />
-          {pendingCount} vente(s) en attente de synchronisation
+        <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
+          <div className="flex items-center gap-2">
+            <Loader2 size={16} className="animate-spin" />
+            {pendingCount} vente(s) en attente de synchronisation
+          </div>
+          <button
+            onClick={handleRetryFailed}
+            className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
+          >
+            Réessayer
+          </button>
         </div>
       )}
 
@@ -486,6 +507,14 @@ export default function Rapports() {
           </div>
           <div className="flex gap-2 print:hidden">
             <button
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              <Loader2 size={18} className={isLoading ? 'animate-spin' : ''} />
+              Actualiser
+            </button>
+            <button
               onClick={printReport}
               className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors"
             >
@@ -504,6 +533,7 @@ export default function Rapports() {
       </div>
 
       <div className="p-6 print:p-0">
+        {/* Filtres */}
         <div className="bg-white rounded-2xl p-6 border border-slate-100 mb-6 print:hidden">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
@@ -556,6 +586,7 @@ export default function Rapports() {
           </div>
         </div>
 
+        {/* Cartes de statistiques */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-2xl p-6 border border-slate-100">
             <div className="flex items-center gap-4">
@@ -611,6 +642,7 @@ export default function Rapports() {
           </div>
         </div>
 
+        {/* Contenu dynamique selon le type de rapport */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {reportType === 'sales' && (
             <>
@@ -624,7 +656,7 @@ export default function Rapports() {
                   </div>
                   <div className="p-5">
                     <div className="space-y-1">
-                      {productSales.slice(0, 10).map((product, index) => (
+                      {stats.products.slice(0, 10).map((product, index) => (
                         <div key={product.id} className="flex items-center justify-between py-2 hover:bg-slate-50 px-2 rounded-lg transition-colors">
                           <div className="flex items-center gap-3">
                             <span className="text-sm font-medium text-slate-400 w-6">#{index + 1}</span>
@@ -639,7 +671,7 @@ export default function Rapports() {
                           </div>
                         </div>
                       ))}
-                      {productSales.length === 0 && (
+                      {stats.products.length === 0 && (
                         <p className="text-center text-slate-400 py-8">Aucune donnée disponible</p>
                       )}
                     </div>
@@ -696,10 +728,10 @@ export default function Rapports() {
                         <th className="text-right py-3 text-sm font-medium text-slate-400">Quantité</th>
                         <th className="text-right py-3 text-sm font-medium text-slate-400">Chiffre d'affaires</th>
                         <th className="text-right py-3 text-sm font-medium text-slate-400">Prix moyen</th>
-                      </tr>
+                       </tr>
                     </thead>
                     <tbody>
-                      {productSales.map((product) => (
+                      {stats.products.map((product) => (
                         <tr key={product.id} className="border-b border-slate-50 hover:bg-slate-50">
                           <td className="py-3 font-medium text-slate-700">{product.name}</td>
                           <td className="py-3 text-right">{product.quantity}</td>
@@ -711,7 +743,7 @@ export default function Rapports() {
                           </td>
                         </tr>
                       ))}
-                      {productSales.length === 0 && (
+                      {stats.products.length === 0 && (
                         <tr>
                           <td colSpan={4} className="text-center py-8 text-slate-400">
                             Aucune donnée disponible
@@ -746,7 +778,7 @@ export default function Rapports() {
                       </tr>
                     </thead>
                     <tbody>
-                      {cashierPerformance.map((cashier) => (
+                      {stats.cashiers.map((cashier) => (
                         <tr key={cashier.id} className="border-b border-slate-50 hover:bg-slate-50">
                           <td className="py-3 font-medium text-slate-700">{cashier.name}</td>
                           <td className="py-3 text-right">{cashier.sales}</td>
@@ -759,7 +791,7 @@ export default function Rapports() {
                           </td>
                         </tr>
                       ))}
-                      {cashierPerformance.length === 0 && (
+                      {stats.cashiers.length === 0 && (
                         <tr>
                           <td colSpan={5} className="text-center py-8 text-slate-400">
                             Aucune donnée disponible
@@ -865,6 +897,7 @@ export default function Rapports() {
             </div>
           )}
 
+          {/* Résumé exécutif */}
           <div className="lg:col-span-3 mt-6">
             <div className="bg-blue-50 border border-blue-200 rounded-2xl">
               <div className="p-6">
