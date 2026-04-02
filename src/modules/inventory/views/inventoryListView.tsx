@@ -203,6 +203,9 @@ export default function InventoryListView({
   const [isGeneratingBarcode, setIsGeneratingBarcode] = useState(false);
   const [categories, setCategories] = useState<Array<{ id: string; name: string; parent_id?: string | null }>>([]);
   const [isLoadingCategories, setIsLoadingCategories] = useState(false);
+  
+  // Nouveaux états pour le contrôle du prix
+  const [calculAutoPrix, setCalculAutoPrix] = useState(true);
 
   // États principaux
   const [activeTab, setActiveTab] = useState<ActiveTab>('products');
@@ -269,7 +272,7 @@ export default function InventoryListView({
     error,
     refetch,
   } = useQuery({
-    queryKey: ['products', page, limit, searchQuery, filters, sortBy, sortOrder, effectivePharmacyId],
+    queryKey: ['products', page, limit, searchQuery, filters, sortBy, sortOrder, effectivePharmacyId, effectiveBranchId],
     queryFn: async () => {
       if (!effectivePharmacyId) return { products: [], total: 0 };
       
@@ -427,7 +430,7 @@ export default function InventoryListView({
 
   // Mettre à jour les prix automatiquement
   useEffect(() => {
-    if (!isAutomaticPricing || toNumber(formData.purchase_price, 0) <= 0) {
+    if (!calculAutoPrix || !isAutomaticPricing || toNumber(formData.purchase_price, 0) <= 0) {
       return;
     }
 
@@ -448,18 +451,7 @@ export default function InventoryListView({
 
       return next;
     });
-  }, [formData.purchase_price, isAutomaticPricing, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
-
-  // Obtenir le prix de vente actuel selon le type de vente
-  const getCurrentSellingPrice = useCallback((): number => {
-    if (salesType === 'wholesale') {
-      return toNumber(formData.selling_price_wholesale, suggestedPrices.wholesale);
-    }
-    if (salesType === 'retail') {
-      return toNumber(formData.selling_price_retail, suggestedPrices.retail);
-    }
-    return toNumber(formData.selling_price_retail, suggestedPrices.retail);
-  }, [formData.selling_price_retail, formData.selling_price_wholesale, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
+  }, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
 
   // Vérifier l'existence d'un code-barres
   const checkBarcodeExists = useCallback(
@@ -538,6 +530,45 @@ export default function InventoryListView({
     setIsSubmitting(true);
 
     try {
+      // Déterminer le prix de vente selon le mode
+      let sellingPriceValue = 0;
+      let sellingPriceWholesaleValue: number | undefined = undefined;
+      let sellingPriceRetailValue: number | undefined = undefined;
+      
+      if (calculAutoPrix && isAutomaticPricing) {
+        // Calcul automatique
+        const calculatedPrice = calculateSellingPrice(
+          formData.purchase_price, 
+          formData.has_tva, 
+          formData.tva_rate
+        );
+        
+        if (salesType === 'wholesale') {
+          sellingPriceWholesaleValue = calculatedPrice;
+          sellingPriceValue = calculatedPrice;
+        } else if (salesType === 'retail') {
+          sellingPriceRetailValue = calculatedPrice;
+          sellingPriceValue = calculatedPrice;
+        } else {
+          sellingPriceRetailValue = calculatedPrice;
+          sellingPriceWholesaleValue = calculatedPrice * 0.85; // 15% de remise pour le gros
+          sellingPriceValue = calculatedPrice;
+        }
+      } else {
+        // Prix manuel
+        if (salesType === 'wholesale') {
+          sellingPriceWholesaleValue = formData.selling_price_wholesale;
+          sellingPriceValue = formData.selling_price_wholesale;
+        } else if (salesType === 'retail') {
+          sellingPriceRetailValue = formData.selling_price_retail;
+          sellingPriceValue = formData.selling_price_retail;
+        } else {
+          sellingPriceRetailValue = formData.selling_price_retail;
+          sellingPriceWholesaleValue = formData.selling_price_wholesale;
+          sellingPriceValue = formData.selling_price_retail;
+        }
+      }
+
       const payload: ProductCreate = {
         name: formData.name.trim(),
         code: formData.code.trim() || `PROD-${Date.now()}`,
@@ -547,15 +578,9 @@ export default function InventoryListView({
         description: formData.description.trim() || undefined,
         quantity: toNumber(formData.quantity, 0),
         purchase_price: toNumber(formData.purchase_price, 0),
-        selling_price: getCurrentSellingPrice(),
-        selling_price_wholesale:
-          salesType === 'retail'
-            ? undefined
-            : toNumber(formData.selling_price_wholesale, suggestedPrices.wholesale),
-        selling_price_retail:
-          salesType === 'wholesale'
-            ? undefined
-            : toNumber(formData.selling_price_retail, suggestedPrices.retail),
+        selling_price: sellingPriceValue,
+        selling_price_wholesale: sellingPriceWholesaleValue,
+        selling_price_retail: sellingPriceRetailValue,
         expiry_date: formData.expiry_date || undefined,
         alert_threshold: toNumber(formData.alert_threshold, lowStockThreshold),
         minimum_stock: toNumber(formData.minimum_stock, lowStockThreshold),
@@ -568,6 +593,10 @@ export default function InventoryListView({
         is_active: formData.is_active,
         pharmacy_id: effectivePharmacyId,
         branch_id: effectiveBranchId || undefined,
+        // Nouveaux champs
+        calcul_auto_prix: calculAutoPrix && isAutomaticPricing,
+        marge_par_defaut: defaultMargin,
+        sales_type: salesType,
       };
 
       const timeoutPromise = new Promise<never>((_, reject) => {
@@ -646,6 +675,7 @@ export default function InventoryListView({
   const handleOpenCreateForm = () => {
     setFormMode('create');
     setSelectedProductId(null);
+    setCalculAutoPrix(isAutomaticPricing);
     setFormData({
       name: '',
       code: '',
@@ -677,6 +707,7 @@ export default function InventoryListView({
   const handleOpenEditForm = (product: Product) => {
     setFormMode('edit');
     setSelectedProductId(product.id);
+    setCalculAutoPrix(isAutomaticPricing);
     setFormError(null);
     setShowForm(true);
   };
@@ -705,6 +736,7 @@ export default function InventoryListView({
         // Produit non trouvé, ouvrir le formulaire avec le code-barres pré-rempli
         setFormMode('create');
         setSelectedProductId(null);
+        setCalculAutoPrix(isAutomaticPricing);
         setFormData(prev => ({ ...prev, barcode: code }));
         setFormError(null);
         setShowForm(true);
@@ -1022,6 +1054,37 @@ export default function InventoryListView({
                 />
               </div>
 
+              {/* Bloc de contrôle du calcul automatique */}
+              <div className="md:col-span-3">
+                <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div>
+                    <span className="font-medium text-slate-700">Calcul automatique du prix</span>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {calculAutoPrix && isAutomaticPricing 
+                        ? "Le prix sera calculé automatiquement selon la configuration" 
+                        : !isAutomaticPricing 
+                          ? "Le calcul automatique est désactivé dans la configuration"
+                          : "Le prix sera saisi manuellement"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCalculAutoPrix(!calculAutoPrix)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      calculAutoPrix && isAutomaticPricing ? 'bg-medical' : 'bg-slate-300'
+                    }`}
+                    disabled={!isAutomaticPricing}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        calculAutoPrix && isAutomaticPricing ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Prix vente détail */}
               {(salesType === 'retail' || salesType === 'both') && (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -1033,9 +1096,12 @@ export default function InventoryListView({
                     step="0.01"
                     value={formData.selling_price_retail}
                     onChange={(e) => setFormData(prev => ({ ...prev, selling_price_retail: toNumber(e.target.value, 0) }))}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-medical"
+                    disabled={calculAutoPrix && isAutomaticPricing}
+                    className={`w-full rounded-lg border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-medical ${
+                      calculAutoPrix && isAutomaticPricing ? 'bg-slate-100' : ''
+                    }`}
                   />
-                  {isAutomaticPricing && (
+                  {calculAutoPrix && isAutomaticPricing && (
                     <p className="mt-1 text-xs text-slate-500">
                       Suggéré: {suggestedPrices.retail}
                     </p>
@@ -1043,6 +1109,7 @@ export default function InventoryListView({
                 </div>
               )}
 
+              {/* Prix vente gros */}
               {(salesType === 'wholesale' || salesType === 'both') && (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -1054,9 +1121,12 @@ export default function InventoryListView({
                     step="0.01"
                     value={formData.selling_price_wholesale}
                     onChange={(e) => setFormData(prev => ({ ...prev, selling_price_wholesale: toNumber(e.target.value, 0) }))}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-medical"
+                    disabled={calculAutoPrix && isAutomaticPricing}
+                    className={`w-full rounded-lg border border-slate-200 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-medical ${
+                      calculAutoPrix && isAutomaticPricing ? 'bg-slate-100' : ''
+                    }`}
                   />
-                  {isAutomaticPricing && (
+                  {calculAutoPrix && isAutomaticPricing && (
                     <p className="mt-1 text-xs text-slate-500">
                       Suggéré: {suggestedPrices.wholesale}
                     </p>
@@ -1441,17 +1511,17 @@ export default function InventoryListView({
       case 'products':
         return renderProductsTab();
       case 'movements':
-        return <StockMovementView pharmacyId={effectivePharmacyId} />;
+        return <StockMovementView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'import_export':
-        return <ImportExportView pharmacyId={effectivePharmacyId} />;
+        return <ImportExportView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'initial_stock':
-        return <InitialStockView pharmacyId={effectivePharmacyId} />;
+        return <InitialStockView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'reports':
-        return <ReportStockView pharmacyId={effectivePharmacyId} />;
+        return <ReportStockView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'appro':
-        return <ApproView pharmacyId={effectivePharmacyId} />;
+        return <ApproView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'achat':
-        return <AchatView pharmacyId={effectivePharmacyId} />;
+        return <AchatView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'barcodes':
         return <BarcodeLabelView products={sortedProducts} formatPrice={formatPrice} />;
       default:

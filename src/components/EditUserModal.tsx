@@ -140,8 +140,8 @@ export default function EditUserModal({
   // Traduction des rôles
   const roleOptions = [
     { value: 'admin', label: 'Administrateur' },
-    { value: 'manager', label: 'Gestionnaire' },
-    { value: 'pharmacist', label: 'Pharmacien' },
+    { value: 'gestionnaire', label: 'Gestionnaire' },
+    { value: 'pharmacien', label: 'Pharmacien' },
     { value: 'vendeur', label: 'Vendeur' },
     { value: 'caissier', label: 'Caissier' },
     { value: 'stockiste', label: 'Stockiste' },

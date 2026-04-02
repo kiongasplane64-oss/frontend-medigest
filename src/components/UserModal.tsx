@@ -4,8 +4,9 @@ import { X, UserPlus, Mail, Lock, User, Shield, AlertCircle, Building2, MapPin, 
 import { UserCreate } from '@/services/userService';
 import { Pharmacy, BranchSummary } from '@/services/pharmacyService';
 
-// Définir le type des rôles possibles
-type UserRole = 'admin' | 'manager' | 'pharmacist' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
+// ✅ CORRECTION : Aligner les rôles avec le backend
+// Le backend accepte: admin, gestionnaire, pharmacien, vendeur, caissier, stockiste, comptable, preparateur
+type UserRole = 'admin' | 'gestionnaire' | 'pharmacien' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
 
 interface UserModalProps {
   isOpen: boolean;
@@ -125,6 +126,8 @@ export default function UserModal({
     
     if (!validateForm()) return;
     
+    // ✅ CORRECTION : Convertir le rôle pour le backend si nécessaire
+    // Le rôle est déjà au bon format grâce au type UserRole aligné
     onSubmit({
       full_name: formData.full_name.trim(),
       email: formData.email.trim().toLowerCase(),
@@ -140,10 +143,11 @@ export default function UserModal({
 
   if (!isOpen) return null;
 
+  // ✅ CORRECTION : Options de rôles alignées avec le backend
   const roleOptions: { value: UserRole; label: string }[] = [
     { value: 'admin', label: 'Administrateur' },
-    { value: 'manager', label: 'Gestionnaire' },
-    { value: 'pharmacist', label: 'Pharmacien' },
+    { value: 'gestionnaire', label: 'Gestionnaire' },
+    { value: 'pharmacien', label: 'Pharmacien' },
     { value: 'vendeur', label: 'Vendeur' },
     { value: 'caissier', label: 'Caissier' },
     { value: 'stockiste', label: 'Stockiste' },

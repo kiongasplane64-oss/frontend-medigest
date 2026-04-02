@@ -9,7 +9,7 @@ export interface UserCreate {
   full_name: string;
   email: string;
   password?: string;
-  role: 'admin' | 'manager' | 'pharmacist' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
+  role: 'admin' | 'gestionnaire' | 'pharmacien' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
   is_active: boolean;
   pharmacy_id?: string;
   branch_id?: string;
@@ -20,7 +20,7 @@ export interface UserCreate {
 export interface UpdateUserData {
   full_name?: string;
   email?: string;
-  role?: 'admin' | 'manager' | 'pharmacist' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
+  role?: 'admin' | 'gestionnaire' | 'pharmacien' | 'vendeur' | 'caissier' | 'stockiste' | 'comptable' | 'preparateur';
   is_active?: boolean;
   pharmacy_id?: string;
   branch_id?: string;

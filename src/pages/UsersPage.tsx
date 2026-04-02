@@ -138,6 +138,12 @@ export default function UsersPage() {
         include_inactive: showInactive,
         search: searchTerm
       });
+
+      // 🔍 LOG POUR DEBUG
+      console.log('📊 Utilisateurs reçus du backend:', response);
+      response.forEach((user: any) => {
+        console.log(`👤 Utilisateur: ${user.email}, Rôle reçu: "${user.role}", Type: ${typeof user.role}`);
+      });
       // Mapper les données pour s'assurer qu'elles correspondent à PharmacyUser
       return (response as any[]).map(user => {
         const displayName = user.full_name || user.name || user.email?.split('@')[0] || 'Utilisateur';
@@ -428,19 +434,26 @@ export default function UsersPage() {
   };
 
   // Traduire le rôle en français
-  const translateRole = (role: string): string => {
-    const roles: Record<string, string> = {
-      admin: 'Administrateur',
-      manager: 'Gestionnaire',
-      pharmacist: 'Pharmacien',
-      vendeur: 'Vendeur',
-      caissier: 'Caissier',
-      stockiste: 'Stockiste',
-      comptable: 'Comptable',
-      preparateur: 'Préparateur'
-    };
-    return roles[role] || role;
+  // Traduire le rôle en français
+const translateRole = (role: string): string => {
+  const normalizedRole = (role || '').toLowerCase().trim();
+  const roles: Record<string, string> = {
+    admin: 'Administrateur',
+    super_admin: 'Super Administrateur',
+    manager: 'Gestionnaire',
+    gestionnaire: 'Gestionnaire',
+    pharmacist: 'Pharmacien',
+    pharmacien: 'Pharmacien',
+    vendeur: 'Vendeur',
+    caissier: 'Caissier',
+    stockiste: 'Stockiste',
+    comptable: 'Comptable',
+    preparateur: 'Préparateur'
   };
+  const translated = roles[normalizedRole] || role;
+  console.log(`🔄 Traduction rôle: "${role}" -> "${translated}"`);
+  return translated;
+};
 
   if (loadingUsers || isLoadingCurrentUser) {
     return (

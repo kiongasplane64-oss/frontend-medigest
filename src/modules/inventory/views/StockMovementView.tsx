@@ -1,14 +1,15 @@
 // components/inventory/StockMovementView.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { TrendingUp, TrendingDown, ArrowLeftRight, Package, Download } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowLeftRight, Package, Download, Filter, X, Building2 } from 'lucide-react';
 import { inventoryService } from '@/services/inventoryService';
 import type { StockMovement } from '@/types/inventory.types';
 
 interface StockMovementViewProps {
   pharmacyId?: string;
+  branchId?: string;
 }
 
 const movementTypeLabels: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -23,23 +24,32 @@ const movementTypeLabels: Record<string, { label: string; color: string; icon: R
   import: { label: 'Import', color: 'text-indigo-600 bg-indigo-50', icon: <Package size={14} /> },
 };
 
-export default function StockMovementView({ pharmacyId }: StockMovementViewProps) {
+export default function StockMovementView({ pharmacyId, branchId }: StockMovementViewProps) {
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [movementType, setMovementType] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [selectedProductId, setSelectedProductId] = useState('');
+
+  // Réinitialiser la page quand les filtres changent
+  useEffect(() => {
+    setPage(1);
+  }, [startDate, endDate, movementType, selectedProductId, pharmacyId, branchId]);
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['stock-movements', page, limit, startDate, endDate, movementType, pharmacyId],
+    queryKey: ['stock-movements', page, limit, startDate, endDate, movementType, selectedProductId, pharmacyId, branchId],
     queryFn: () => inventoryService.getMovements({
       skip: (page - 1) * limit,
       limit,
       start_date: startDate || undefined,
       end_date: endDate || undefined,
       movement_type: movementType || undefined,
+      product_id: selectedProductId || undefined,
       pharmacy_id: pharmacyId,
     }),
+    enabled: !!pharmacyId,
   });
 
   const movements = data?.movements || [];
@@ -47,7 +57,12 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
 
   const handleExport = async () => {
     try {
-      const blob = await inventoryService.exportStock('excel', { pharmacy_id: pharmacyId });
+      const blob = await inventoryService.exportStock('excel', { 
+        pharmacy_id: pharmacyId,
+        ...(startDate && { start_date: startDate }),
+        ...(endDate && { end_date: endDate }),
+        ...(movementType && { movement_type: movementType }),
+      });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -58,6 +73,15 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
       console.error('Erreur export:', err);
     }
   };
+
+  const handleResetFilters = () => {
+    setStartDate('');
+    setEndDate('');
+    setMovementType('');
+    setSelectedProductId('');
+  };
+
+  const hasActiveFilters = startDate || endDate || movementType || selectedProductId;
 
   if (isLoading && page === 1) {
     return (
@@ -70,63 +94,138 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
   if (error) {
     return (
       <div className="bg-red-50 rounded-xl p-4 text-red-600 text-center">
-        Erreur lors du chargement des mouvements: {error.message}
+        Erreur lors du chargement des mouvements: {(error as Error).message}
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      {/* En-tête avec infos pharmacie/branche */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <Building2 size={16} />
+          <span>Pharmacie: {pharmacyId || 'Non définie'}</span>
+          {branchId && (
+            <>
+              <span className="text-slate-300">|</span>
+              <span>Branche: {branchId}</span>
+            </>
+          )}
+        </div>
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+        >
+          <Filter size={16} />
+          {showFilters ? 'Masquer filtres' : 'Afficher filtres'}
+          {hasActiveFilters && (
+            <span className="ml-1 px-1.5 py-0.5 bg-medical text-white text-xs rounded-full">
+              {[startDate, endDate, movementType, selectedProductId].filter(Boolean).length}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Filtres */}
-      <div className="bg-white rounded-xl p-4 border border-slate-200">
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Type de mouvement</label>
-            <select
-              value={movementType}
-              onChange={(e) => setMovementType(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
-            >
-              <option value="">Tous</option>
-              {Object.entries(movementTypeLabels).map(([key, { label }]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
+      {showFilters && (
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Type de mouvement</label>
+              <select
+                value={movementType}
+                onChange={(e) => setMovementType(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              >
+                <option value="">Tous</option>
+                {Object.entries(movementTypeLabels).map(([key, { label }]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Date début</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Date fin</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">ID Produit</label>
+              <input
+                type="text"
+                value={selectedProductId}
+                onChange={(e) => setSelectedProductId(e.target.value)}
+                placeholder="ID du produit"
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              />
+            </div>
           </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Date début</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500 mb-1 block">Date fin</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
-            />
-          </div>
-          <div className="flex items-end">
+          <div className="flex justify-end gap-2 mt-4">
+            {hasActiveFilters && (
+              <button
+                onClick={handleResetFilters}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm text-slate-600 hover:text-red-600 transition-colors"
+              >
+                <X size={14} />
+                Réinitialiser
+              </button>
+            )}
             <button
               onClick={() => refetch()}
-              className="w-full px-4 py-2 bg-medical text-white rounded-lg hover:bg-medical-dark"
+              className="px-4 py-1.5 bg-medical text-white rounded-lg hover:bg-medical-dark transition-colors text-sm"
             >
-              Filtrer
+              Appliquer
             </button>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Statistiques rapides */}
+      {movements.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl p-3 border border-slate-200">
+            <p className="text-xs text-slate-500">Total mouvements</p>
+            <p className="text-xl font-bold">{total}</p>
+          </div>
+          <div className="bg-white rounded-xl p-3 border border-slate-200">
+            <p className="text-xs text-slate-500">Entrées</p>
+            <p className="text-xl font-bold text-green-600">
+              {movements.filter(m => m.quantity_change > 0).reduce((sum, m) => sum + m.quantity_change, 0)}
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 border border-slate-200">
+            <p className="text-xs text-slate-500">Sorties</p>
+            <p className="text-xl font-bold text-red-600">
+              {Math.abs(movements.filter(m => m.quantity_change < 0).reduce((sum, m) => sum + m.quantity_change, 0))}
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 border border-slate-200">
+            <p className="text-xs text-slate-500">Solde net</p>
+            <p className="text-xl font-bold">
+              {movements.reduce((sum, m) => sum + m.quantity_change, 0)}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Bouton export */}
       <div className="flex justify-end">
         <button
           onClick={handleExport}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg"
+          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
         >
           <Download size={16} />
           Exporter
@@ -144,7 +243,7 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
               <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Qté avant</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Qté après</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Variation</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Raison</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Raison/Référence</th>
             </tr>
           </thead>
           <tbody>
@@ -153,28 +252,33 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
               const isNegative = movement.quantity_change < 0;
               
               return (
-                <tr key={movement.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="px-4 py-3 text-sm">
+                <tr key={movement.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">
                     {movement.created_at && format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm', { locale: fr })}
+                   </td>
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-sm text-slate-800">{movement.product_name || '-'}</div>
+                    <div className="text-xs text-slate-400">{movement.product_code || '-'}</div>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="font-medium text-sm">{movement.product_name}</div>
-                    <div className="text-xs text-slate-400">{movement.product_code}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ${typeInfo.color}`}>
+                    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${typeInfo.color}`}>
                       {typeInfo.icon}
                       {typeInfo.label}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right text-sm">{movement.quantity_before}</td>
-                  <td className="px-4 py-3 text-right text-sm">{movement.quantity_after}</td>
+                  <td className="px-4 py-3 text-right text-sm text-slate-600">{movement.quantity_before}</td>
+                  <td className="px-4 py-3 text-right text-sm text-slate-600">{movement.quantity_after}</td>
                   <td className="px-4 py-3 text-right">
-                    <span className={isNegative ? 'text-red-600' : 'text-green-600'}>
+                    <span className={`font-medium ${isNegative ? 'text-red-600' : 'text-green-600'}`}>
                       {isNegative ? '' : '+'}{movement.quantity_change}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-500">{movement.reason || '-'}</td>
+                  <td className="px-4 py-3 text-sm text-slate-500">
+                    {movement.reason || '-'}
+                    {movement.reference && (
+                      <span className="text-xs text-slate-400 ml-1">({movement.reference})</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
@@ -183,7 +287,9 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
 
         {movements.length === 0 && (
           <div className="text-center py-12 text-slate-400">
-            Aucun mouvement de stock trouvé
+            <Package size={48} className="mx-auto mb-3 opacity-50" />
+            <p>Aucun mouvement de stock trouvé</p>
+            <p className="text-sm mt-1">Modifiez les filtres ou vérifiez votre sélection</p>
           </div>
         )}
       </div>
@@ -194,17 +300,17 @@ export default function StockMovementView({ pharmacyId }: StockMovementViewProps
           <button
             onClick={() => setPage(p => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="px-3 py-2 rounded-lg bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-200"
+            className="px-3 py-2 rounded-lg bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-200 transition-colors"
           >
             Précédent
           </button>
           <span className="text-sm text-slate-600">
-            Page {page} sur {Math.ceil(total / limit)}
+            Page {page} sur {Math.ceil(total / limit)} • {total} mouvement(s)
           </span>
           <button
             onClick={() => setPage(p => p + 1)}
             disabled={page * limit >= total}
-            className="px-3 py-2 rounded-lg bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-200"
+            className="px-3 py-2 rounded-lg bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-200 transition-colors"
           >
             Suivant
           </button>

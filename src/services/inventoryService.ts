@@ -35,7 +35,9 @@ import type {
   ProductSalesStats,
   ImportPreviewResponse,
   ImportPreviewProduct,
-  PharmacyConfig
+  PharmacyConfig,
+  BranchStockOverview,
+  BranchStockDashboard,
 } from '@/types/inventory.types';
 
 // =========================================================
@@ -79,6 +81,14 @@ interface SalesImpactParams extends Record<string, unknown> {
   start_date?: string;
   end_date?: string;
   include_stock_info?: boolean;
+}
+
+interface BranchTransferParams {
+  product_id: string;
+  quantity: number;
+  from_branch_id: string;
+  to_branch_id: string;
+  reason?: string;
 }
 
 // =========================================================
@@ -186,7 +196,7 @@ class InventoryService {
   }
 
   // =========================================================
-  // GESTION DES PRODUITS
+  // GESTION DES PRODUITS (AVEC FILTRAGE PAR BRANCHE)
   // =========================================================
 
   async getProducts(params?: ProductListParams): Promise<ProductListResponse> {
@@ -237,6 +247,120 @@ class InventoryService {
       return response.data;
     } catch (error) {
       console.error(`Erreur suppression produit ${id}:`, error);
+      throw error;
+    }
+  }
+
+  // =========================================================
+  // GESTION DU STOCK PAR BRANCHE (NOUVEAUX ENDPOINTS)
+  // =========================================================
+
+  /**
+   * Vue d'ensemble du stock par branche
+   */
+  async getBranchesStockOverview(): Promise<BranchStockOverview> {
+    try {
+      const response = await api.get(`${this.baseUrl}/branches-stock-overview`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération vue d\'ensemble stock par branche:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Tableau de bord comparatif du stock par branche
+   */
+  async getBranchStockDashboard(): Promise<BranchStockDashboard> {
+    try {
+      const response = await api.get(`${this.baseUrl}/branch-stock-dashboard`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur récupération tableau de bord stock par branche:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Récupérer le stock d'une branche spécifique
+   */
+  async getStockByBranch(
+  branchId: string, 
+  params?: {
+    skip?: number;
+    limit?: number;
+    search?: string;
+    category_id?: string;
+  }
+): Promise<{
+  branch: { id: string; name: string; code: string; parent_pharmacy_id?: string };
+  exchange_rate: number;
+  primary_currency: string;
+  stats: {
+    total_products: number;
+    total_quantity: number;
+    total_value_cdf: number;
+    total_value_usd: number;
+    out_of_stock: number;
+    low_stock: number;
+  };
+  total: number;
+  skip: number;
+  limit: number;
+  products: Product[];
+}> {
+  try {
+    const response = await api.get(`${this.baseUrl}/by-branch/${branchId}`, {
+      params: this.cleanParams(params),
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`Erreur récupération stock de la branche ${branchId}:`, error);
+    throw error;
+  }
+}
+
+  /**
+   * Transférer du stock entre branches
+   */
+  async transferStockBetweenBranches(params: BranchTransferParams): Promise<{
+    message: string;
+    product_name: string;
+    quantity: number;
+    from_branch: string;
+    to_branch: string;
+    source_remaining_stock: number;
+  }> {
+    try {
+      const response = await api.post(`${this.baseUrl}/transfer-between-branches`, null, {
+        params: {
+          product_id: params.product_id,
+          quantity: params.quantity,
+          from_branch_id: params.from_branch_id,
+          to_branch_id: params.to_branch_id,
+          reason: params.reason,
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur transfert entre branches:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Exporter le stock par branche
+   */
+  async exportStockByBranch(format: ExportFormat = 'excel', branchId?: string): Promise<Blob> {
+    try {
+      const params = this.cleanParams({ format, branch_id: branchId });
+      const response = await api.get(`${this.baseUrl}/export-by-branch`, {
+        params,
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur export stock par branche:', error);
       throw error;
     }
   }
@@ -799,7 +923,7 @@ class InventoryService {
   }
 
   // =========================================================
-  // EXPORT / IMPORT - CORRIGÉS
+  // EXPORT / IMPORT
   // =========================================================
 
   async exportStock(format: ExportFormat = 'excel', filters?: {
@@ -852,7 +976,6 @@ class InventoryService {
 
       const data = response.data;
       
-      // Normaliser la réponse du backend
       const products: ImportPreviewProduct[] = (data.products || []).map((p: any) => ({
         name: p.name,
         code: p.code,

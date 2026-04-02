@@ -252,6 +252,9 @@ export interface ProductCreate {
   notes?: string;
   pharmacy_id?: string;
   branch_id?: string;
+  calcul_auto_prix?: boolean;
+  marge_par_defaut?: number;
+  sales_type?: 'wholesale' | 'retail' | 'both';
 }
 
 export interface ProductUpdate {
@@ -1114,4 +1117,81 @@ export interface PharmacyConfig {
   marge_par_defaut?: number;
   taux_tva?: number;
   lock_stock_modification?: boolean;
+}
+
+// Ajouter ces interfaces
+
+export interface BranchStockOverview {
+  pharmacy: {
+    id: string;
+    name: string;
+  };
+  total_branches: number;
+  total_overall: {
+    total_products: number;
+    total_quantity: number;
+    total_value: number;
+    out_of_stock: number;
+    low_stock: number;
+    expired: number;
+    expiring_soon: number;
+  };
+  branches: Array<{
+    branch: {
+      id: string;
+      name: string;
+      code: string;
+      is_main_branch: boolean;
+    };
+    stats: {
+      total_products: number;
+      total_quantity: number;
+      total_purchase_value: number;
+      total_selling_value: number;
+      out_of_stock: number;
+      low_stock: number;
+      expired: number;
+      expiring_soon: number;
+    };
+    products: Product[];
+  }>;
+}
+
+export interface BranchStockDashboard {
+  pharmacy: {
+    id: string;
+    name: string;
+  };
+  branches: Array<{
+    branch: {
+      id: string;
+      name: string;
+      code: string;
+    };
+    stock_stats: {
+      total_products: number;
+      total_quantity: number;
+      total_value: number;
+      out_of_stock: number;
+      low_stock: number;
+    };
+    sales_stats: {
+      last_30_days_sold: number;
+      last_30_days_revenue: number;
+    };
+    turnover_rate: number;
+  }>;
+  comparison: {
+    best_selling_branch: string | null;
+    highest_value_branch: string | null;
+    lowest_stock_branch: string | null;
+  };
+}
+
+export interface BranchTransferRequest {
+  product_id: string;
+  quantity: number;
+  from_branch_id: string;
+  to_branch_id: string;
+  reason?: string;
 }

@@ -153,8 +153,8 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
   const getRoleLabel = (): string => {
     const roleMap: Record<string, string> = {
       'admin': 'Administrateur',
-      'manager': 'Gestionnaire',
-      'pharmacist': 'Pharmacien',
+      'gestionnaire': 'Gestionnaire',
+      'pharmacien': 'Pharmacien',
       'vendeur': 'Vendeur',
       'caissier': 'Caissier',
       'stockiste': 'Stockiste',

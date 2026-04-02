@@ -208,13 +208,13 @@ const ProductStatusBadge = memo(({ status, stock, expiryDate }: { status: Produc
     }
   };
 
-  const config = getStatusConfig();
-  const Icon = config.icon;
+  const configStatus = getStatusConfig();
+  const Icon = configStatus.icon;
 
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${config.className}`} title={config.tooltip}>
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${configStatus.className}`} title={configStatus.tooltip}>
       <Icon size={10} />
-      {config.text}
+      {configStatus.text}
     </span>
   );
 });
@@ -238,13 +238,14 @@ const PriceDisplay = memo(({
   const cdfCurrency = getCurrency('CDF');
   const usdCurrency = getCurrency('USD');
   
-  const cdfPrice = currencyMode === 'usd_only' ? price * exchangeRate : price;
-  const usdPrice = currencyMode === 'cdf_only' ? price / exchangeRate : price;
+  // Le prix stocké est toujours en CDF (devise de base)
+  const priceInCDF = price;
+  const priceInUSD = priceInCDF / exchangeRate;
 
   if (currencyMode === 'cdf_only') {
     return (
       <span className="text-sm font-bold text-blue-600">
-        {cdfCurrency?.symbol || 'FC'} {cdfPrice.toFixed(2)}
+        {cdfCurrency?.symbol || 'FC'} {priceInCDF.toFixed(2)}
       </span>
     );
   }
@@ -252,19 +253,19 @@ const PriceDisplay = memo(({
   if (currencyMode === 'usd_only') {
     return (
       <span className="text-sm font-bold text-blue-600">
-        {usdCurrency?.symbol || '$'} {usdPrice.toFixed(2)}
+        {usdCurrency?.symbol || '$'} {priceInUSD.toFixed(2)}
       </span>
     );
   }
   
-  // Mode both - afficher les deux prix
+  // Mode both - afficher les deux prix avec conversion correcte
   return (
     <div className="flex flex-col">
       <span className="text-sm font-bold text-blue-600">
-        {cdfCurrency?.symbol || 'FC'} {cdfPrice.toFixed(2)}
+        {cdfCurrency?.symbol || 'FC'} {priceInCDF.toFixed(2)}
       </span>
       <span className="text-xs text-slate-400">
-        {usdCurrency?.symbol || '$'} {usdPrice.toFixed(2)}
+        {usdCurrency?.symbol || '$'} {priceInUSD.toFixed(2)}
       </span>
     </div>
   );
@@ -293,7 +294,6 @@ const ProductRow = memo(({
   const isAvailable = product.status !== 'out_of_stock' && product.status !== 'expired';
   const sellingPrice = product.selling_price || 0;
   
-
   return (
     <tr 
       className={`border-b border-slate-100 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/50 ${
@@ -428,25 +428,41 @@ const CartItemComponent = memo(({
   currencies: CurrencyConfig[];
   exchangeRate: number;
 }) => {
-  const unitPriceDisplay = (item.unitPrice || 0) / exchangeRate;
-  const subtotalDisplay = ((item.unitPrice || 0) * (item.quantity || 0)) / exchangeRate;
+  // Le unitPrice est stocké en CDF
+  const unitPriceInCDF = item.unitPrice || 0;
+  
+  const subtotalCDF = unitPriceInCDF * (item.quantity || 0);
+  
   const discountPercent = item.discount_percent || 0;
-  const discountAmount = subtotalDisplay * (discountPercent / 100);
-  const totalDisplay = subtotalDisplay - discountAmount;
+  const discountAmountCDF = subtotalCDF * (discountPercent / 100);
+  
+  const totalCDF = subtotalCDF - discountAmountCDF;
   
   const getCurrency = (code: string) => currencies.find(c => c.code === code);
   const cdfCurrency = getCurrency('CDF');
   const usdCurrency = getCurrency('USD');
   
-  const formatPrice = (price: number) => {
+  const formatPrice = (priceInCDF: number) => {
+    const priceInUSD = priceInCDF / exchangeRate;
     if (currencyMode === 'cdf_only') {
-      return `${cdfCurrency?.symbol || 'FC'} ${(price * exchangeRate).toFixed(2)}`;
+      return `${cdfCurrency?.symbol || 'FC'} ${priceInCDF.toFixed(2)}`;
     }
     if (currencyMode === 'usd_only') {
-      return `${usdCurrency?.symbol || '$'} ${price.toFixed(2)}`;
+      return `${usdCurrency?.symbol || '$'} ${priceInUSD.toFixed(2)}`;
     }
     // Mode both
-    return `${cdfCurrency?.symbol || 'FC'} ${(price * exchangeRate).toFixed(2)} / ${usdCurrency?.symbol || '$'} ${price.toFixed(2)}`;
+    return `${cdfCurrency?.symbol || 'FC'} ${priceInCDF.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${priceInUSD.toFixed(2)}`;
+  };
+
+  const formatTotalPrice = (totalCDFValue: number) => {
+    const totalUSDValue = totalCDFValue / exchangeRate;
+    if (currencyMode === 'cdf_only') {
+      return `${cdfCurrency?.symbol || 'FC'} ${totalCDFValue.toFixed(2)}`;
+    }
+    if (currencyMode === 'usd_only') {
+      return `${usdCurrency?.symbol || '$'} ${totalUSDValue.toFixed(2)}`;
+    }
+    return `${cdfCurrency?.symbol || 'FC'} ${totalCDFValue.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${totalUSDValue.toFixed(2)}`;
   };
 
   return (
@@ -455,19 +471,15 @@ const CartItemComponent = memo(({
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-slate-800 dark:text-slate-200">{item.name}</p>
           <p className="text-xs text-slate-400">
-            {formatPrice(unitPriceDisplay)}/u · Stock: {item.stock || 0}
+            {formatPrice(unitPriceInCDF)}/u · Stock: {item.stock || 0}
           </p>
           {discountPercent > 0 && (
             <p className="text-xs text-green-600">
-              Remise: {discountPercent}% (-{formatPrice(discountAmount)})
+              Remise: {discountPercent}% (-{formatPrice(discountAmountCDF)})
             </p>
           )}
         </div>
-        <button
-          onClick={() => onRemove(index)}
-          className="text-red-400 transition-colors hover:text-red-600"
-          aria-label="Retirer du panier"
-        >
+        <button onClick={() => onRemove(index)} className="text-red-400 transition-colors hover:text-red-600">
           <Trash2 size={16} />
         </button>
       </div>
@@ -477,18 +489,14 @@ const CartItemComponent = memo(({
           <button
             onClick={() => onUpdateQuantity(index, -1)}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100 active:bg-slate-200 dark:border-slate-600 dark:bg-slate-800"
-            aria-label="Diminuer la quantité"
           >
             <Minus size={12} />
           </button>
-          <span className="min-w-5 text-center text-sm font-bold">
-            {item.quantity}
-          </span>
+          <span className="min-w-5 text-center text-sm font-bold">{item.quantity}</span>
           <button
             onClick={() => onUpdateQuantity(index, 1)}
             disabled={item.quantity >= (item.stock || 0)}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100 active:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800"
-            aria-label="Augmenter la quantité"
           >
             <Plus size={12} />
           </button>
@@ -505,13 +513,11 @@ const CartItemComponent = memo(({
               }
             }}
             className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800"
-            aria-label="Appliquer une remise"
-            title="Appliquer une remise"
           >
             <Percent size={12} />
           </button>
           <p className="text-sm font-black text-blue-600">
-            {formatPrice(totalDisplay)}
+            {formatTotalPrice(totalCDF)}
           </p>
         </div>
       </div>
@@ -616,17 +622,20 @@ const SearchAutocomplete = memo(({
   }, [inputRef, handleKeyDown]);
 
   const getPriceDisplay = (price: number) => {
+    // price est en CDF
+    const priceInUSD = price / exchangeRate;
+    
     if (currencyMode === 'cdf_only') {
       const cdfCurrency = currencies.find(c => c.code === 'CDF');
-      return `${cdfCurrency?.symbol || 'FC'} ${(price / exchangeRate).toFixed(2)}`;
+      return `${cdfCurrency?.symbol || 'FC'} ${price.toFixed(2)}`;
     }
     if (currencyMode === 'usd_only') {
       const usdCurrency = currencies.find(c => c.code === 'USD');
-      return `${usdCurrency?.symbol || '$'} ${(price / exchangeRate).toFixed(2)}`;
+      return `${usdCurrency?.symbol || '$'} ${priceInUSD.toFixed(2)}`;
     }
     const cdfCurrency = currencies.find(c => c.code === 'CDF');
     const usdCurrency = currencies.find(c => c.code === 'USD');
-    return `${cdfCurrency?.symbol || 'FC'} ${(price / exchangeRate).toFixed(2)} / ${usdCurrency?.symbol || '$'} ${(price / exchangeRate).toFixed(2)}`;
+    return `${cdfCurrency?.symbol || 'FC'} ${price.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${priceInUSD.toFixed(2)}`;
   };
 
   if (!showSuggestions) return null;
@@ -818,75 +827,89 @@ const POS = observer(() => {
   });
 
   const activeCurrency = useMemo(() => {
-  const currencies = config.currencies || [];
-  const currency = currencies.find(c => c.code === config.primaryCurrency);
-  return currency || { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true };
-}, [config.currencies, config.primaryCurrency]);
+    const currencies = config.currencies || [];
+    const currency = currencies.find(c => c.code === config.primaryCurrency);
+    return currency || { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true };
+  }, [config.currencies, config.primaryCurrency]);
 
-  const subtotal = useMemo(() => {
-    const rawSubtotal = cart.reduce((acc, item) => {
+  // Sous-total en CDF
+  const subtotalCDF = useMemo(() => {
+    return cart.reduce((acc, item) => {
       const itemPrice = (item.unitPrice || 0) * (item.quantity || 0);
       const itemDiscount = itemPrice * ((item.discount_percent || 0) / 100);
       return acc + (itemPrice - itemDiscount);
     }, 0);
-    
-    if (config.sellByExchangeRate && activeCurrency.exchangeRate && activeCurrency.exchangeRate > 0) {
-    return rawSubtotal / activeCurrency.exchangeRate;
-  }
-  return rawSubtotal;
-}, [cart, config.sellByExchangeRate, activeCurrency.exchangeRate]);
+  }, [cart]);
 
-  const total = useMemo(() => {
-    const totalAfterGlobal = subtotal * (1 - (globalDiscount / 100));
-    return totalAfterGlobal;
-  }, [subtotal, globalDiscount]);
+  // Total après remise globale en CDF
+  const totalCDF = useMemo(() => {
+    return subtotalCDF * (1 - (globalDiscount / 100));
+  }, [subtotalCDF, globalDiscount]);
 
-  const totalItems = useMemo(
-    () => cart.reduce((acc, item) => acc + (item.quantity || 0), 0),
-    [cart],
-  );
+  // Total en USD
+  const totalUSD = useMemo(() => {
+    return totalCDF / activeCurrency.exchangeRate;
+  }, [totalCDF, activeCurrency.exchangeRate]);
 
-  // Formater le total selon le mode de devise
+  // Sous-total en USD
+  const subtotalUSD = useMemo(() => {
+    return subtotalCDF / activeCurrency.exchangeRate;
+  }, [subtotalCDF, activeCurrency.exchangeRate]);
+
+  // Montant de la remise
+  const discountAmountCDF = useMemo(() => {
+    return subtotalCDF * (globalDiscount / 100);
+  }, [subtotalCDF, globalDiscount]);
+
+  const discountAmountUSD = useMemo(() => {
+    return discountAmountCDF / activeCurrency.exchangeRate;
+  }, [discountAmountCDF, activeCurrency.exchangeRate]);
+
+  // Nombre total d'articles dans le panier
+  const totalItems = useMemo(() => {
+    return cart.reduce((acc, item) => acc + (item.quantity || 0), 0);
+  }, [cart]);
+
+  // Formatage des affichages
   const formatTotal = useMemo(() => {
     const cdfCurrency = config.currencies.find(c => c.code === 'CDF');
     const usdCurrency = config.currencies.find(c => c.code === 'USD');
     
     if (currencyMode === 'cdf_only') {
-      return `${cdfCurrency?.symbol || 'FC'} ${(total * activeCurrency.exchangeRate).toFixed(2)}`;
+      return `${cdfCurrency?.symbol || 'FC'} ${totalCDF.toFixed(2)}`;
     }
     if (currencyMode === 'usd_only') {
-      return `${usdCurrency?.symbol || '$'} ${total.toFixed(2)}`;
+      return `${usdCurrency?.symbol || '$'} ${totalUSD.toFixed(2)}`;
     }
     // Mode both
-    return `${cdfCurrency?.symbol || 'FC'} ${(total * activeCurrency.exchangeRate).toFixed(2)} / ${usdCurrency?.symbol || '$'} ${total.toFixed(2)}`;
-  }, [total, currencyMode, config.currencies, activeCurrency.exchangeRate]);
+    return `${cdfCurrency?.symbol || 'FC'} ${totalCDF.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${totalUSD.toFixed(2)}`;
+  }, [totalCDF, totalUSD, currencyMode, config.currencies]);
 
   const formatSubtotal = useMemo(() => {
     const cdfCurrency = config.currencies.find(c => c.code === 'CDF');
     const usdCurrency = config.currencies.find(c => c.code === 'USD');
     
     if (currencyMode === 'cdf_only') {
-      return `${cdfCurrency?.symbol || 'FC'} ${(subtotal * activeCurrency.exchangeRate).toFixed(2)}`;
+      return `${cdfCurrency?.symbol || 'FC'} ${subtotalCDF.toFixed(2)}`;
     }
     if (currencyMode === 'usd_only') {
-      return `${usdCurrency?.symbol || '$'} ${subtotal.toFixed(2)}`;
+      return `${usdCurrency?.symbol || '$'} ${subtotalUSD.toFixed(2)}`;
     }
-    return `${cdfCurrency?.symbol || 'FC'} ${(subtotal * activeCurrency.exchangeRate).toFixed(2)} / ${usdCurrency?.symbol || '$'} ${subtotal.toFixed(2)}`;
-  }, [subtotal, currencyMode, config.currencies, activeCurrency.exchangeRate]);
+    return `${cdfCurrency?.symbol || 'FC'} ${subtotalCDF.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${subtotalUSD.toFixed(2)}`;
+  }, [subtotalCDF, subtotalUSD, currencyMode, config.currencies]);
 
   const formatDiscount = useMemo(() => {
-    const discountAmount = subtotal * (globalDiscount / 100);
     const cdfCurrency = config.currencies.find(c => c.code === 'CDF');
     const usdCurrency = config.currencies.find(c => c.code === 'USD');
     
     if (currencyMode === 'cdf_only') {
-      return `${cdfCurrency?.symbol || 'FC'} ${(discountAmount * activeCurrency.exchangeRate).toFixed(2)}`;
+      return `${cdfCurrency?.symbol || 'FC'} ${discountAmountCDF.toFixed(2)}`;
     }
     if (currencyMode === 'usd_only') {
-      return `${usdCurrency?.symbol || '$'} ${discountAmount.toFixed(2)}`;
+      return `${usdCurrency?.symbol || '$'} ${discountAmountUSD.toFixed(2)}`;
     }
-    return `${cdfCurrency?.symbol || 'FC'} ${(discountAmount * activeCurrency.exchangeRate).toFixed(2)} / ${usdCurrency?.symbol || '$'} ${discountAmount.toFixed(2)}`;
-  }, [subtotal, globalDiscount, currencyMode, config.currencies, activeCurrency.exchangeRate]);
+    return `${cdfCurrency?.symbol || 'FC'} ${discountAmountCDF.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${discountAmountUSD.toFixed(2)}`;
+  }, [discountAmountCDF, discountAmountUSD, currencyMode, config.currencies]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -1084,7 +1107,7 @@ const POS = observer(() => {
     } finally {
       setIsProcessingSale(false);
     }
-  }, [cart.length, isProcessing, isProcessingSale, globalDiscount, cart, toast]);
+  }, [cart, isProcessing, isProcessingSale, globalDiscount, toast]);
 
   const handleRefresh = useCallback(() => {
     posService.loadInitialData();
@@ -1460,42 +1483,41 @@ const POS = observer(() => {
             )}
 
             {/* Tableau des produits */}
-            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-50 dark:bg-slate-700/50">
-                    <tr className="border-b border-slate-200 dark:border-slate-700">
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">#</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Produit</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Prix</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Stock</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedProducts.map((product, idx) => (
-                      <ProductRow
-                        key={product.id}
-                        product={product}
-                        onAdd={handleAddToCart}
-                        currencyMode={currencyMode}
-                        primaryCurrency={config.primaryCurrency}
-                        currencies={config.currencies}
-                        exchangeRate={activeCurrency.exchangeRate}
-                        index={(currentPage - 1) * ITEMS_PER_PAGE + idx}
-                      />
-                    ))}
-                    {paginatedProducts.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-12 text-center text-slate-400">
-                          Aucun produit trouvé
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
+<div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+  <div className="overflow-x-auto">
+    <table className="w-full">
+      <thead className="bg-slate-50 dark:bg-slate-700/50">
+        <tr className="border-b border-slate-200 dark:border-slate-700">
+          <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">#</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Produit</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Prix</th>
+          <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Stock</th>
+          <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {paginatedProducts.map((product, idx) => (
+          <ProductRow
+            key={product.id}
+            product={product}
+            onAdd={handleAddToCart}
+            currencyMode={currencyMode}
+            primaryCurrency={config.primaryCurrency}
+            currencies={config.currencies}
+            exchangeRate={activeCurrency.exchangeRate}
+            index={(currentPage - 1) * ITEMS_PER_PAGE + idx}
+          />
+        ))}
+        {paginatedProducts.length === 0 && (
+          <tr>
+            <td colSpan={5} className="px-4 py-12 text-center text-slate-400">
+              Aucun produit trouvé
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  </div>
               {/* Pagination */}
               <Pagination
                 currentPage={currentPage}
@@ -1701,36 +1723,34 @@ const POS = observer(() => {
         </div>
       </main>
 
-      // Dans le rendu de FacturePrinter, assurez-vous que les props correspondent
-
-  {showInvoice && currentSale && (
-    <FacturePrinter
-      sale={{
-        id: String(currentSale.id || Date.now()),
-        receiptNumber: currentSale.receiptNumber || `FACT-${Date.now()}`,
-        items: (currentSale.items || []).map((item: any) => ({
-          id: item.id || item.productId,
-          name: item.name,
-          price: item.price || item.unitPrice || 0,
-          quantity: item.quantity || 1,
-          code: item.code,
-        })),
-        total: Number(currentSale.total || 0),
-        paymentMethod: currentSale.paymentMethod as PaymentMethod || paymentMethod,
-        timestamp: currentSale.timestamp || Date.now(),
-        cashierName: currentSale.cashierName || cashierInfo?.name || 'Caissier',
-        posName: currentSale.posName || cashierInfo?.posName || 'POS-01',
-        sessionNumber: cashierInfo?.sessionNumber || '001',
-        clientName: currentSale.clientName || currentSale.clientType || 'Passager',
-      }}
-      pharmacyInfo={config.pharmacyInfo || { name: '', address: '', phone: '', email: '', licenseNumber: '' }}
-      invoiceConfig={config.invoice || { autoPrint: false, autoSave: true, fontSize: 12 }}
-      primaryCurrency={config.primaryCurrency || 'CDF'}
-      currencies={config.currencies || []}
-      onClose={handleCloseInvoice}
-      onPrint={() => {}}
-    />
-  )}
+      {showInvoice && currentSale && (
+        <FacturePrinter
+          sale={{
+            id: String(currentSale.id || Date.now()),
+            receiptNumber: currentSale.receiptNumber || `FACT-${Date.now()}`,
+            items: (currentSale.items || []).map((item: any) => ({
+              id: item.id || item.productId,
+              name: item.name,
+              price: item.price || item.unitPrice || 0,
+              quantity: item.quantity || 1,
+              code: item.code,
+            })),
+            total: Number(currentSale.total || 0),
+            paymentMethod: currentSale.paymentMethod as PaymentMethod || paymentMethod,
+            timestamp: currentSale.timestamp || Date.now(),
+            cashierName: currentSale.cashierName || cashierInfo?.name || 'Caissier',
+            posName: currentSale.posName || cashierInfo?.posName || 'POS-01',
+            sessionNumber: cashierInfo?.sessionNumber || '001',
+            clientName: currentSale.clientName || currentSale.clientType || 'Passager',
+          }}
+          pharmacyInfo={config.pharmacyInfo || { name: '', address: '', phone: '', email: '', licenseNumber: '' }}
+          invoiceConfig={config.invoice || { autoPrint: false, autoSave: true, fontSize: 12 }}
+          primaryCurrency={config.primaryCurrency || 'CDF'}
+          currencies={config.currencies || []}
+          onClose={handleCloseInvoice}
+          onPrint={() => {}}
+        />
+      )}
     </div>
   );
 });
