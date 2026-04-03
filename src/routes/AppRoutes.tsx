@@ -45,6 +45,7 @@ import OutOfService from '@/modules/core/endehors';
 import Monitoring from '@/modules/inventory/views/monitoring';
 import Inventory from '@/modules/inventory/views/inventory';
 import { useAuthStore } from '@/store/useAuthStore';
+import CapitalPage from '@/modules/finance/capital/capital';
 
 // ========== COMPOSANTS WRAPPERS ==========
 
@@ -226,6 +227,8 @@ export default function AppRoutes() {
           
           {/* Finance */}
           <Route path="/finance" element={<FinanceAnalysis />} />
+          <Route path="/capital" element={<CapitalPage />} />
+          <Route path="/pharmacie/:pharmacyId/capital" element={<CapitalPage />} />
           <Route path="/expenses" element={<ExpensesManager />} />
           <Route path="/profits" element={<ProfitAnalysis />} />
           

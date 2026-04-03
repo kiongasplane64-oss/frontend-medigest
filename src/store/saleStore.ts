@@ -21,7 +21,10 @@ export interface LocalSale {
   paymentMethod: PaymentMethod;
   timestamp: number;
   cashierName?: string;
+  cashierId?: string;
   posName?: string;
+  branchId?: string;
+  branchName?: string; 
   sessionNumber?: string;
   clientName?: string;
   status?: 'pending' | 'completed' | 'cancelled';

@@ -1,18 +1,20 @@
+// App.tsx
 import { useEffect } from 'react';
 import { BrowserRouter } from 'react-router-dom';
 import AppRoutes from './routes/AppRoutes';
 import { startSyncManager } from '@/services/syncService';
+import { AppProviders } from '@/providers/AppProviders'; // ← AJOUT
 
 function App() {
-  // Initialisation du gestionnaire de synchronisation offlinE
   useEffect(() => {
     startSyncManager();
   }, []);
 
   return (
     <BrowserRouter>
-      {/* AppRoutes contient déjà toute la logique de Switch, Login et Dashboard */}
-      <AppRoutes />
+      <AppProviders>  {/* ← ENCAPSULEZ AppRoutes */}
+        <AppRoutes />
+      </AppProviders>
     </BrowserRouter>
   );
 }

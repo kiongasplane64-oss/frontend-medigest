@@ -19,6 +19,9 @@ import {
   RefreshCw,
   WifiOff,
   Loader2,
+  Store,
+  User,
+  BarChart3,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -27,6 +30,7 @@ import { useToast } from '@/hooks/useToast';
 import { useSaleStore, type LocalSale } from '@/store/saleStore';
 import { type SaleResponse } from '@/services/saleService';
 
+// Types
 interface SaleItem {
   productId?: string;
   id?: string;
@@ -43,7 +47,10 @@ interface Sale {
   paymentMethod: string;
   timestamp: number;
   cashierName?: string;
+  cashierId?: string;
   posName?: string;
+  branchId?: string;
+  branchName?: string;
   sessionNumber?: string;
   receiptNumber?: string;
   clientName?: string;
@@ -52,7 +59,65 @@ interface Sale {
   isLocal?: boolean;
 }
 
-type DateRange = 'today' | 'week' | 'month' | 'custom';
+interface UserStats {
+  userId: string;
+  userName: string;
+  totalSales: number;
+  totalAmount: number;
+  averageTicket: number;
+  lastSaleDate: number | null;
+  lastSaleFormatted: string;
+  salesByBranch: Map<string, { branchName: string; amount: number; count: number }>;
+}
+
+interface BranchStats {
+  branchId: string;
+  branchName: string;
+  totalSales: number;
+  totalAmount: number;
+  averageTicket: number;
+  lastSaleDate: number | null;
+  userCount: number;
+}
+
+interface DailySaleDetail {
+  date: string;
+  dayOfWeek: string;
+  sales: {
+    userId: string;
+    userName: string;
+    branchId: string;
+    branchName: string;
+    amount: number;
+    count: number;
+    timestamp: number;
+  }[];
+}
+
+interface MonthlyStats {
+  month: number;
+  monthName: string;
+  year: number;
+  totalAmount: number;
+  totalSales: number;
+  byUser: Map<string, { userName: string; amount: number; count: number }>;
+  byBranch: Map<string, { branchName: string; amount: number; count: number }>;
+}
+
+interface YearlyStats {
+  year: number;
+  totalAmount: number;
+  totalSales: number;
+  byUser: Map<string, { userName: string; amount: number; count: number }>;
+  byBranch: Map<string, { branchName: string; amount: number; count: number }>;
+}
+
+type ViewMode = 'sales' | 'users' | 'branches' | 'analytics';
+type PeriodType = 'today' | 'week' | 'month' | 'year' | 'custom';
+
+// Constantes
+const MONTHS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+const DAYS_FR = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
 export default function Historique() {
   const { user } = useAuthStore();
@@ -69,14 +134,19 @@ export default function Historique() {
     resetFailedSales,
   } = useSaleStore();
 
+  // États
   const [search, setSearch] = useState('');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>('today');
+  const [periodType, setPeriodType] = useState<PeriodType>('today');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('sales');
+  const [selectedUserId, setSelectedUserId] = useState<string>('all');
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
 
   const itemsPerPage = 20;
   const pendingCount = getPendingCount();
@@ -105,7 +175,6 @@ export default function Historique() {
     }
   }
 
-  // Fonction de rafraîchissement manuel
   const handleRefresh = async () => {
     setLoading(true);
     try {
@@ -128,7 +197,6 @@ export default function Historique() {
     }
   };
 
-  // Réessayer les ventes en échec
   const handleRetryFailed = () => {
     resetFailedSales();
     toast({
@@ -137,7 +205,7 @@ export default function Historique() {
     });
   };
 
-  // Normalisation d'une vente API
+  // Normalisation des ventes API
   function normalizeApiSale(sale: SaleResponse): Sale {
     return {
       id: sale.id,
@@ -152,7 +220,10 @@ export default function Historique() {
       paymentMethod: sale.payment_method,
       timestamp: new Date(sale.created_at).getTime(),
       cashierName: sale.seller_name,
+      cashierId: sale.created_by,
       posName: sale.pharmacy_id,
+      branchId: sale.pharmacy_id,
+      branchName: `Branche ${sale.pharmacy_id?.slice(-4) || 'Principale'}`,
       sessionNumber: sale.reference?.slice(0, 8),
       receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
       clientName: sale.client_name || 'Passager',
@@ -162,7 +233,7 @@ export default function Historique() {
     };
   }
 
-  // Normalisation d'une vente locale
+  // Normalisation des ventes locales avec valeurs par défaut
   function normalizeLocalSale(sale: LocalSale): Sale {
     return {
       id: sale.id,
@@ -177,7 +248,10 @@ export default function Historique() {
       paymentMethod: sale.paymentMethod,
       timestamp: sale.timestamp,
       cashierName: sale.cashierName,
+      cashierId: sale.cashierId || 'unknown',  // Valeur par défaut
       posName: sale.posName,
+      branchId: sale.branchId || 'main',       // Valeur par défaut
+      branchName: sale.branchName || 'Branche Principale', // Valeur par défaut
       sessionNumber: sale.sessionNumber,
       receiptNumber: sale.receiptNumber,
       clientName: sale.clientName || 'Passager',
@@ -187,36 +261,43 @@ export default function Historique() {
     };
   }
 
-  // Récupération et combinaison des ventes avec useMemo pour optimisation
+  // Toutes les ventes combinées
   const allSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);
     const localNormalized = localSales.map(normalizeLocalSale);
-    
     const combined = [...localNormalized, ...apiNormalized];
     combined.sort((a, b) => b.timestamp - a.timestamp);
-    
     return combined;
   }, [apiSales, localSales]);
 
-  // Filtrage par date
+  // Filtrage par période
   const getDateFilteredSales = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
-    switch (dateRange) {
+    switch (periodType) {
       case 'today': {
         const start = today.getTime();
         const end = start + 24 * 60 * 60 * 1000 - 1;
         return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
       }
       case 'week': {
-        const start = today.getTime() - 7 * 24 * 60 * 60 * 1000;
-        const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
+        const dayOfWeek = today.getDay();
+        const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        const monday = new Date(today);
+        monday.setDate(today.getDate() - mondayOffset);
+        const start = monday.getTime();
+        const end = start + 7 * 24 * 60 * 60 * 1000 - 1;
         return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
       }
       case 'month': {
-        const start = today.getTime() - 30 * 24 * 60 * 60 * 1000;
-        const end = today.getTime() + 24 * 60 * 60 * 1000 - 1;
+        const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+        const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).getTime();
+        return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
+      }
+      case 'year': {
+        const start = new Date(selectedYear, 0, 1).getTime();
+        const end = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
         return allSales.filter(s => s.timestamp >= start && s.timestamp <= end);
       }
       case 'custom': {
@@ -230,18 +311,24 @@ export default function Historique() {
       default:
         return allSales;
     }
-  }, [allSales, dateRange, customStartDate, customEndDate]);
+  }, [allSales, periodType, customStartDate, customEndDate, selectedYear]);
 
-  // Filtrage par paiement et recherche
-  const filteredAndPaginated = useMemo(() => {
+  // Filtrage supplémentaire
+  const filteredSales = useMemo(() => {
     let filtered = getDateFilteredSales;
     
-    // Filtre par méthode de paiement
     if (paymentFilter !== 'all') {
       filtered = filtered.filter(s => s.paymentMethod === paymentFilter);
     }
     
-    // Filtre par recherche
+    if (selectedUserId !== 'all') {
+      filtered = filtered.filter(s => s.cashierId === selectedUserId);
+    }
+    
+    if (selectedBranchId !== 'all') {
+      filtered = filtered.filter(s => s.branchId === selectedBranchId);
+    }
+    
     if (search.trim()) {
       const term = search.toLowerCase().trim();
       filtered = filtered.filter(sale => {
@@ -257,34 +344,300 @@ export default function Historique() {
       });
     }
     
-    const totalFilteredCount = filtered.length;
+    return filtered;
+  }, [getDateFilteredSales, paymentFilter, selectedUserId, selectedBranchId, search]);
+
+  // Pagination
+  const paginatedSales = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
     const end = start + itemsPerPage;
-    const paginatedItems = filtered.slice(start, end);
-    const totalPages = Math.max(1, Math.ceil(totalFilteredCount / itemsPerPage));
-    
     return {
-      items: paginatedItems,
-      totalCount: totalFilteredCount,
-      totalPages,
+      items: filteredSales.slice(start, end),
+      totalCount: filteredSales.length,
+      totalPages: Math.max(1, Math.ceil(filteredSales.length / itemsPerPage)),
     };
-  }, [getDateFilteredSales, paymentFilter, search, currentPage]);
+  }, [filteredSales, currentPage]);
 
-  // Statistiques
-  const stats = useMemo(() => {
-    const dateFiltered = getDateFilteredSales;
-    const totalAmount = dateFiltered.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-    const totalItems = dateFiltered.reduce(
+  // ============================================
+  // STATISTIQUES PAR UTILISATEUR
+  // ============================================
+  
+  const userStats = useMemo((): UserStats[] => {
+    const userMap = new Map<string, UserStats>();
+    
+    filteredSales.forEach(sale => {
+      const userId = sale.cashierId || 'unknown';
+      const userName = sale.cashierName || 'Inconnu';
+      
+      if (!userMap.has(userId)) {
+        userMap.set(userId, {
+          userId,
+          userName,
+          totalSales: 0,
+          totalAmount: 0,
+          averageTicket: 0,
+          lastSaleDate: null,
+          lastSaleFormatted: '',
+          salesByBranch: new Map(),
+        });
+      }
+      
+      const stats = userMap.get(userId)!;
+      stats.totalSales++;
+      stats.totalAmount += sale.total;
+      
+      if (!stats.lastSaleDate || sale.timestamp > stats.lastSaleDate) {
+        stats.lastSaleDate = sale.timestamp;
+        stats.lastSaleFormatted = formatDateTime(sale.timestamp);
+      }
+      
+      const branchId = sale.branchId || 'main';
+      const branchName = sale.branchName || 'Branche Principale';
+      if (!stats.salesByBranch.has(branchId)) {
+        stats.salesByBranch.set(branchId, { branchName, amount: 0, count: 0 });
+      }
+      const branchStats = stats.salesByBranch.get(branchId)!;
+      branchStats.amount += sale.total;
+      branchStats.count++;
+    });
+    
+    const result = Array.from(userMap.values());
+    result.forEach(stats => {
+      stats.averageTicket = stats.totalSales > 0 ? stats.totalAmount / stats.totalSales : 0;
+    });
+    
+    return result.sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredSales]);
+
+  // ============================================
+  // STATISTIQUES PAR BRANCHE
+  // ============================================
+  
+  const branchStats = useMemo((): BranchStats[] => {
+    const branchMap = new Map<string, BranchStats>();
+    const uniqueUsersPerBranch = new Map<string, Set<string>>();
+    
+    filteredSales.forEach(sale => {
+      const branchId = sale.branchId || 'main';
+      const branchName = sale.branchName || 'Branche Principale';
+      const userId = sale.cashierId || 'unknown';
+      
+      if (!branchMap.has(branchId)) {
+        branchMap.set(branchId, {
+          branchId,
+          branchName,
+          totalSales: 0,
+          totalAmount: 0,
+          averageTicket: 0,
+          lastSaleDate: null,
+          userCount: 0,
+        });
+        uniqueUsersPerBranch.set(branchId, new Set());
+      }
+      
+      const stats = branchMap.get(branchId)!;
+      stats.totalSales++;
+      stats.totalAmount += sale.total;
+      uniqueUsersPerBranch.get(branchId)!.add(userId);
+      
+      if (!stats.lastSaleDate || sale.timestamp > stats.lastSaleDate) {
+        stats.lastSaleDate = sale.timestamp;
+      }
+    });
+    
+    const result = Array.from(branchMap.values());
+    result.forEach(stats => {
+      stats.averageTicket = stats.totalSales > 0 ? stats.totalAmount / stats.totalSales : 0;
+      stats.userCount = uniqueUsersPerBranch.get(stats.branchId)?.size || 0;
+    });
+    
+    return result.sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredSales]);
+
+  // ============================================
+  // STATISTIQUES HEBDOMADAIRES DÉTAILLÉES
+  // ============================================
+  
+  const weeklyDetails = useMemo((): DailySaleDetail[] => {
+    if (periodType !== 'week') return [];
+    
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayOfWeek = today.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    
+    const weekDays: DailySaleDetail[] = [];
+    
+    for (let i = 0; i < 7; i++) {
+      const currentDate = new Date(today);
+      currentDate.setDate(today.getDate() - mondayOffset + i);
+      currentDate.setHours(0, 0, 0, 0);
+      const nextDate = new Date(currentDate);
+      nextDate.setDate(currentDate.getDate() + 1);
+      
+      const dayStart = currentDate.getTime();
+      const dayEnd = nextDate.getTime() - 1;
+      
+      const daySales = filteredSales.filter(s => s.timestamp >= dayStart && s.timestamp <= dayEnd);
+      
+      const salesDetails = daySales.map(sale => ({
+        userId: sale.cashierId || 'unknown',
+        userName: sale.cashierName || 'Inconnu',
+        branchId: sale.branchId || 'main',
+        branchName: sale.branchName || 'Branche Principale',
+        amount: sale.total,
+        count: 1,
+        timestamp: sale.timestamp,
+      }));
+      
+      // Agréger par utilisateur pour le jour
+      const userMap = new Map<string, typeof salesDetails[0]>();
+      salesDetails.forEach(detail => {
+        if (!userMap.has(detail.userId)) {
+          userMap.set(detail.userId, { ...detail, amount: 0, count: 0 });
+        }
+        const existing = userMap.get(detail.userId)!;
+        existing.amount += detail.amount;
+        existing.count += detail.count;
+      });
+      
+      weekDays.push({
+        date: currentDate.toISOString().split('T')[0],
+        dayOfWeek: DAYS_FR[currentDate.getDay()],
+        sales: Array.from(userMap.values()),
+      });
+    }
+    
+    return weekDays;
+  }, [filteredSales, periodType]);
+
+  // ============================================
+  // STATISTIQUES MENSUELLES DÉTAILLÉES
+  // ============================================
+  
+  const monthlyStats = useMemo((): MonthlyStats[] => {
+    const monthMap = new Map<string, MonthlyStats>();
+    
+    filteredSales.forEach(sale => {
+      const date = new Date(sale.timestamp);
+      const month = date.getMonth();
+      const year = date.getFullYear();
+      const key = `${year}-${month}`;
+      
+      if (!monthMap.has(key)) {
+        monthMap.set(key, {
+          month,
+          monthName: MONTHS_FR[month],
+          year,
+          totalAmount: 0,
+          totalSales: 0,
+          byUser: new Map(),
+          byBranch: new Map(),
+        });
+      }
+      
+      const stats = monthMap.get(key)!;
+      stats.totalAmount += sale.total;
+      stats.totalSales++;
+      
+      // Par utilisateur
+      const userId = sale.cashierId || 'unknown';
+      const userName = sale.cashierName || 'Inconnu';
+      if (!stats.byUser.has(userId)) {
+        stats.byUser.set(userId, { userName, amount: 0, count: 0 });
+      }
+      const userStatsMonth = stats.byUser.get(userId)!;
+      userStatsMonth.amount += sale.total;
+      userStatsMonth.count++;
+      
+      // Par branche
+      const branchId = sale.branchId || 'main';
+      const branchName = sale.branchName || 'Branche Principale';
+      if (!stats.byBranch.has(branchId)) {
+        stats.byBranch.set(branchId, { branchName, amount: 0, count: 0 });
+      }
+      const branchStatsMonth = stats.byBranch.get(branchId)!;
+      branchStatsMonth.amount += sale.total;
+      branchStatsMonth.count++;
+    });
+    
+    return Array.from(monthMap.values()).sort((a, b) => {
+      if (a.year !== b.year) return b.year - a.year;
+      return b.month - a.month;
+    });
+  }, [filteredSales]);
+
+  // ============================================
+  // STATISTIQUES ANNUELLES (10 ANS)
+  // ============================================
+  
+  const yearlyStats = useMemo((): YearlyStats[] => {
+    const yearMap = new Map<number, YearlyStats>();
+    const currentYear = new Date().getFullYear();
+    const startYear = currentYear - 10;
+    
+    // Initialiser les 10 dernières années
+    for (let y = startYear; y <= currentYear; y++) {
+      yearMap.set(y, {
+        year: y,
+        totalAmount: 0,
+        totalSales: 0,
+        byUser: new Map(),
+        byBranch: new Map(),
+      });
+    }
+    
+    filteredSales.forEach(sale => {
+      const year = new Date(sale.timestamp).getFullYear();
+      if (year < startYear) return;
+      
+      const stats = yearMap.get(year);
+      if (!stats) return;
+      
+      stats.totalAmount += sale.total;
+      stats.totalSales++;
+      
+      const userId = sale.cashierId || 'unknown';
+      const userName = sale.cashierName || 'Inconnu';
+      if (!stats.byUser.has(userId)) {
+        stats.byUser.set(userId, { userName, amount: 0, count: 0 });
+      }
+      const userStatsYear = stats.byUser.get(userId)!;
+      userStatsYear.amount += sale.total;
+      userStatsYear.count++;
+      
+      const branchId = sale.branchId || 'main';
+      const branchName = sale.branchName || 'Branche Principale';
+      if (!stats.byBranch.has(branchId)) {
+        stats.byBranch.set(branchId, { branchName, amount: 0, count: 0 });
+      }
+      const branchStatsYear = stats.byBranch.get(branchId)!;
+      branchStatsYear.amount += sale.total;
+      branchStatsYear.count++;
+    });
+    
+    return Array.from(yearMap.values()).sort((a, b) => b.year - a.year);
+  }, [filteredSales]);
+
+  // Statistiques globales
+  const globalStats = useMemo(() => {
+    const totalAmount = filteredSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const totalSales = filteredSales.length;
+    const totalItems = filteredSales.reduce(
       (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
-      0,
+      0
     );
-    const totalSales = dateFiltered.length;
     const averageTicket = totalSales > 0 ? totalAmount / totalSales : 0;
+    return { 
+      totalAmount: Number(totalAmount) || 0, 
+      totalSales: Number(totalSales) || 0, 
+      totalItems: Number(totalItems) || 0, 
+      averageTicket: Number(averageTicket) || 0 
+    };
+  }, [filteredSales]);
 
-    return { totalAmount, totalItems, totalSales, averageTicket };
-  }, [getDateFilteredSales]);
 
-  // Helpers d'affichage
+  // Helpers
   function getSaleNumber(sale: Sale): string {
     return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
   }
@@ -297,11 +650,15 @@ export default function Historique() {
     return sale.clientName || 'Passager';
   }
 
-  function getPosName(sale: Sale): string {
-    return sale.posName || 'POS-01';
+  function formatDate(timestamp: number): string {
+    return new Date(timestamp).toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
   }
 
-  function formatDate(timestamp: number): string {
+  function formatDateTime(timestamp: number): string {
     return new Date(timestamp).toLocaleString('fr-FR', {
       day: '2-digit',
       month: '2-digit',
@@ -313,67 +670,46 @@ export default function Historique() {
 
   function getPaymentMethodLabel(method: string): string {
     switch (method) {
-      case 'cash':
-        return 'Espèces';
-      case 'mobile_money':
-      case 'mobile':
-        return 'Mobile Money';
-      case 'account':
-        return 'Compte Client';
-      default:
-        return method || 'Non défini';
+      case 'cash': return 'Espèces';
+      case 'mobile_money': case 'mobile': return 'Mobile Money';
+      case 'account': return 'Compte Client';
+      default: return method || 'Non défini';
     }
   }
 
   function getPaymentMethodColor(method: string): string {
     switch (method) {
-      case 'cash':
-        return 'bg-emerald-100 text-emerald-700';
-      case 'mobile_money':
-      case 'mobile':
-        return 'bg-blue-100 text-blue-700';
-      case 'account':
-        return 'bg-violet-100 text-violet-700';
-      default:
-        return 'bg-slate-100 text-slate-700';
+      case 'cash': return 'bg-emerald-100 text-emerald-700';
+      case 'mobile_money': case 'mobile': return 'bg-blue-100 text-blue-700';
+      case 'account': return 'bg-violet-100 text-violet-700';
+      default: return 'bg-slate-100 text-slate-700';
     }
   }
 
   // Export CSV
   async function exportToCSV() {
     try {
-      const dateFiltered = getDateFilteredSales;
-      
       const headers = [
-        'Numero',
-        'Date',
-        'Client',
-        'Caissier',
-        'POS',
-        'Articles',
-        'Total',
-        'Paiement',
-        'Statut',
-        'Synchronisé',
+        'Numero', 'Date', 'Heure', 'Client', 'Caissier', 'Branche',
+        'Articles', 'Total', 'Paiement', 'Statut', 'Synchronisé'
       ];
 
-      const csvData = dateFiltered.map((sale) => [
+      const csvData = filteredSales.map((sale) => [
         getSaleNumber(sale),
         formatDate(sale.timestamp),
+        new Date(sale.timestamp).toLocaleTimeString('fr-FR'),
         getClientName(sale),
         getCashierName(sale),
-        getPosName(sale),
-        sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
-        Number(sale.total).toFixed(2),
+        sale.branchName || 'Branche Principale',
+        sale.items.reduce((sum, item) => sum + item.quantity, 0),
+        sale.total.toFixed(2),
         getPaymentMethodLabel(sale.paymentMethod),
-        sale.status === 'cancelled' ? 'Annulée' : sale.status === 'pending' ? 'En attente' : 'Terminée',
+        sale.status === 'cancelled' ? 'Annulée' : 'Terminée',
         sale.synced ? 'Oui' : 'Non',
       ]);
 
       const escapeCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
-      const csv = [headers, ...csvData]
-        .map((row) => row.map(escapeCell).join(','))
-        .join('\n');
+      const csv = [headers, ...csvData].map(row => row.map(escapeCell).join(',')).join('\n');
 
       const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
@@ -385,17 +721,9 @@ export default function Historique() {
       a.remove();
       window.URL.revokeObjectURL(url);
 
-      toast({
-        title: "Export réussi",
-        description: "Le fichier CSV a été téléchargé",
-      });
+      toast({ title: "Export réussi", description: "Le fichier CSV a été téléchargé" });
     } catch (error) {
-      console.error('Erreur export CSV:', error);
-      toast({
-        title: "Erreur",
-        description: "Impossible d'exporter les données",
-        variant: "destructive",
-      });
+      toast({ title: "Erreur", description: "Impossible d'exporter", variant: "destructive" });
     }
   }
 
@@ -407,54 +735,15 @@ export default function Historique() {
     const html = `
       <!DOCTYPE html>
       <html>
-        <head>
-          <title>Vente #${getSaleNumber(sale)}</title>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <head><title>Vente #${getSaleNumber(sale)}</title><meta charset="UTF-8" />
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-              font-family: 'Courier New', monospace;
-              padding: 20px;
-              background: white;
-            }
-            .receipt {
-              max-width: 320px;
-              margin: 0 auto;
-            }
-            .header {
-              text-align: center;
-              border-bottom: 1px dashed #ccc;
-              padding-bottom: 12px;
-              margin-bottom: 16px;
-            }
-            .row {
-              display: flex;
-              justify-content: space-between;
-              gap: 12px;
-              margin-bottom: 6px;
-              font-size: 12px;
-            }
-            .total {
-              border-top: 1px solid #000;
-              padding-top: 8px;
-              margin-top: 8px;
-              font-weight: bold;
-            }
-            .meta {
-              font-size: 11px;
-              color: #666;
-              margin: 2px 0;
-            }
-            .pending-badge {
-              background: #f59e0b;
-              color: white;
-              padding: 2px 6px;
-              border-radius: 4px;
-              font-size: 10px;
-              display: inline-block;
-              margin-top: 8px;
-            }
+            body { font-family: 'Courier New', monospace; padding: 20px; background: white; }
+            .receipt { max-width: 320px; margin: 0 auto; }
+            .header { text-align: center; border-bottom: 1px dashed #ccc; padding-bottom: 12px; margin-bottom: 16px; }
+            .row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: 12px; }
+            .total { border-top: 1px solid #000; padding-top: 8px; margin-top: 8px; font-weight: bold; }
+            .meta { font-size: 11px; color: #666; margin: 2px 0; }
           </style>
         </head>
         <body>
@@ -462,32 +751,19 @@ export default function Historique() {
             <div class="header">
               <h2>GoApp Pharmacie</h2>
               <div class="meta">Vente #${getSaleNumber(sale)}</div>
-              <div class="meta">${formatDate(sale.timestamp)}</div>
+              <div class="meta">${formatDateTime(sale.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(sale)}</div>
-              <div class="meta">POS: ${getPosName(sale)}</div>
+              <div class="meta">Branche: ${sale.branchName || 'Principale'}</div>
               <div class="meta">Client: ${getClientName(sale)}</div>
-              ${!sale.synced ? '<div class="pending-badge">En attente de synchronisation</div>' : ''}
             </div>
-
-            ${sale.items
-              .map(
-                (item) => `
-                  <div class="row">
-                    <span>${item.quantity} x ${escapeHtml(item.name)}</span>
-                    <span>${(Number(item.price) * Number(item.quantity)).toFixed(2)} $</span>
-                  </div>
-                `,
-              )
-              .join('')}
-
-            <div class="row total">
-              <span>Total</span>
-              <span>${Number(sale.total).toFixed(2)} $</span>
-            </div>
-
-            <div class="meta" style="text-align:center; margin-top:16px;">
-              Paiement: ${getPaymentMethodLabel(sale.paymentMethod)}
-            </div>
+            ${sale.items.map(item => `
+              <div class="row">
+                <span>${item.quantity} x ${escapeHtml(item.name)}</span>
+                <span>${(item.price * item.quantity).toFixed(2)} $</span>
+              </div>
+            `).join('')}
+            <div class="row total"><span>Total</span><span>${sale.total.toFixed(2)} $</span></div>
+            <div class="meta" style="text-align:center; margin-top:16px;">Paiement: ${getPaymentMethodLabel(sale.paymentMethod)}</div>
           </div>
         </body>
       </html>
@@ -499,31 +775,16 @@ export default function Historique() {
     printWindow.print();
   }
 
-  // Helper pour échapper le HTML
   function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  // Gestionnaires d'événements
-  function handleDateRangeChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    setDateRange(e.target.value as DateRange);
-    setCurrentPage(1);
-  }
-
-  function handlePaymentFilterChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    setPaymentFilter(e.target.value);
-    setCurrentPage(1);
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function resetFilters() {
     setSearch('');
-    setDateRange('today');
+    setPeriodType('today');
     setPaymentFilter('all');
+    setSelectedUserId('all');
+    setSelectedBranchId('all');
     setCustomStartDate('');
     setCustomEndDate('');
     setCurrentPage(1);
@@ -531,19 +792,37 @@ export default function Historique() {
 
   const isLoading = loading || storeLoading;
 
+  // Récupérer les listes uniques pour les filtres
+  const uniqueUsers = useMemo(() => {
+    const users = new Map<string, string>();
+    allSales.forEach(sale => {
+      if (sale.cashierId && sale.cashierName) {
+        users.set(sale.cashierId, sale.cashierName);
+      }
+    });
+    return Array.from(users.entries()).map(([id, name]) => ({ id, name }));
+  }, [allSales]);
+
+  const uniqueBranches = useMemo(() => {
+    const branches = new Map<string, string>();
+    allSales.forEach(sale => {
+      if (sale.branchId && sale.branchName) {
+        branches.set(sale.branchId, sale.branchName);
+      }
+    });
+    return Array.from(branches.entries()).map(([id, name]) => ({ id, name }));
+  }, [allSales]);
+
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Bannière de synchronisation */}
+      {/* Bannières de synchronisation */}
       {pendingCount > 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
           <div className="flex items-center gap-2">
             <Loader2 size={16} className="animate-spin" />
             {pendingCount} vente(s) en attente de synchronisation
           </div>
-          <button
-            onClick={handleRetryFailed}
-            className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
-          >
+          <button onClick={handleRetryFailed} className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30">
             Réessayer
           </button>
         </div>
@@ -551,301 +830,434 @@ export default function Historique() {
 
       {!isOnline && pendingCount === 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          <WifiOff size={16} />
-          Mode hors-ligne - Données locales uniquement
+          <WifiOff size={16} /> Mode hors-ligne - Données locales uniquement
         </div>
       )}
 
+      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-4 md:px-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
-            <Link
-              to="/pos"
-              className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-            >
+            <Link to="/pos" className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
               <ArrowLeft size={20} />
             </Link>
             <div>
               <h1 className="text-xl font-black text-slate-800 md:text-2xl">Historique des ventes</h1>
-              <p className="text-sm text-slate-400">Consultation, filtres, export et impression</p>
+              <p className="text-sm text-slate-400">Statistiques par utilisateur, branche et période</p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {(search || dateRange !== 'today' || paymentFilter !== 'all') && (
-              <button
-                onClick={resetFilters}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Réinitialiser
-              </button>
-            )}
-
-            <button
-              onClick={handleRefresh}
-              disabled={isLoading}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            >
-              <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
-              Actualiser
+            <button onClick={resetFilters} className="rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50">
+              Réinitialiser
             </button>
-
-            <button
-              onClick={exportToCSV}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700"
-            >
-              <Download size={18} />
-              Exporter CSV
+            <button onClick={handleRefresh} disabled={isLoading} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} /> Actualiser
+            </button>
+            <button onClick={exportToCSV} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">
+              <Download size={18} /> Exporter CSV
             </button>
           </div>
         </div>
       </header>
 
       <main className="p-4 md:p-6">
-        {/* Filtres */}
+        {/* Filtres principaux */}
         <div className="mb-6 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div className="relative">
               <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
               <input
                 className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-12 pr-4 outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Rechercher par numéro, client..."
+                placeholder="Rechercher..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
-            <div>
+            <select
+              value={periodType}
+              onChange={(e) => { setPeriodType(e.target.value as PeriodType); setCurrentPage(1); }}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="today">Aujourd&apos;hui</option>
+              <option value="week">Cette semaine</option>
+              <option value="month">Ce mois</option>
+              <option value="year">Année ({selectedYear})</option>
+              <option value="custom">Personnalisé</option>
+            </select>
+
+            {periodType === 'year' && (
               <select
-                value={dateRange}
-                onChange={handleDateRangeChange}
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="today">Aujourd&apos;hui</option>
-                <option value="week">Cette semaine</option>
-                <option value="month">Ce mois</option>
-                <option value="custom">Personnalisé</option>
+                {Array.from({ length: 11 }, (_, i) => new Date().getFullYear() - 10 + i).map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
               </select>
-            </div>
-
-            <div>
-              <select
-                value={paymentFilter}
-                onChange={handlePaymentFilterChange}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">Tous les paiements</option>
-                <option value="cash">Espèces</option>
-                <option value="mobile_money">Mobile Money</option>
-                <option value="account">Compte Client</option>
-              </select>
-            </div>
-
-            {dateRange === 'custom' ? (
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="date"
-                  value={customStartDate}
-                  onChange={(e) => setCustomStartDate(e.target.value)}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <input
-                  type="date"
-                  value={customEndDate}
-                  onChange={(e) => setCustomEndDate(e.target.value)}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
-                <Calendar size={18} />
-                Période active
-              </div>
             )}
+
+            {periodType === 'custom' && (
+              <>
+                <input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="rounded-2xl border border-slate-200 px-4 py-3" />
+                <input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="rounded-2xl border border-slate-200 px-4 py-3" />
+              </>
+            )}
+
+            <select value={paymentFilter} onChange={(e) => { setPaymentFilter(e.target.value); setCurrentPage(1); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="all">Tous paiements</option>
+              <option value="cash">Espèces</option>
+              <option value="mobile_money">Mobile Money</option>
+              <option value="account">Compte Client</option>
+            </select>
+
+            <select value={selectedUserId} onChange={(e) => { setSelectedUserId(e.target.value); setCurrentPage(1); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="all">Tous les utilisateurs</option>
+              {uniqueUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+
+            <select value={selectedBranchId} onChange={(e) => { setSelectedBranchId(e.target.value); setCurrentPage(1); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="all">Toutes les branches</option>
+              {uniqueBranches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
           </div>
         </div>
 
-        {/* Statistiques */}
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {/* Statistiques globales */}
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100">
-                <TrendingUp size={20} className="text-blue-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">Chiffre d&apos;affaires</p>
-                <p className="text-xl font-black text-slate-800">{stats.totalAmount.toFixed(2)} $</p>
-              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100"><TrendingUp size={20} className="text-blue-600" /></div>
+              <div><p className="text-xs text-slate-400">Chiffre d&apos;affaires</p><p className="text-xl font-black text-slate-800">{globalStats.totalAmount.toFixed(2)} $</p></div>
             </div>
           </div>
-
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100">
-                <Package size={20} className="text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">Articles vendus</p>
-                <p className="text-xl font-black text-slate-800">{stats.totalItems}</p>
-              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100"><Package size={20} className="text-emerald-600" /></div>
+              <div><p className="text-xs text-slate-400">Articles vendus</p><p className="text-xl font-black text-slate-800">{globalStats.totalItems}</p></div>
             </div>
           </div>
-
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-100">
-                <Users size={20} className="text-violet-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">Nombre de ventes</p>
-                <p className="text-xl font-black text-slate-800">{stats.totalSales}</p>
-              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-100"><Users size={20} className="text-violet-600" /></div>
+              <div><p className="text-xs text-slate-400">Nombre de ventes</p><p className="text-xl font-black text-slate-800">{globalStats.totalSales}</p></div>
             </div>
           </div>
-
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100">
-                <CreditCard size={20} className="text-amber-600" />
-              </div>
-              <div>
-                <p className="text-xs text-slate-400">Ticket moyen</p>
-                <p className="text-xl font-black text-slate-800">{stats.averageTicket.toFixed(2)} $</p>
-              </div>
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100"><CreditCard size={20} className="text-amber-600" /></div>
+              <div><p className="text-xs text-slate-400">Ticket moyen</p><p className="text-xl font-black text-slate-800">{globalStats.averageTicket.toFixed(2)} $</p></div>
             </div>
           </div>
         </div>
 
-        {/* Liste des ventes */}
-        <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
-            <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
-              <Clock size={20} className="text-blue-600" />
-              Transactions ({filteredAndPaginated.totalCount})
-            </h2>
-          </div>
+        {/* Navigation des onglets */}
+        <div className="mb-6 flex flex-wrap gap-2 border-b border-slate-200">
+          <button onClick={() => setViewMode('sales')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'sales' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+            📋 Ventes
+          </button>
+          <button onClick={() => setViewMode('users')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'users' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+            👥 Par Utilisateur
+          </button>
+          <button onClick={() => setViewMode('branches')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'branches' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+            🏪 Par Branche
+          </button>
+          <button onClick={() => setViewMode('analytics')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'analytics' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+            📊 Analyses (Semaine/Mois/Année)
+          </button>
+        </div>
 
-          <div className="divide-y divide-slate-100">
-            {isLoading ? (
-              <div className="flex items-center justify-center p-10 text-slate-400">
-                <Loader2 className="mr-2 animate-spin" size={20} />
-                Chargement...
-              </div>
-            ) : filteredAndPaginated.items.length === 0 ? (
-              <div className="p-10 text-center text-slate-400">Aucune vente trouvée</div>
-            ) : (
-              filteredAndPaginated.items.map((sale) => (
-                <div key={`${sale.isLocal ? 'local-' : 'api-'}${sale.id}`} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-3 flex flex-wrap items-center gap-2">
-                        <span className="rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-600">
-                          #{getSaleNumber(sale)}
-                        </span>
+        {/* Vue des ventes individuelles */}
+        {viewMode === 'sales' && (
+          <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
+              <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><Clock size={20} className="text-blue-600" /> Transactions ({paginatedSales.totalCount})</h2>
+            </div>
 
-                        {!sale.synced && (
-                          <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700">
-                            <Loader2 size={10} className="mr-1 inline animate-spin" />
-                            En attente
-                          </span>
-                        )}
-
-                        <span className="text-sm text-slate-400">{formatDate(sale.timestamp)}</span>
-
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(
-                            sale.paymentMethod,
-                          )}`}
-                        >
-                          {getPaymentMethodLabel(sale.paymentMethod)}
-                        </span>
-
-                        {sale.status === 'cancelled' && (
-                          <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">
-                            Annulée
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                        <div>
-                          <p className="text-xs text-slate-400">Client</p>
-                          <p className="font-semibold text-slate-800">{getClientName(sale)}</p>
+            <div className="divide-y divide-slate-100">
+              {isLoading ? (
+                <div className="flex items-center justify-center p-10 text-slate-400"><Loader2 className="mr-2 animate-spin" size={20} /> Chargement...</div>
+              ) : paginatedSales.items.length === 0 ? (
+                <div className="p-10 text-center text-slate-400">Aucune vente trouvée</div>
+              ) : (
+                paginatedSales.items.map((sale) => (
+                  <div key={`${sale.isLocal ? 'local-' : 'api-'}${sale.id}`} className="p-4 transition-colors hover:bg-slate-50 md:p-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                          <span className="rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-bold text-blue-600">#{getSaleNumber(sale)}</span>
+                          {!sale.synced && <span className="rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700"><Loader2 size={10} className="mr-1 inline animate-spin" /> En attente</span>}
+                          <span className="text-sm text-slate-400">{formatDateTime(sale.timestamp)}</span>
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(sale.paymentMethod)}`}>{getPaymentMethodLabel(sale.paymentMethod)}</span>
+                          {sale.status === 'cancelled' && <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">Annulée</span>}
                         </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400">Caissier</p>
-                          <p className="font-semibold text-slate-800">{getCashierName(sale)}</p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400">Articles</p>
-                          <p className="font-semibold text-slate-800">
-                            {sale.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs text-slate-400">Montant</p>
-                          <p className="text-lg font-black text-blue-600">{Number(sale.total).toFixed(2)} $</p>
+                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                          <div><p className="text-xs text-slate-400">Client</p><p className="font-semibold text-slate-800">{getClientName(sale)}</p></div>
+                          <div><p className="text-xs text-slate-400">Caissier</p><p className="font-semibold text-slate-800">{getCashierName(sale)}</p></div>
+                          <div><p className="text-xs text-slate-400">Branche</p><p className="font-semibold text-slate-800">{sale.branchName || 'Principale'}</p></div>
+                          <div><p className="text-xs text-slate-400">Articles</p><p className="font-semibold text-slate-800">{sale.items.reduce((sum, item) => sum + item.quantity, 0)}</p></div>
+                          <div><p className="text-xs text-slate-400">Montant</p><p className="text-lg font-black text-blue-600">{sale.total.toFixed(2)} $</p></div>
                         </div>
                       </div>
-                    </div>
-
-                    <div className="flex shrink-0 gap-2">
-                      <button
-                        onClick={() => setSelectedSale(sale)}
-                        className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                        title="Voir détails"
-                      >
-                        <Eye size={18} />
-                      </button>
-
-                      <button
-                        onClick={() => printSale(sale)}
-                        className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                        title="Imprimer"
-                      >
-                        <Printer size={18} />
-                      </button>
+                      <div className="flex shrink-0 gap-2">
+                        <button onClick={() => setSelectedSale(sale)} className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600" title="Voir détails"><Eye size={18} /></button>
+                        <button onClick={() => printSale(sale)} className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600" title="Imprimer"><Printer size={18} /></button>
+                      </div>
                     </div>
                   </div>
+                ))
+              )}
+            </div>
+
+            {paginatedSales.totalPages > 1 && (
+              <div className="flex flex-col gap-4 border-t border-slate-100 p-4 md:flex-row md:items-center md:justify-between">
+                <p className="text-sm text-slate-400">Affichage {(currentPage - 1) * itemsPerPage + 1} à {Math.min(currentPage * itemsPerPage, paginatedSales.totalCount)} sur {paginatedSales.totalCount} ventes</p>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50 disabled:opacity-50"><ChevronLeft size={18} /></button>
+                  <span className="px-3 py-2 text-sm font-medium text-slate-700">Page {currentPage} / {paginatedSales.totalPages}</span>
+                  <button onClick={() => setCurrentPage(p => Math.min(paginatedSales.totalPages, p + 1))} disabled={currentPage === paginatedSales.totalPages} className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50 disabled:opacity-50"><ChevronRight size={18} /></button>
                 </div>
-              ))
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Vue par utilisateur */}
+        {viewMode === 'users' && (
+          <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+            <div className="border-b border-slate-100 p-4 md:p-5">
+              <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><User size={20} className="text-blue-600" /> Statistiques par utilisateur</h2>
+              <p className="text-sm text-slate-400">Dernière vente, total par utilisateur et répartition par branche</p>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {userStats.length === 0 ? (
+                <div className="p-10 text-center text-slate-400">Aucune donnée utilisateur</div>
+              ) : (
+                userStats.map((stats) => (
+                  <div key={stats.userId} className="p-4 md:p-5">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100"><User size={18} className="text-blue-600" /></div>
+                        <div>
+                          <h3 className="font-bold text-slate-800">{stats.userName}</h3>
+                          <p className="text-xs text-slate-400">ID: {stats.userId === 'unknown' ? 'Non assigné' : stats.userId}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-4">
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Dernière vente</p>
+                          <p className="text-sm font-semibold text-slate-700">{stats.lastSaleFormatted || 'Jamais'}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">Total ventes</p>
+                        <p className="text-xl font-bold text-slate-800">{stats.totalSales}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">CA total</p>
+                        <p className="text-xl font-bold text-emerald-600">{stats.totalAmount.toFixed(2)} $</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">Ticket moyen</p>
+                        <p className="text-xl font-bold text-blue-600">{stats.averageTicket.toFixed(2)} $</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">Branches actives</p>
+                        <p className="text-xl font-bold text-violet-600">{stats.salesByBranch.size}</p>
+                      </div>
+                    </div>
+                    {stats.salesByBranch.size > 0 && (
+                      <div className="mt-4">
+                        <p className="mb-2 text-sm font-semibold text-slate-600">Détail par branche :</p>
+                        <div className="flex flex-wrap gap-2">
+                          {Array.from(stats.salesByBranch.entries()).map(([branchId, branch]) => (
+                            <div key={branchId} className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+                              <span className="font-medium">{branch.branchName}</span>: {branch.amount.toFixed(2)} $ ({branch.count} ventes)
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Vue par branche */}
+        {viewMode === 'branches' && (
+          <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+            <div className="border-b border-slate-100 p-4 md:p-5">
+              <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><Store size={20} className="text-blue-600" /> Statistiques par branche</h2>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {branchStats.length === 0 ? (
+                <div className="p-10 text-center text-slate-400">Aucune donnée branche</div>
+              ) : (
+                branchStats.map((branch) => (
+                  <div key={branch.branchId} className="p-4 md:p-5">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100"><Store size={18} className="text-emerald-600" /></div>
+                        <div>
+                          <h3 className="font-bold text-slate-800">{branch.branchName}</h3>
+                          <p className="text-xs text-slate-400">{branch.userCount} utilisateur(s) actif(s)</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">Total ventes</p>
+                        <p className="text-xl font-bold text-slate-800">{branch.totalSales}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">CA total</p>
+                        <p className="text-xl font-bold text-emerald-600">{branch.totalAmount.toFixed(2)} $</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-400">Ticket moyen</p>
+                        <p className="text-xl font-bold text-blue-600">{branch.averageTicket.toFixed(2)} $</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Vue Analyses (Semaine/Mois/Année) */}
+        {viewMode === 'analytics' && (
+          <div className="space-y-6">
+            {/* Détail de la semaine */}
+            {periodType === 'week' && weeklyDetails.length > 0 && (
+              <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+                <div className="border-b border-slate-100 p-4 md:p-5">
+                  <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><Calendar size={20} className="text-blue-600" /> Détail de la semaine</h2>
+                  <p className="text-sm text-slate-400">Ventes par jour, par utilisateur</p>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {weeklyDetails.map((day) => (
+                    <div key={day.date} className="p-4">
+                      <h3 className="mb-3 font-bold text-slate-700">{day.dayOfWeek} {new Date(day.date).toLocaleDateString('fr-FR')}</h3>
+                      {day.sales.length === 0 ? (
+                        <p className="text-sm text-slate-400">Aucune vente ce jour</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {day.sales.map((sale, idx) => (
+                            <div key={idx} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-2">
+                              <div className="flex items-center gap-2">
+                                <User size={14} className="text-slate-400" />
+                                <span className="font-medium">{sale.userName}</span>
+                                <span className="text-xs text-slate-400">({sale.branchName})</span>
+                              </div>
+                              <div className="font-semibold text-emerald-600">{sale.amount.toFixed(2)} $</div>
+                              <div className="text-xs text-slate-400">{sale.count} vente(s)</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Statistiques mensuelles */}
+            {monthlyStats.length > 0 && (
+              <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+                <div className="border-b border-slate-100 p-4 md:p-5">
+                  <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><BarChart3 size={20} className="text-blue-600" /> Statistiques mensuelles</h2>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {monthlyStats.map((month) => (
+                    <div key={`${month.year}-${month.month}`} className="p-4">
+                      <h3 className="mb-3 font-bold text-slate-700">{month.monthName} {month.year}</h3>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <p className="mb-2 text-sm font-semibold text-slate-600">📊 Global</p>
+                          <div className="rounded-xl bg-slate-50 p-3">
+                            <p>CA total: <span className="font-bold text-emerald-600">{month.totalAmount.toFixed(2)} $</span></p>
+                            <p>Ventes: {month.totalSales}</p>
+                            <p>Moyenne: {(month.totalAmount / month.totalSales || 0).toFixed(2)} $</p>
+                          </div>
+                        </div>
+                        <div>
+                          <p className="mb-2 text-sm font-semibold text-slate-600">👥 Par utilisateur</p>
+                          <div className="space-y-1">
+                            {Array.from(month.byUser.entries()).map(([userId, user]) => (
+                              <div key={userId} className="rounded-lg bg-slate-50 p-2 text-sm">
+                                <span className="font-medium">{user.userName}</span>: {user.amount.toFixed(2)} $ ({user.count} ventes)
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="md:col-span-2">
+                          <p className="mb-2 text-sm font-semibold text-slate-600">🏪 Par branche</p>
+                          <div className="flex flex-wrap gap-2">
+                            {Array.from(month.byBranch.entries()).map(([branchId, branch]) => (
+                              <div key={branchId} className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+                                <span className="font-medium">{branch.branchName}</span>: {branch.amount.toFixed(2)} $
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Statistiques annuelles (10 ans) */}
+            {yearlyStats.length > 0 && (
+              <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+                <div className="border-b border-slate-100 p-4 md:p-5">
+                  <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><TrendingUp size={20} className="text-blue-600" /> Statistiques annuelles (10 ans)</h2>
+                </div>
+                <div className="divide-y divide-slate-100">
+                  {yearlyStats.map((year) => (
+                    <div key={year.year} className="p-4">
+                      <h3 className="mb-3 font-bold text-slate-700">Année {year.year}</h3>
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <div className="rounded-xl bg-slate-50 p-3">
+                          <p className="text-xs text-slate-400">CA total</p>
+                          <p className="text-xl font-bold text-emerald-600">{year.totalAmount.toFixed(2)} $</p>
+                          <p className="text-sm text-slate-500">{year.totalSales} ventes</p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-sm font-semibold text-slate-600">Top utilisateurs</p>
+                          <div className="space-y-1">
+                            {Array.from(year.byUser.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, 3).map(([userId, user]) => (
+                              <div key={userId} className="rounded-lg bg-slate-50 p-1.5 text-xs">
+                                {user.userName}: {user.amount.toFixed(2)} $
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-sm font-semibold text-slate-600">Par branche</p>
+                          <div className="flex flex-wrap gap-1">
+                            {Array.from(year.byBranch.entries()).map(([branchId, branch]) => (
+                              <div key={branchId} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
+                                {branch.branchName}: {branch.amount.toFixed(0)} $
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
             )}
           </div>
-
-          {filteredAndPaginated.totalPages > 1 && (
-            <div className="flex flex-col gap-4 border-t border-slate-100 p-4 md:flex-row md:items-center md:justify-between">
-              <p className="text-sm text-slate-400">
-                Affichage {(currentPage - 1) * itemsPerPage + 1} à{' '}
-                {Math.min(currentPage * itemsPerPage, filteredAndPaginated.totalCount)} sur {filteredAndPaginated.totalCount} ventes
-              </p>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <ChevronLeft size={18} />
-                </button>
-
-                <span className="px-3 py-2 text-sm font-medium text-slate-700">
-                  Page {currentPage} / {filteredAndPaginated.totalPages}
-                </span>
-
-                <button
-                  onClick={() => setCurrentPage((p) => Math.min(filteredAndPaginated.totalPages, p + 1))}
-                  disabled={currentPage === filteredAndPaginated.totalPages}
-                  className="rounded-lg border border-slate-200 p-2 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <ChevronRight size={18} />
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
+        )}
       </main>
 
       {/* Modal de détails */}
@@ -855,114 +1267,43 @@ export default function Historique() {
             <div className="border-b border-slate-100 p-5 md:p-6">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-600">
-                    <Receipt size={22} />
-                  </div>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-600"><Receipt size={22} /></div>
                   <div>
-                    <h3 className="text-lg font-black text-slate-800 md:text-xl">
-                      Détails vente #{getSaleNumber(selectedSale)}
-                    </h3>
-                    <p className="text-sm text-slate-400">{formatDate(selectedSale.timestamp)}</p>
-                    {!selectedSale.synced && (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
-                        <Loader2 size={10} className="animate-spin" />
-                        En attente de synchronisation
-                      </p>
-                    )}
+                    <h3 className="text-lg font-black text-slate-800 md:text-xl">Détails vente #{getSaleNumber(selectedSale)}</h3>
+                    <p className="text-sm text-slate-400">{formatDateTime(selectedSale.timestamp)}</p>
                   </div>
                 </div>
-
-                <button
-                  onClick={() => setSelectedSale(null)}
-                  className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                >
-                  <X size={20} />
-                </button>
+                <button onClick={() => setSelectedSale(null)} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
               </div>
             </div>
 
             <div className="space-y-5 p-5 md:p-6">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">Date</p>
-                  <p className="font-bold text-slate-800">{formatDate(selectedSale.timestamp)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">Caissier</p>
-                  <p className="font-bold text-slate-800">{getCashierName(selectedSale)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">Client</p>
-                  <p className="font-bold text-slate-800">{getClientName(selectedSale)}</p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-4">
-                  <p className="mb-1 text-xs text-slate-400">Paiement</p>
-                  <span
-                    className={`inline-block rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(
-                      selectedSale.paymentMethod,
-                    )}`}
-                  >
-                    {getPaymentMethodLabel(selectedSale.paymentMethod)}
-                  </span>
-                </div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Date</p><p className="font-bold text-slate-800">{formatDateTime(selectedSale.timestamp)}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Caissier</p><p className="font-bold text-slate-800">{getCashierName(selectedSale)}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Branche</p><p className="font-bold text-slate-800">{selectedSale.branchName || 'Principale'}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Client</p><p className="font-bold text-slate-800">{getClientName(selectedSale)}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Paiement</p><span className={`inline-block rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(selectedSale.paymentMethod)}`}>{getPaymentMethodLabel(selectedSale.paymentMethod)}</span></div>
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-slate-100">
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
-                  <h4 className="font-bold text-slate-800">Articles</h4>
-                </div>
-
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><h4 className="font-bold text-slate-800">Articles</h4></div>
                 <div className="divide-y divide-slate-100">
                   {selectedSale.items.map((item, idx) => (
                     <div key={`${item.id || idx}`} className="flex items-center justify-between gap-4 px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-slate-800">{item.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {Number(item.price).toFixed(2)} $/unité
-                          {item.code ? ` · ${item.code}` : ''}
-                        </p>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="font-semibold text-slate-800">
-                          {item.quantity} × {Number(item.price).toFixed(2)} $
-                        </p>
-                        <p className="text-sm font-bold text-blue-600">
-                          {(Number(item.price) * Number(item.quantity)).toFixed(2)} $
-                        </p>
-                      </div>
+                      <div><p className="font-semibold text-slate-800">{item.name}</p><p className="text-xs text-slate-400">{item.price.toFixed(2)} $/unité</p></div>
+                      <div className="text-right"><p className="font-semibold text-slate-800">{item.quantity} × {item.price.toFixed(2)} $</p><p className="text-sm font-bold text-blue-600">{(item.price * item.quantity).toFixed(2)} $</p></div>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-blue-50 p-4">
-                <div className="flex items-center justify-between text-lg font-black">
-                  <span>Total</span>
-                  <span className="text-blue-600">{Number(selectedSale.total).toFixed(2)} $</span>
-                </div>
-              </div>
+              <div className="rounded-2xl bg-blue-50 p-4"><div className="flex items-center justify-between text-lg font-black"><span>Total</span><span className="text-blue-600">{selectedSale.total.toFixed(2)} $</span></div></div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 bg-slate-50 p-5 md:p-6">
-              <button
-                onClick={() => printSale(selectedSale)}
-                className="flex items-center justify-center gap-2 rounded-2xl bg-blue-600 py-3 font-bold text-white hover:bg-blue-700"
-              >
-                <Printer size={18} />
-                Imprimer
-              </button>
-
-              <button
-                onClick={() => setSelectedSale(null)}
-                className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white py-3 font-bold text-slate-700 hover:bg-slate-50"
-              >
-                <X size={18} />
-                Fermer
-              </button>
+              <button onClick={() => printSale(selectedSale)} className="flex items-center justify-center gap-2 rounded-2xl bg-blue-600 py-3 font-bold text-white hover:bg-blue-700"><Printer size={18} /> Imprimer</button>
+              <button onClick={() => setSelectedSale(null)} className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white py-3 font-bold text-slate-700 hover:bg-slate-50"><X size={18} /> Fermer</button>
             </div>
           </div>
         </div>
