@@ -645,13 +645,11 @@ const loadAvailableUsers = async () => {
         theme: config.theme,
         initialCapital: config.initialCapital,
         branchConfig: config.branchConfig,
-        salesType: {
-          type: config.salesType,
-          calcul_auto_prix: config.automaticPricing.enabled,
-          marge_par_defaut: config.marginConfig.defaultMargin,
-          taux_tva: config.taxRate,
-          lock_stock_modification: false
-        },
+        salesType: config.salesType,  // ← Envoyer directement la chaîne
+        calcul_auto_prix: config.automaticPricing.enabled,
+        marge_par_defaut: config.marginConfig.defaultMargin,
+        taux_tva: config.taxRate,
+        lock_stock_modification: false,
         
         expiredProducts: config.expiredProducts,
         overtime: config.overtime,
