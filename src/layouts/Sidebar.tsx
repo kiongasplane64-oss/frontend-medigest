@@ -154,7 +154,7 @@ const menuGroups: MenuGroup[] = [
   {
     title: "Opérations",
     items: [
-      { icon: <ShoppingCart size={20}/>, label: 'Ventes (POS)', href: '/sales', roles: ["admin", "pharmacien", "caissier", "vendeur"] },
+      { icon: <ShoppingCart size={20}/>, label: 'Ventes (POS)', href: '/vendor-pos', roles: ["admin", "pharmacien", "caissier", "vendeur"] },
       { icon: <Receipt size={20}/>, label: 'Factures', href: '/factures', roles: ["admin", "pharmacien", "caissier", "vendeur", "comptable"] },
       { 
         icon: <Package size={20}/>, 

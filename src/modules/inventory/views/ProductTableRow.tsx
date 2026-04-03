@@ -1,5 +1,5 @@
 // components/inventory/ProductTableRow.tsx
-import { Eye, Edit2, Package, TrendingDown, CalendarClock } from 'lucide-react';
+import { Eye, Edit2, Package, CalendarClock } from 'lucide-react';
 import type { Product, SalesType, Category } from '@/types/inventory.types';
 
 interface ProductTableRowProps {
@@ -99,19 +99,10 @@ export default function ProductTableRow({
     return product.purchase_price || 0;
   };
 
-  // Calculer la marge
-  const getMargin = (): number => {
-    const selling = getSellingPrice();
-    const purchase = getPurchasePrice();
-    if (purchase <= 0) return 0;
-    return ((selling - purchase) / purchase) * 100;
-  };
-
-  // Calculer la valeur du stock
-  const getStockValue = (): number => {
-    return getSellingPrice() * (product.quantity || 0);
-  };
-
+  const expiryStatus = getExpiryStatus(product.expiry_date);
+  const sellingPrice = getSellingPrice();
+  const purchasePrice = getPurchasePrice();
+  
   // Calculer les prix dans les deux devises
   const getPriceInBothCurrencies = (price: number) => {
     if (primaryCurrency === 'CDF') {
@@ -127,31 +118,25 @@ export default function ProductTableRow({
     }
   };
 
-  const expiryStatus = getExpiryStatus(product.expiry_date);
-  const sellingPrice = getSellingPrice();
-  const purchasePrice = getPurchasePrice();
-  const margin = getMargin();
-  const stockValue = getStockValue();
   const { cdf: priceCDF, usd: priceUSD } = getPriceInBothCurrencies(sellingPrice);
   const { cdf: purchaseCDF, usd: purchaseUSD } = getPriceInBothCurrencies(purchasePrice);
-  const { cdf: valueCDF, usd: valueUSD } = getPriceInBothCurrencies(stockValue);
 
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50 transition-colors group">
-      {/* Code produit */}
+      {/* Colonne 1: Code produit */}
       <td className="px-4 py-3">
         <div className="font-mono text-sm text-slate-600">
           {product.code || '-'}
         </div>
       </td>
 
-      {/* Produit (Nom + Catégorie) */}
+      {/* Colonne 2: Produit (Nom + Catégorie) */}
       <td className="px-4 py-3">
         <div className="font-medium text-slate-800">{product.name}</div>
         <div className="text-xs text-slate-400 mt-0.5">{getCategoryName(product.category)}</div>
       </td>
 
-      {/* Quantité + Unité */}
+      {/* Colonne 3: Stock (Quantité + Unité) */}
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
           <span className={`font-semibold ${
@@ -165,7 +150,7 @@ export default function ProductTableRow({
         </div>
       </td>
 
-      {/* Prix d'achat */}
+      {/* Colonne 4: Prix d'achat */}
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
           <span className="font-medium text-slate-700">{formatPrice(purchaseCDF, 'CDF')}</span>
@@ -175,7 +160,7 @@ export default function ProductTableRow({
         </div>
       </td>
 
-      {/* Prix de vente */}
+      {/* Colonne 5: Prix de vente */}
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
           <span className="font-bold text-medical">{formatPrice(priceCDF, 'CDF')}</span>
@@ -190,41 +175,18 @@ export default function ProductTableRow({
         )}
       </td>
 
-      {/* Marge */}
-      <td className="px-4 py-3 text-right">
-        <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
-          margin >= 30 ? 'bg-green-100 text-green-700' :
-          margin >= 15 ? 'bg-blue-100 text-blue-700' :
-          margin > 0 ? 'bg-yellow-100 text-yellow-700' :
-          'bg-red-100 text-red-700'
-        }`}>
-          <TrendingDown size={12} className={margin >= 0 ? 'rotate-180' : ''} />
-          {margin.toFixed(1)}%
-        </div>
-      </td>
-
-      {/* Valeur du stock */}
-      <td className="px-4 py-3 text-right">
-        <div className="flex flex-col items-end">
-          <span className="font-medium text-slate-700">{formatPrice(valueCDF, 'CDF')}</span>
-          {exchangeRate !== 1 && (
-            <span className="text-xs text-slate-400">{formatPrice(valueUSD, 'USD')}</span>
-          )}
-        </div>
-      </td>
-
-      {/* Statuts */}
+      {/* Colonne 6: Statut (Stock + Expiration) */}
       <td className="px-4 py-3">
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-col gap-1">
           {/* Statut de stock */}
-          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getStockStatusStyle(product.stock_status)}`}>
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium w-fit ${getStockStatusStyle(product.stock_status)}`}>
             <Package size={10} />
             {getStockStatusText(product.stock_status, product.quantity || 0, product.alert_threshold || 0)}
           </span>
 
           {/* Statut d'expiration */}
           {expiryStatus && expiryStatus !== 'valid' && (
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${getExpiryStatusStyle(expiryStatus)}`}>
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium w-fit ${getExpiryStatusStyle(expiryStatus)}`}>
               <CalendarClock size={10} />
               {getExpiryStatusText(expiryStatus)}
             </span>
@@ -232,7 +194,7 @@ export default function ProductTableRow({
         </div>
       </td>
 
-      {/* Actions */}
+      {/* Colonne 7: Actions */}
       <td className="px-4 py-3 text-center">
         <div className="flex items-center justify-center gap-1">
           <button

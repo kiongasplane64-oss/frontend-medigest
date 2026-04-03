@@ -593,7 +593,6 @@ export default function InventoryListView({
         is_active: formData.is_active,
         pharmacy_id: effectivePharmacyId,
         branch_id: effectiveBranchId || undefined,
-        // Nouveaux champs
         calcul_auto_prix: calculAutoPrix && isAutomaticPricing,
         marge_par_defaut: defaultMargin,
         sales_type: salesType,
@@ -1428,16 +1427,8 @@ export default function InventoryListView({
               <table className="w-full">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">
-                      <button
-                        onClick={() => handleSort('name')}
-                        className="flex items-center gap-1 hover:text-slate-700"
-                      >
-                        Produit
-                        <ArrowUpDown size={12} />
-                      </button>
-                    </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Code</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Produit</th>
                     <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">
                       <button
                         onClick={() => handleSort('quantity')}
@@ -1447,12 +1438,13 @@ export default function InventoryListView({
                         <ArrowUpDown size={12} />
                       </button>
                     </th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Prix d'achat</th>
                     <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">
                       <button
                         onClick={() => handleSort('selling_price')}
                         className="flex items-center gap-1 hover:text-slate-700 ml-auto"
                       >
-                        Prix
+                        Prix de vente
                         <ArrowUpDown size={12} />
                       </button>
                     </th>

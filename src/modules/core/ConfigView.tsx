@@ -549,16 +549,27 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   };
 
-  const loadAvailableUsers = async () => {
+  // Ligne 575 - Correction
+const loadAvailableUsers = async () => {
   try {
+    // ✅ Correction : Utiliser le bon paramètre
     const response = await api.get('/users', {
       params: { tenant_id: pharmacyData?.tenant_id, limit: 100 }
     });
-    setAvailableUsers(response.data);
+    // Vérifier la structure de la réponse
+    if (response.data && Array.isArray(response.data)) {
+      setAvailableUsers(response.data);
+    } else if (response.data && response.data.items) {
+      setAvailableUsers(response.data.items);
+    } else {
+      setAvailableUsers([]);
+    }
   } catch (err) {
     console.error('Erreur lors du chargement des utilisateurs:', err);
+    setAvailableUsers([]);
   }
 };
+
   const checkServiceStatus = async () => {
     try {
       const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
