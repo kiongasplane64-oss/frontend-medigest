@@ -79,8 +79,6 @@ export default function ProductTableRow({
   onView,
   formatPrice,
   salesType = 'both',
-  exchangeRate = 1,
-  primaryCurrency = 'CDF',
 }: ProductTableRowProps) {
   
   // Obtenir le prix de vente selon le type de vente
@@ -102,24 +100,6 @@ export default function ProductTableRow({
   const expiryStatus = getExpiryStatus(product.expiry_date);
   const sellingPrice = getSellingPrice();
   const purchasePrice = getPurchasePrice();
-  
-  // Calculer les prix dans les deux devises
-  const getPriceInBothCurrencies = (price: number) => {
-    if (primaryCurrency === 'CDF') {
-      return {
-        cdf: price,
-        usd: price / exchangeRate,
-      };
-    } else {
-      return {
-        usd: price,
-        cdf: price * exchangeRate,
-      };
-    }
-  };
-
-  const { cdf: priceCDF, usd: priceUSD } = getPriceInBothCurrencies(sellingPrice);
-  const { cdf: purchaseCDF, usd: purchaseUSD } = getPriceInBothCurrencies(purchasePrice);
 
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50 transition-colors group">
@@ -150,23 +130,19 @@ export default function ProductTableRow({
         </div>
       </td>
 
-      {/* Colonne 4: Prix d'achat */}
+      {/* Colonne 4: Prix d'achat (uniquement en FC) */}
       <td className="px-4 py-3 text-right">
-        <div className="flex flex-col items-end">
-          <span className="font-medium text-slate-700">{formatPrice(purchaseCDF, 'CDF')}</span>
-          {exchangeRate !== 1 && (
-            <span className="text-xs text-slate-400">{formatPrice(purchaseUSD, 'USD')}</span>
-          )}
+        <div className="font-medium text-slate-700">
+          {formatPrice(purchasePrice, 'CDF')}
         </div>
       </td>
 
-      {/* Colonne 5: Prix de vente */}
+      {/* Colonne 5: Prix de vente (uniquement en FC) */}
       <td className="px-4 py-3 text-right">
         <div className="flex flex-col items-end">
-          <span className="font-bold text-medical">{formatPrice(priceCDF, 'CDF')}</span>
-          {exchangeRate !== 1 && (
-            <span className="text-xs text-slate-400">{formatPrice(priceUSD, 'USD')}</span>
-          )}
+          <span className="font-bold text-medical">
+            {formatPrice(sellingPrice, 'CDF')}
+          </span>
         </div>
         {salesType === 'both' && (product as any).selling_price_wholesale && (
           <div className="text-xs text-slate-400 mt-0.5">
