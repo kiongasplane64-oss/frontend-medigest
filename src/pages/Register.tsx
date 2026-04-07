@@ -18,6 +18,11 @@ interface Plan {
   features: string[];
   popular: boolean;
   icon: React.ElementType;
+  limits: {
+    max_users: number;
+    max_products: number;
+    max_pharmacies: number;
+  };
 }
 
 interface PharmacyType {
@@ -51,34 +56,60 @@ interface PasswordValidation {
   uppercase: boolean;
   lowercase: boolean;
   number: boolean;
-  special?: boolean;
+}
+
+interface AvailabilityCheck {
+  email: { available: boolean; message: string } | null;
+  pharmacy_name: { available: boolean; message: string; alternatives?: string[] } | null;
+  phone: { available: boolean; message: string } | null;
 }
 
 // Constantes
 const PLANS: Plan[] = [
   { 
+    id: 'trial', 
+    name: 'Essai Gratuit', 
+    price: '0$', 
+    features: ['5 Utilisateurs', '2000 Produits', '14 jours d\'essai', 'Support prioritaire'],
+    popular: true,
+    icon: Gift,
+    limits: { max_users: 5, max_products: 2000, max_pharmacies: 1 }
+  },
+  { 
     id: 'starter', 
     name: 'Starter', 
     price: '5$', 
-    features: ['2 Utilisateurs', '500 Produits', '1 Pharmacie'],
+    features: ['5 Utilisateurs', '1500 Produits', 'Support email'],
     popular: false,
-    icon: Users
+    icon: Users,
+    limits: { max_users: 5, max_products: 1500, max_pharmacies: 1 }
   },
   { 
     id: 'professional', 
     name: 'Professionnel', 
-    price: '10$', 
-    features: ['5 Utilisateurs', 'Illimité', '3 Pharmacies'],
-    popular: true,
-    icon: Package
+    price: '8$', 
+    features: ['20 Utilisateurs', '3000 Produits', 'Transferts inter-stocks', 'Support prioritaire'],
+    popular: false,
+    icon: Package,
+    limits: { max_users: 20, max_products: 3000, max_pharmacies: 3 }
   },
   { 
     id: 'enterprise', 
     name: 'Entreprise', 
     price: '15$', 
-    features: ['Utilisateurs ∞', 'Multi-dépôts', 'Support 24/7'],
+    features: ['20 Utilisateurs', '10000 Produits', 'API d\'inventaire', 'Support 24/7'],
     popular: false,
-    icon: Store
+    icon: Store,
+    limits: { max_users: 20, max_products: 10000, max_pharmacies: 0 }
+  },
+  { 
+    id: 'infinite', 
+    name: 'Infinite', 
+    price: '30$', 
+    features: ['Utilisateurs illimités', 'Produits illimités', 'Multi-dépôts', 'Support dédié'],
+    popular: false,
+    icon: Award,
+    limits: { max_users: 0, max_products: 0, max_pharmacies: 0 }
   },
 ];
 
@@ -115,7 +146,7 @@ const formatPhone = (phone: string): string => {
   return cleaned;
 };
 
-// Validation du mot de passe
+// Validation du mot de passe selon les règles backend
 const validatePassword = (password: string): PasswordValidation => {
   return {
     length: password.length >= 8,
@@ -147,6 +178,22 @@ export default function Register(): React.ReactElement {
     number: false,
   });
   
+  // État pour les vérifications de disponibilité en temps réel
+  const [availability, setAvailability] = useState<AvailabilityCheck>({
+    email: null,
+    pharmacy_name: null,
+    phone: null,
+  });
+  const [checkingAvailability, setCheckingAvailability] = useState<{
+    email: boolean;
+    pharmacy_name: boolean;
+    phone: boolean;
+  }>({
+    email: false,
+    pharmacy_name: false,
+    phone: false,
+  });
+  
   const [formData, setFormData] = useState<FormData>({
     email: '',
     password: '',
@@ -156,10 +203,15 @@ export default function Register(): React.ReactElement {
     ville: '',
     telephone: '',
     type_pharmacie: 'officine',
-    pays: 'RDC',
-    plan: 'professional',
-    plan_name: 'Professionnel'
+    pays: 'CD',
+    plan: 'trial',
+    plan_name: 'Essai gratuit'
   });
+
+  // Debounce timers
+  const [emailTimeout, setEmailTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [pharmacyNameTimeout, setPharmacyNameTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [phoneTimeout, setPhoneTimeout] = useState<NodeJS.Timeout | null>(null);
 
   // Validation du mot de passe en temps réel
   useEffect(() => {
@@ -193,34 +245,268 @@ export default function Register(): React.ReactElement {
     }
   }, [formData.plan]);
 
+  // Vérification de disponibilité en temps réel - EMAIL
+  const checkEmailAvailability = useCallback(async (email: string) => {
+    if (!email || email.length < 3) return;
+    
+    setCheckingAvailability(prev => ({ ...prev, email: true }));
+    try {
+      const result = await authService.checkAvailability({ email });
+      
+      if (result && result.checks) {
+        const emailCheck = result.checks.find(c => c.field === 'email');
+        if (emailCheck) {
+          setAvailability(prev => ({
+            ...prev,
+            email: {
+              available: emailCheck.available,
+              message: emailCheck.message
+            }
+          }));
+          
+          if (!emailCheck.available && result.suggestions) {
+            const emailSuggestion = result.suggestions.find(s => s.field === 'email');
+            if (emailSuggestion) {
+              setConflict({
+                error: 'email_already_used',
+                message: emailCheck.message,
+                suggestion: emailSuggestion.message
+              });
+            }
+          } else if (emailCheck.available && conflict?.error === 'email_already_used') {
+            setConflict(null);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erreur vérification email:', error);
+      setAvailability(prev => ({
+        ...prev,
+        email: { available: true, message: "Vérification temporairement indisponible" }
+      }));
+    } finally {
+      setCheckingAvailability(prev => ({ ...prev, email: false }));
+    }
+  }, [conflict]);
+
+  // Vérification de disponibilité - NOM PHARMACIE
+  const checkPharmacyNameAvailability = useCallback(async (name: string) => {
+    if (!name || name.length < 2) return;
+    
+    setCheckingAvailability(prev => ({ ...prev, pharmacy_name: true }));
+    try {
+      const result = await authService.checkAvailability({ pharmacy_name: name });
+      
+      if (result && result.checks) {
+        const pharmacyCheck = result.checks.find(c => c.field === 'pharmacy_name');
+        if (pharmacyCheck) {
+          setAvailability(prev => ({
+            ...prev,
+            pharmacy_name: {
+              available: pharmacyCheck.available,
+              message: pharmacyCheck.message,
+              alternatives: result.suggestions?.find(s => s.field === 'pharmacy_name')?.alternatives
+            }
+          }));
+          
+          if (!pharmacyCheck.available) {
+            const suggestion = result.suggestions?.find(s => s.field === 'pharmacy_name');
+            if (suggestion && suggestion.alternatives && suggestion.alternatives.length > 0) {
+              setConflict({
+                error: 'pharmacy_name_exists',
+                message: pharmacyCheck.message,
+                suggestion: suggestion.alternatives[0]
+              });
+            }
+          } else if (conflict?.error === 'pharmacy_name_exists') {
+            setConflict(null);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Erreur vérification nom pharmacie:', error);
+      setAvailability(prev => ({
+        ...prev,
+        pharmacy_name: { available: true, message: "Vérification temporairement indisponible" }
+      }));
+    } finally {
+      setCheckingAvailability(prev => ({ ...prev, pharmacy_name: false }));
+    }
+  }, [conflict]);
+
+  // Vérification de disponibilité - TELEPHONE
+  const checkPhoneAvailability = useCallback(async (phone: string) => {
+    if (!phone || phone.length < 6) return;
+    
+    setCheckingAvailability(prev => ({ ...prev, phone: true }));
+    try {
+      const result = await authService.checkPhoneExists(phone);
+      
+      setAvailability(prev => ({
+        ...prev,
+        phone: {
+          available: !result.exists,
+          message: result.exists ? 'Ce numéro est déjà utilisé' : 'Numéro disponible'
+        }
+      }));
+      
+      if (result.exists) {
+        setConflict({
+          error: 'phone_already_used',
+          message: result.message || 'Ce numéro de téléphone est déjà utilisé',
+          suggestion: result.email_hint || 'Utilisez un autre numéro'
+        });
+      } else if (conflict?.error === 'phone_already_used') {
+        setConflict(null);
+      }
+    } catch (error) {
+      console.error('Erreur vérification téléphone:', error);
+      setAvailability(prev => ({
+        ...prev,
+        phone: { available: true, message: "Vérification temporairement indisponible" }
+      }));
+    } finally {
+      setCheckingAvailability(prev => ({ ...prev, phone: false }));
+    }
+  }, [conflict]);
+
+  // Debounced checks
+  useEffect(() => {
+    if (emailTimeout) clearTimeout(emailTimeout);
+    const timeout = setTimeout(() => {
+      if (formData.email) {
+        checkEmailAvailability(formData.email);
+      }
+    }, 500);
+    setEmailTimeout(timeout);
+    
+    return () => clearTimeout(timeout);
+  }, [formData.email, checkEmailAvailability]);
+
+  useEffect(() => {
+    if (pharmacyNameTimeout) clearTimeout(pharmacyNameTimeout);
+    const timeout = setTimeout(() => {
+      if (formData.nom_pharmacie) {
+        checkPharmacyNameAvailability(formData.nom_pharmacie);
+      }
+    }, 500);
+    setPharmacyNameTimeout(timeout);
+    
+    return () => clearTimeout(timeout);
+  }, [formData.nom_pharmacie, checkPharmacyNameAvailability]);
+
+  useEffect(() => {
+    if (phoneTimeout) clearTimeout(phoneTimeout);
+    const timeout = setTimeout(() => {
+      if (formData.telephone && formData.telephone.length >= 6) {
+        checkPhoneAvailability(formData.telephone);
+      }
+    }, 500);
+    setPhoneTimeout(timeout);
+    
+    return () => clearTimeout(timeout);
+  }, [formData.telephone, checkPhoneAvailability]);
+
   const updateFormField = useCallback(<K extends keyof FormData>(field: K, value: FormData[K]) => {
     setFormData(prev => ({ ...prev, [field]: value }));
-    if (conflict) setConflict(null);
-  }, [conflict]);
+    if (field !== 'email' && field !== 'nom_pharmacie' && field !== 'telephone') {
+      setConflict(null);
+    }
+  }, []);
+
+  // Vérifier si l'étape 1 est valide - CORRIGÉE
+  const isStep1Valid = (): boolean => {
+    // Si la vérification n'a pas encore eu lieu (null), on considère que c'est bon
+    const emailValid = availability.email === null || availability.email?.available === true;
+    const passwordsMatch = formData.password === formData.confirm_password;
+    const passwordValid = isPasswordValid(passwordValidation);
+    
+    return (
+      formData.nom_complet.trim() !== '' &&
+      formData.email.trim() !== '' &&
+      passwordValid &&
+      passwordsMatch &&
+      emailValid
+    );
+  };
+
+  // Vérifier si l'étape 2 est valide - CORRIGÉE
+  const isStep2Valid = (): boolean => {
+    const pharmacyNameValid = availability.pharmacy_name === null || availability.pharmacy_name?.available === true;
+    const phoneValid = availability.phone === null || (availability.phone?.available === true && validatePhone(formData.telephone));
+    
+    return (
+      formData.nom_pharmacie.trim() !== '' &&
+      formData.ville.trim() !== '' &&
+      formData.telephone.trim() !== '' &&
+      pharmacyNameValid &&
+      phoneValid
+    );
+  };
+
+  // Vérifier si l'étape 3 est valide
+  const isStep3Valid = (): boolean => {
+    return formData.plan !== '';
+  };
+
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 Debug validation:', {
+      step: step,
+      email: { value: formData.email, availability: availability.email },
+      password: { valid: isPasswordValid(passwordValidation), matches: formData.password === formData.confirm_password },
+      nom_complet: !!formData.nom_complet,
+      nom_pharmacie: !!formData.nom_pharmacie,
+      ville: !!formData.ville,
+      telephone: { value: formData.telephone, valid: validatePhone(formData.telephone), availability: availability.phone },
+      isStep1Valid: isStep1Valid(),
+      isStep2Valid: isStep2Valid()
+    });
+  }, [formData, availability, step, passwordValidation]);
+
+  const handleNextStep = (): void => {
+    if (step === 1 && isStep1Valid()) {
+      setStep(2);
+    } else if (step === 2 && isStep2Valid()) {
+      setStep(3);
+    } else if (step === 1 && !isStep1Valid()) {
+      if (availability.email !== null && !availability.email?.available && formData.email) {
+        setPasswordError('Veuillez utiliser un email non utilisé');
+      } else if (!isPasswordValid(passwordValidation)) {
+        setPasswordError('Veuillez respecter toutes les règles de sécurité du mot de passe');
+      } else if (formData.password !== formData.confirm_password) {
+        setPasswordError('Les mots de passe ne correspondent pas');
+      }
+    } else if (step === 2 && !isStep2Valid()) {
+      if (availability.pharmacy_name !== null && !availability.pharmacy_name?.available && formData.nom_pharmacie) {
+        setConflict({
+          error: 'pharmacy_name_exists',
+          message: 'Ce nom de pharmacie est déjà utilisé',
+          suggestion: availability.pharmacy_name?.alternatives?.[0] || 'Ajoutez votre localisation'
+        });
+      } else if (availability.phone !== null && !availability.phone?.available && formData.telephone) {
+        setConflict({
+          error: 'phone_already_used',
+          message: 'Ce numéro de téléphone est déjà utilisé',
+          suggestion: 'Utilisez un autre numéro'
+        });
+      } else if (!validatePhone(formData.telephone)) {
+        alert('Numéro de téléphone invalide (9-12 chiffres requis)');
+      }
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     
-    // Validation du formulaire avant soumission
     if (step < 3) {
-      setStep(step + 1);
+      handleNextStep();
       return;
     }
 
-    // Validation finale du mot de passe
-    const validation = validatePassword(formData.password);
-    if (!isPasswordValid(validation)) {
-      setPasswordError('Veuillez respecter toutes les règles de sécurité du mot de passe');
-      return;
-    }
-
-    if (formData.password !== formData.confirm_password) {
-      setPasswordError('Les mots de passe ne correspondent pas');
-      return;
-    }
-
-    if (!validatePhone(formData.telephone)) {
-      alert('Numéro de téléphone invalide (9-12 chiffres requis)');
+    if (!isStep1Valid() || !isStep2Valid() || !isStep3Valid()) {
+      if (!isStep1Valid()) setStep(1);
+      else if (!isStep2Valid()) setStep(2);
       return;
     }
 
@@ -228,17 +514,22 @@ export default function Register(): React.ReactElement {
     setConflict(null);
 
     try {
-      // Préparer les données pour l'API
+      // Préparer les données pour l'API selon le schema TenantRegisterSchema
       const submissionData = {
-        ...formData,
-        telephone: formatPhone(formData.telephone),
         email: formData.email.toLowerCase().trim(),
+        password: formData.password,
+        confirm_password: formData.confirm_password,
         nom_complet: formData.nom_complet.trim(),
         nom_pharmacie: formData.nom_pharmacie.trim(),
-        ville: formData.ville.trim()
+        ville: formData.ville.trim(),
+        telephone: formatPhone(formData.telephone),
+        type_pharmacie: formData.type_pharmacie,
+        plan: formData.plan,
+        plan_name: formData.plan_name,
+        pays: formData.pays
       };
 
-      // Appel API
+      // Appel API d'inscription
       await authService.register(submissionData);
       
       // Stocker les identifiants pour affichage
@@ -265,11 +556,17 @@ export default function Register(): React.ReactElement {
       if (errorData && typeof errorData === 'object') {
         setConflict(errorData);
         
-        // Rediriger vers l'étape appropriée selon l'erreur
         if (errorData.error === 'pharmacy_name_exists' || errorData.error === 'phone_already_used') {
           setStep(2);
         } else if (errorData.error === 'email_already_used') {
           setStep(1);
+        } else if (errorData.error === 'tenant_creation_failed' || 
+                   errorData.error === 'admin_creation_failed' ||
+                   errorData.error === 'pharmacy_creation_failed' ||
+                   errorData.error === 'association_failed' ||
+                   errorData.error === 'subscription_creation_failed' ||
+                   errorData.error === 'database_error') {
+          alert(`${errorData.message}\n${errorData.suggestion || 'Contactez le support'}`);
         }
       } else {
         const errorMessage = typeof errorData === 'string' 
@@ -282,13 +579,13 @@ export default function Register(): React.ReactElement {
     }
   };
 
-  // Gestionnaire de suggestion pour le nom de pharmacie
   const handleSuggestionClick = useCallback((suggestion: string): void => {
     updateFormField('nom_pharmacie', suggestion);
-    setConflict(null);
-  }, [updateFormField]);
+    setTimeout(() => {
+      checkPharmacyNameAvailability(suggestion);
+    }, 100);
+  }, [updateFormField, checkPharmacyNameAvailability]);
 
-  // Composant de validation visuelle
   const ValidationItem = ({ label, isValid }: { label: string; isValid: boolean }) => (
     <li className={`flex items-center gap-2 text-xs ${isValid ? 'text-green-600' : 'text-slate-400'}`}>
       {isValid ? (
@@ -299,6 +596,38 @@ export default function Register(): React.ReactElement {
       <span className={isValid ? 'text-green-700' : 'text-slate-500'}>{label}</span>
     </li>
   );
+
+  const AvailabilityIndicator = ({ 
+    isAvailable, 
+    isChecking, 
+    message 
+  }: { 
+    isAvailable: boolean | null; 
+    isChecking: boolean; 
+    message: string | null;
+  }) => {
+    if (isChecking) {
+      return (
+        <div className="flex items-center gap-1 mt-1">
+          <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+          <span className="text-xs text-slate-400">Vérification...</span>
+        </div>
+      );
+    }
+    
+    if (isAvailable === null) return null;
+    
+    return (
+      <div className={`flex items-center gap-1 mt-1 ${isAvailable ? 'text-green-600' : 'text-orange-600'}`}>
+        {isAvailable ? (
+          <CheckCircle2 className="w-3 h-3" />
+        ) : (
+          <AlertCircle className="w-3 h-3" />
+        )}
+        <span className="text-xs">{message}</span>
+      </div>
+    );
+  };
 
   // Écran de confirmation post-inscription
   if (registrationSuccess) {
@@ -481,7 +810,8 @@ export default function Register(): React.ReactElement {
                     <AlertCircle className="text-orange-500 shrink-0" size={20} />
                     <div>
                       <p className="text-sm font-bold text-orange-800">{conflict.message}</p>
-                      <Link to="/login" className="text-sm text-orange-700 underline flex items-center mt-1 font-medium">
+                      <p className="text-xs text-orange-600 mt-1">{conflict.suggestion}</p>
+                      <Link to="/login" className="text-sm text-orange-700 underline flex items-center mt-2 font-medium">
                         Se connecter à ce compte <ChevronRight size={14} />
                       </Link>
                     </div>
@@ -500,21 +830,29 @@ export default function Register(): React.ReactElement {
                     />
                   </div>
                   
-                  <div className="relative group">
-                    <Mail className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
-                    <input 
-                      required 
-                      type="email"
-                      className={`w-full pl-10 pr-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
-                        conflict?.error === 'email_already_used' ? 'border-orange-300' : 'border-slate-200'
-                      }`}
-                      placeholder="Email professionnel"
-                      value={formData.email}
-                      onChange={e => updateFormField('email', e.target.value)}
+                  <div>
+                    <div className="relative group">
+                      <Mail className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
+                      <input 
+                        required 
+                        type="email"
+                        className={`w-full pl-10 pr-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                          conflict?.error === 'email_already_used' ? 'border-orange-300' : 
+                          availability.email?.available === false ? 'border-orange-300' :
+                          availability.email?.available === true ? 'border-green-500' : 'border-slate-200'
+                        }`}
+                        placeholder="Email professionnel"
+                        value={formData.email}
+                        onChange={e => updateFormField('email', e.target.value)}
+                      />
+                    </div>
+                    <AvailabilityIndicator 
+                      isAvailable={availability.email?.available ?? null}
+                      isChecking={checkingAvailability.email}
+                      message={availability.email?.message || null}
                     />
                   </div>
                   
-                  {/* Champ Mot de passe avec validation visuelle */}
                   <div>
                     <div className="relative group">
                       <Lock className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
@@ -537,7 +875,6 @@ export default function Register(): React.ReactElement {
                       </button>
                     </div>
                     
-                    {/* Barre de progression de la force du mot de passe */}
                     {formData.password && (
                       <div className="mt-2">
                         <div className="flex gap-1 h-1.5 mb-2">
@@ -555,30 +892,16 @@ export default function Register(): React.ReactElement {
                           }`} />
                         </div>
                         
-                        {/* Liste des règles de validation */}
                         <ul className="grid grid-cols-2 gap-1 mt-2">
-                          <ValidationItem 
-                            label="8 caractères minimum" 
-                            isValid={passwordValidation.length} 
-                          />
-                          <ValidationItem 
-                            label="Une majuscule" 
-                            isValid={passwordValidation.uppercase} 
-                          />
-                          <ValidationItem 
-                            label="Une minuscule" 
-                            isValid={passwordValidation.lowercase} 
-                          />
-                          <ValidationItem 
-                            label="Un chiffre" 
-                            isValid={passwordValidation.number} 
-                          />
+                          <ValidationItem label="8 caractères minimum" isValid={passwordValidation.length} />
+                          <ValidationItem label="Une majuscule" isValid={passwordValidation.uppercase} />
+                          <ValidationItem label="Une minuscule" isValid={passwordValidation.lowercase} />
+                          <ValidationItem label="Un chiffre" isValid={passwordValidation.number} />
                         </ul>
                       </div>
                     )}
                   </div>
 
-                  {/* Confirmation du mot de passe */}
                   <div className="relative group">
                     <Lock className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
                     <input 
@@ -634,25 +957,55 @@ export default function Register(): React.ReactElement {
                 {conflict?.error === 'pharmacy_name_exists' && conflict.suggestion && (
                   <div className="mb-6 p-4 bg-blue-50 border border-blue-100 rounded-xl">
                     <p className="text-sm font-bold text-blue-800 mb-2">{conflict.message}</p>
-                    <button 
-                      type="button"
-                      onClick={() => handleSuggestionClick(conflict.suggestion!)}
-                      className="text-[11px] bg-white border border-blue-200 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-600 hover:text-white transition-colors"
-                    >
-                      Utiliser : {conflict.suggestion}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => handleSuggestionClick(conflict.suggestion!)}
+                        className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-1.5 rounded-full hover:bg-blue-600 hover:text-white transition-colors"
+                      >
+                        Utiliser : {conflict.suggestion}
+                      </button>
+                      {availability.pharmacy_name?.alternatives?.map((alt, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleSuggestionClick(alt)}
+                          className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-1.5 rounded-full hover:bg-blue-600 hover:text-white transition-colors"
+                        >
+                          {alt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {conflict?.error === 'phone_already_used' && (
+                  <div className="mb-6 p-4 bg-orange-50 border border-orange-100 rounded-xl">
+                    <p className="text-sm font-bold text-orange-800">{conflict.message}</p>
+                    <p className="text-xs text-orange-600 mt-1">{conflict.suggestion}</p>
                   </div>
                 )}
 
                 <div className="grid gap-4">
-                  <div className="relative group">
-                    <Building2 className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
-                    <input 
-                      required
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-                      placeholder="Nom de la pharmacie"
-                      value={formData.nom_pharmacie}
-                      onChange={e => updateFormField('nom_pharmacie', e.target.value)}
+                  <div>
+                    <div className="relative group">
+                      <Building2 className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
+                      <input 
+                        required
+                        className={`w-full pl-10 pr-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                          conflict?.error === 'pharmacy_name_exists' ? 'border-orange-300' :
+                          availability.pharmacy_name?.available === false ? 'border-orange-300' :
+                          availability.pharmacy_name?.available === true ? 'border-green-500' : 'border-slate-200'
+                        }`}
+                        placeholder="Nom de la pharmacie"
+                        value={formData.nom_pharmacie}
+                        onChange={e => updateFormField('nom_pharmacie', e.target.value)}
+                      />
+                    </div>
+                    <AvailabilityIndicator 
+                      isAvailable={availability.pharmacy_name?.available ?? null}
+                      isChecking={checkingAvailability.pharmacy_name}
+                      message={availability.pharmacy_name?.message || null}
                     />
                   </div>
 
@@ -680,22 +1033,28 @@ export default function Register(): React.ReactElement {
                         onChange={e => updateFormField('ville', e.target.value)}
                       />
                     </div>
-                    <div className="relative group">
-                      <Phone className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
-                      <input 
-                        required
-                        className={`w-full pl-10 pr-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
-                          conflict?.error === 'phone_already_used' ? 'border-orange-300' : 'border-slate-200'
-                        }`}
-                        placeholder="Téléphone (ex: 081...)"
-                        value={formData.telephone}
-                        onChange={e => updateFormField('telephone', e.target.value)}
+                    <div>
+                      <div className="relative group">
+                        <Phone className="absolute left-3 top-3 text-slate-400 group-focus-within:text-blue-500 transition-colors" size={18} />
+                        <input 
+                          required
+                          className={`w-full pl-10 pr-4 py-3 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
+                            conflict?.error === 'phone_already_used' ? 'border-orange-300' :
+                            availability.phone?.available === false ? 'border-orange-300' :
+                            availability.phone?.available === true ? 'border-green-500' : 'border-slate-200'
+                          }`}
+                          placeholder="Téléphone (ex: 0812345678)"
+                          value={formData.telephone}
+                          onChange={e => updateFormField('telephone', e.target.value)}
+                        />
+                      </div>
+                      <AvailabilityIndicator 
+                        isAvailable={availability.phone?.available ?? null}
+                        isChecking={checkingAvailability.phone}
+                        message={availability.phone?.message || null}
                       />
                     </div>
                   </div>
-                  {conflict?.error === 'phone_already_used' && (
-                    <p className="text-[11px] text-orange-600 font-medium">{conflict.message}</p>
-                  )}
                 </div>
               </div>
             )}
@@ -844,33 +1203,41 @@ export default function Register(): React.ReactElement {
                 </button>
               )}
               
-              <button 
-                type="submit" 
-                disabled={
-                  loading || 
-                  (step === 1 && (!isPasswordValid(passwordValidation) || formData.password !== formData.confirm_password))
-                }
-                className={`bg-linear-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed ${
-                  step === 1 ? 'ml-auto' : ''
-                }`}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Création en cours...
-                  </>
-                ) : step === 3 ? (
-                  <>
-                    <Gift size={18} />
-                    Créer mon compte
-                  </>
-                ) : (
-                  <>
-                    Continuer
-                    <ArrowRight size={18} />
-                  </>
-                )}
-              </button>
+              {step < 3 ? (
+                <button 
+                  type="button"
+                  onClick={handleNextStep}
+                  disabled={
+                    loading || 
+                    (step === 1 && !isStep1Valid()) ||
+                    (step === 2 && !isStep2Valid())
+                  }
+                  className={`bg-linear-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    step === 1 ? 'ml-auto' : ''
+                  }`}
+                >
+                  Continuer
+                  <ArrowRight size={18} />
+                </button>
+              ) : (
+                <button 
+                  type="submit" 
+                  disabled={loading || !isStep3Valid()}
+                  className="bg-linear-to-r from-blue-600 to-indigo-600 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Création en cours...
+                    </>
+                  ) : (
+                    <>
+                      <Gift size={18} />
+                      Créer mon compte
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </form>
         </div>
