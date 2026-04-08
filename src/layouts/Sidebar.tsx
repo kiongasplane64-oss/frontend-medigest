@@ -6,11 +6,9 @@
  * - Navigation principale avec groupes extensibles
  * - Gestion des alertes unifiées (stock, expiration, transferts, abonnement)
  * - Affichage des badges de notifications
- * - Gestion des horaires de service
- * - Mode lecture seule pour abonnement expiré
  * - Responsive mobile
  * 
- * @version 2.0.0
+ * @version 3.0.0
  * @since 2026
  */
 
@@ -18,7 +16,6 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSubscription } from '@/hooks/useSubscription';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import api from '@/api/client';
 import { inventoryService } from '@/services/inventoryService';
 import { getTransfers, StockTransfer } from '@/services/transferService';
 import { 
@@ -28,13 +25,11 @@ import {
   LayoutDashboard, Menu, X, LogOut, ChevronDown,
   DollarSign, HelpCircle, History, ShoppingBag,
   LineChart, CreditCard, UsersRound, TruckIcon,
-  Clock, Calculator, Crown, Info, ClipboardList,
+  Calculator, Crown, ClipboardList,
   BarChart3, Receipt,
   ChartBar, ChartPie, ChartLine, FileBarChart
 } from 'lucide-react';
 import NotificationDrawer from './NotificationDrawer';
-import OutOfService from '@/modules/core/endehors';
-import { useTimezone } from '@/hooks/useTimezone';
 
 // ============================================================================
 // TYPES ET INTERFACES
@@ -79,47 +74,6 @@ interface MenuItem {
 interface MenuGroup {
   title: string;
   items: MenuItem[];
-}
-
-/**
- * Statut du service (horaires d'ouverture)
- */
-interface ServiceStatus {
-  in_service: boolean;
-  restrictions_enabled: boolean;
-  current_time_utc: string;
-  current_time_local: string;
-  timezone: string;
-  current_day: string;
-  is_working_day: boolean;
-  is_within_hours: boolean;
-  working_hours: {
-    start: string;
-    end: string;
-    overtime?: string;
-  };
-  message: string;
-  next_service_time?: string;
-}
-
-/**
- * Configuration des horaires de travail
- */
-interface WorkingHours {
-  enabled: boolean;
-  startTime: string;
-  endTime: string;
-  overtimeEndTime?: string;
-  timezone?: string;
-  daysOff: {
-    monday: boolean;
-    tuesday: boolean;
-    wednesday: boolean;
-    thursday: boolean;
-    friday: boolean;
-    saturday: boolean;
-    sunday: boolean;
-  };
 }
 
 // ============================================================================
@@ -259,27 +213,14 @@ const Sidebar: React.FC = () => {
     trialDaysRemaining
   } = useSubscription();
   
-  const timezoneHook = useTimezone();
-  const browserTimezone = timezoneHook.timezone;
-  const browserOffset = timezoneHook.offset;
-  
   // États UI
   const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>(menuGroups.map(g => g.title));
-  const [showServiceInfo, setShowServiceInfo] = useState<boolean>(false);
   
   // États des alertes
   const [pharmacyAlerts, setPharmacyAlerts] = useState<PharmacyAlert[]>([]);
-  
-  // États du service (horaires)
-  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
-  const [workingHours, setWorkingHours] = useState<WorkingHours | null>(null);
-  const [loadingService, setLoadingService] = useState<boolean>(true);
-  const [showOutOfService, setShowOutOfService] = useState<boolean>(false);
-  const [timeRemaining, setTimeRemaining] = useState<string | null>(null);
-  const [serviceError, setServiceError] = useState<boolean>(false);
 
   // ==========================================================================
   // DÉTECTION MOBILE
@@ -312,7 +253,6 @@ const Sidebar: React.FC = () => {
       try {
         const stockAlertsResponse = await inventoryService.getStockAlerts();
         
-        // Traitement des alertes STOCK_OUT (produits épuisés)
         const outOfStockAlerts = stockAlertsResponse.out_of_stock || [];
         if (Array.isArray(outOfStockAlerts) && outOfStockAlerts.length > 0) {
           outOfStockAlerts.forEach((alert: any) => {
@@ -327,7 +267,6 @@ const Sidebar: React.FC = () => {
           });
         }
         
-        // Traitement des alertes LOW_STOCK (stock bas)
         const lowStockAlerts = stockAlertsResponse.low_stock || [];
         if (Array.isArray(lowStockAlerts) && lowStockAlerts.length > 0) {
           lowStockAlerts.forEach((alert: any) => {
@@ -349,7 +288,6 @@ const Sidebar: React.FC = () => {
       try {
         const expiryAlertsResponse = await inventoryService.getExpiryAlerts(30);
         
-        // Traitement des produits expirés
         const expiredAlerts = expiryAlertsResponse.expired || [];
         if (Array.isArray(expiredAlerts) && expiredAlerts.length > 0) {
           expiredAlerts.forEach((alert: any) => {
@@ -364,7 +302,6 @@ const Sidebar: React.FC = () => {
           });
         }
         
-        // Traitement des produits bientôt expirés
         const expiringSoonAlerts = expiryAlertsResponse.expiring_soon || [];
         if (Array.isArray(expiringSoonAlerts) && expiringSoonAlerts.length > 0) {
           expiringSoonAlerts.forEach((alert: any) => {
@@ -439,7 +376,6 @@ const Sidebar: React.FC = () => {
         }
       }
 
-      // Trier par date (les plus récentes en premier)
       alerts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       
       setPharmacyAlerts(alerts);
@@ -454,147 +390,17 @@ const Sidebar: React.FC = () => {
     
     const interval = setInterval(() => {
       fetchPharmacyAlerts();
-    }, 60000); // Toutes les minutes
+    }, 60000);
     
     return () => clearInterval(interval);
   }, [fetchPharmacyAlerts]);
 
-  // ==========================================================================
-  // GESTION DES HORAIRES DE SERVICE
-  // ==========================================================================
-
-  /**
-   * Calcule le temps restant avant la fermeture
-   */
-  const calculateTimeRemaining = useCallback((): string | null => {
-    if (!serviceStatus?.in_service || !workingHours?.endTime) return null;
-
-    const now = new Date();
-    const [endHours, endMinutes] = workingHours.endTime.split(':').map(Number);
-    
-    const endTime = new Date();
-    endTime.setHours(endHours, endMinutes, 0);
-    
-    if (now > endTime) return null;
-    
-    const diffMs = endTime.getTime() - now.getTime();
-    const diffMinutes = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMinutes / 60);
-    const remainingMinutes = diffMinutes % 60;
-    
-    return diffHours > 0 ? `${diffHours}h ${remainingMinutes}min` : `${remainingMinutes}min`;
-  }, [serviceStatus, workingHours]);
-
-  // Charger la configuration du service
-  useEffect(() => {
-    const loadServiceStatus = async () => {
-      if (!user?.pharmacy_id) {
-        setLoadingService(false);
-        return;
-      }
-
-      try {
-        const configPromise = api.get<{ config: { workingHours: WorkingHours } }>(
-          `/pharmacies/${user.pharmacy_id}/config`,
-          { timeout: 5000 }
-        ).catch(() => null);
-        
-        const statusPromise = api.get<ServiceStatus>(
-          `/pharmacies/${user.pharmacy_id}/service-status`,
-          { timeout: 5000 }
-        ).catch(() => null);
-
-        const [configResponse, statusResponse] = await Promise.all([configPromise, statusPromise]);
-        
-        if (configResponse?.data?.config?.workingHours) {
-          setWorkingHours(configResponse.data.config.workingHours);
-        }
-
-        if (statusResponse?.data) {
-          setServiceStatus(statusResponse.data);
-          setShowOutOfService(!statusResponse.data.in_service);
-          setServiceError(false);
-        } else {
-          setServiceError(true);
-          setShowOutOfService(false);
-        }
-        
-      } catch (err) {
-        console.error('Erreur lors du chargement du service:', err);
-        setServiceError(true);
-        setShowOutOfService(false);
-      } finally {
-        setLoadingService(false);
-      }
-    };
-
-    loadServiceStatus();
-
-    const interval = setInterval(async () => {
-      if (user?.pharmacy_id) {
-        try {
-          const response = await api.get<ServiceStatus>(
-            `/pharmacies/${user.pharmacy_id}/service-status`,
-            { timeout: 5000 }
-          );
-          setServiceStatus(response.data);
-          setShowOutOfService(!response.data.in_service);
-          setServiceError(false);
-        } catch (err) {
-          console.error('Erreur lors de la vérification du service:', err);
-          setServiceError(true);
-        }
-      }
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [user]);
-
-  // Mettre à jour le temps restant
-  useEffect(() => {
-    if (serviceStatus?.in_service) {
-      setTimeRemaining(calculateTimeRemaining());
-      const timer = setInterval(() => {
-        setTimeRemaining(calculateTimeRemaining());
-      }, 60000);
-      return () => clearInterval(timer);
-    }
-  }, [serviceStatus, calculateTimeRemaining]);
-
-  // Intercepter la navigation pour vérifier le service
-  useEffect(() => {
-    const checkNavigation = async () => {
-      if (location.pathname === '/login' || location.pathname === '/logout' || 
-          location.pathname === '/out-of-service' || showOutOfService || serviceError) {
-        return;
-      }
-
-      if (!user?.pharmacy_id) return;
-
-      try {
-        const response = await api.get<ServiceStatus>(
-          `/pharmacies/${user.pharmacy_id}/service-status`,
-          { timeout: 5000 }
-        );
-        
-        if (!response.data.in_service) {
-          setShowOutOfService(true);
-        }
-      } catch (err) {
-        console.error('Erreur lors de la vérification du service:', err);
-        setServiceError(true);
-      }
-    };
-
-    checkNavigation();
-  }, [location.pathname, user, showOutOfService, serviceError]);
-
   // Fermer la sidebar sur mobile lors du changement de page
   useEffect(() => {
-    if (isMobile && !showOutOfService) {
+    if (isMobile) {
       setIsSidebarOpen(false);
     }
-  }, [location.pathname, isMobile, showOutOfService]);
+  }, [location.pathname, isMobile]);
 
   // ==========================================================================
   // LOGIQUE DE NAVIGATION
@@ -673,39 +479,6 @@ const Sidebar: React.FC = () => {
   }, [pharmacyAlerts]);
 
   // ==========================================================================
-  // RENDU CONDITIONNEL
-  // ==========================================================================
-
-  if (loadingService) {
-    return (
-      <div className="h-screen flex items-center justify-center">
-        <div className="text-center">
-          <Clock className="w-12 h-12 text-blue-600 animate-pulse mx-auto mb-4" />
-          <p className="text-slate-600">Chargement de l'application...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (showOutOfService && serviceStatus && !serviceError) {
-    const workingHoursForDisplay = workingHours ? {
-      enabled: workingHours.enabled,
-      startTime: workingHours.startTime,
-      endTime: workingHours.endTime,
-      overtimeEndTime: workingHours.overtimeEndTime,
-      daysOff: workingHours.daysOff
-    } : undefined;
-
-    return (
-      <OutOfService 
-        workingHours={workingHoursForDisplay}
-        message={serviceStatus?.message || "L'application n'est pas disponible en dehors des heures de service."}
-        nextServiceTime={serviceStatus?.next_service_time}
-      />
-    );
-  }
-
-  // ==========================================================================
   // RENDU PRINCIPAL
   // ==========================================================================
 
@@ -744,76 +517,10 @@ const Sidebar: React.FC = () => {
               <span className="text-[8px] sm:text-[10px] text-slate-400 uppercase font-bold tracking-widest">
                 {formatRole(userRole)}
               </span>
-              {serviceStatus?.in_service && !serviceError && (
-                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-green-100 rounded-full">
-                  <span className="text-[6px] sm:text-[8px] text-green-700 font-bold">EN SERVICE</span>
-                </div>
-              )}
-              {serviceError && (
-                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-yellow-100 rounded-full">
-                  <span className="text-[6px] sm:text-[8px] text-yellow-700 font-bold">MODE HORS LIGNE</span>
-                </div>
-              )}
             </div>
           </div>
           
           <div className="flex items-center gap-2">
-            {/* Info service */}
-            {!serviceError && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowServiceInfo(!showServiceInfo)}
-                  onBlur={() => setTimeout(() => setShowServiceInfo(false), 200)}
-                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all relative"
-                  aria-label="Informations service"
-                  title="Temps de service restant"
-                >
-                  <Info size={18} className="sm:w-5 sm:h-5" />
-                  {timeRemaining && (
-                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                  )}
-                </button>
-                
-                {showServiceInfo && (
-                  <div className="absolute right-0 top-10 w-64 bg-white rounded-xl shadow-xl border border-slate-200 p-3 z-50 text-xs">
-                    <h4 className="font-bold text-slate-700 mb-2 flex items-center gap-1">
-                      <Clock size={14} className="text-blue-500" />
-                      Horaires de service
-                    </h4>
-                    
-                    {workingHours && (
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-slate-600">
-                          <span>Heures:</span>
-                          <span className="font-medium">{workingHours.startTime} - {workingHours.endTime}</span>
-                        </div>
-                        
-                        {timeRemaining && (
-                          <div className="bg-green-50 p-2 rounded-lg">
-                            <p className="text-green-700 font-medium text-center">
-                              ⏳ Fermeture dans {timeRemaining}
-                            </p>
-                          </div>
-                        )}
-                        
-                        {workingHours.overtimeEndTime && (
-                          <div className="flex justify-between text-amber-600 text-[10px]">
-                            <span>Supplément:</span>
-                            <span>jusqu'à {workingHours.overtimeEndTime}</span>
-                          </div>
-                        )}
-                        
-                        <div className="border-t border-slate-100 pt-2 mt-1">
-                          <p className="text-[10px] text-slate-400 mb-1">Fuseau: {workingHours.timezone || 'Africa/Kinshasa'}</p>
-                          <p className="text-[10px] text-slate-400">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-            
             {/* Bouton notifications */}
             <button 
               onClick={() => setIsNotifOpen(true)}
@@ -902,7 +609,6 @@ const Sidebar: React.FC = () => {
                     const active = isActive(item.href);
                     let itemBadge: number | null = null;
                     
-                    // Calcul des badges selon le type d'élément
                     if (item.label === 'Stock') {
                       const stockAlertsCount = pharmacyAlerts.filter(
                         a => a.type === 'STOCK_OUT' || a.type === 'LOW_STOCK'

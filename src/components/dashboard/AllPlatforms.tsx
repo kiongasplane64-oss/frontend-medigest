@@ -58,9 +58,9 @@ import {
   MapPin,
   Chrome,
   Apple,
-  LayoutGrid,
   LogOut,
   RefreshCw,
+  LayoutGrid,
 } from 'lucide-react';
 
 // Constantes
@@ -69,7 +69,6 @@ const PLATFORM_ICONS = {
   mobile: <Smartphone className="h-4 w-4" />,
   tablet: <Tablet className="h-4 w-4" />,
   pos: <ShoppingCart className="h-4 w-4" />,
-  pwa: <LayoutGrid className="h-4 w-4" />,
 } as const;
 
 const PLATFORM_COLORS = {
@@ -77,7 +76,6 @@ const PLATFORM_COLORS = {
   mobile: '#10b981',
   tablet: '#f59e0b',
   pos: '#ef4444',
-  pwa: '#8b5cf6',
 } as const;
 
 const SCROLL_AREA_HEIGHT = 500;
@@ -647,7 +645,7 @@ export const AllPlatforms: React.FC = () => {
                         </h4>
                         {stat.platform === 'mobile' && (
                           <p className="text-sm text-muted-foreground">
-                            💡 Pensez à installer l'application PWA pour une expérience optimale sur mobile
+                            💡 Utilisez l'application mobile pour une expérience optimale sur mobile
                           </p>
                         )}
                         {stat.platform === 'web' && stat.sessions > 1 && (

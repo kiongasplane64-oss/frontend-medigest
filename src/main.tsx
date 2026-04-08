@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
-import { registerSW } from 'virtual:pwa-register'
+//import { registerSW } from 'virtual:pwa-register'
 // 1. Importer les outils de TanStack Query
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -18,7 +18,7 @@ const queryClient = new QueryClient({
 })
 
 // Met à jour automatiquement l'app quand une nouvelle version est dispo
-registerSW({ immediate: true })
+//registerSW({ immediate: true })
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
