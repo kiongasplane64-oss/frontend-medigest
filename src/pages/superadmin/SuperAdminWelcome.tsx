@@ -2,15 +2,15 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import {
-  Shield, LogIn, UserPlus, Loader2, Eye, EyeOff,
+  Shield, LogIn, UserPlus, Loader2,
   ArrowRight, WifiOff, ShieldAlert, Copy, Check
 } from 'lucide-react';
 import api from '@/api/client';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/store/useAuthStore';
-import { normalizeUser, LoginResponse, SetupResponse } from '@/types/auth';
+import { normalizeUser, SetupResponse } from '@/types/auth';
 
-interface LoginData { key: string; } // Changé: plus besoin d'email/password
+interface LoginData { key: string; }
 interface SetupData { email: string; password: string; nom_complet: string; setup_key: string; }
 
 interface SuperAdminLoginResponse {
@@ -25,6 +25,7 @@ interface SuperAdminLoginResponse {
     email: string;
     nom_complet: string;
     role: string;
+    actif?: boolean;
     is_newly_created?: boolean;
   };
   temp_password?: string;
@@ -37,7 +38,6 @@ export default function SuperAdminWelcome() {
   
   // États UI
   const [mode, setMode] = useState<'login' | 'create'>('login');
-  const [visibility, setVisibility] = useState({ password: false });
   const [copied, setCopied] = useState(false);
   
   // États d'accès
@@ -65,17 +65,15 @@ export default function SuperAdminWelcome() {
     }
   }, [isAuthenticated, isSuperAdmin, authLoading, navigate]);
 
-  // 2. LOGIQUE DE VÉRIFICATION DE LA CLÉ (maintenant via le nouveau endpoint)
+  // 2. LOGIQUE DE VÉRIFICATION DE LA CLÉ
   const verifyKeyOnServer = useCallback(async (key: string) => {
     try {
-      // Utiliser le nouveau endpoint qui vérifie ET génère un token
       const { data } = await api.post<SuperAdminLoginResponse>('/auth/super-admin/login', { key });
       
       if (data.access_token) {
         setKeyValid(true);
         console.log('✅ Clé super admin valide, token généré');
         
-        // Si c'est une nouvelle création, stocker les identifiants temporaires
         if (data.user.is_newly_created && data.temp_password) {
           setTempCredentials({
             email: data.user.email,
@@ -119,7 +117,7 @@ export default function SuperAdminWelcome() {
     verifyKeyOnServer(tempKey);
   }, [navigate, verifyKeyOnServer]);
 
-  // NOUVEAU: Mutation pour le login super admin avec clé (token 100 ans)
+  // Mutation pour le login super admin
   const superAdminLoginMutation = useMutation({
     mutationFn: (data: LoginData) => api.post<SuperAdminLoginResponse>('/auth/super-admin/login', data).then(res => res.data),
     onSuccess: (data) => {
@@ -142,21 +140,29 @@ export default function SuperAdminWelcome() {
         return;
       }
 
-      // Normaliser l'utilisateur
-      const normalizedUser = normalizeUser(data.user);
+      // Créer l'objet utilisateur avec actif par défaut à true si non fourni
+      const userForStore = {
+        id: data.user.id,
+        email: data.user.email,
+        nom_complet: data.user.nom_complet,
+        role: data.user.role,
+        actif: data.user.actif ?? true,
+        ...(data.user.is_newly_created && { is_newly_created: data.user.is_newly_created })
+      };
+      
+      // Normaliser l'utilisateur avec la fonction existante
+      const normalizedUser = normalizeUser(userForStore);
       
       console.log('💾 Sauvegarde du token (100 ans) et de l\'utilisateur...');
       
-      // ✅ Sauvegarde explicite dans localStorage
+      // Sauvegarde explicite dans localStorage
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('user', JSON.stringify(normalizedUser));
       
-      // Sauvegarder le refresh token
       if (data.refresh_token) {
         localStorage.setItem('refresh_token', data.refresh_token);
       }
       
-      // Optionnel: sauvegarder l'expiration (pour info)
       localStorage.setItem('token_expires_at', (Date.now() + data.expires_in * 1000).toString());
       
       console.log('✅ Données sauvegardées dans localStorage:', {
@@ -169,15 +175,12 @@ export default function SuperAdminWelcome() {
       // Mettre à jour le store
       setAuth(normalizedUser, data.access_token, data.refresh_token || null);
       
-      // Afficher un message spécial pour le token 100 ans
       toast.success(`Bienvenue, Super Admin ! Token valable ${(data.expires_in / (365 * 24 * 60 * 60)).toFixed(0)} ans.`);
       
       sessionStorage.removeItem('super_admin_temp_key');
       
-      // Nettoyer les identifiants temporaires si présents
       setTempCredentials(null);
       
-      // ✅ Navigation vers le dashboard
       setTimeout(() => {
         console.log('🚀 Navigation vers /super-admin');
         navigate('/super-admin', { replace: true });
@@ -219,7 +222,7 @@ export default function SuperAdminWelcome() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Affichage du loader pendant la vérification initiale
+  // Affichage du loader
   if (isChecking || authLoading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -228,7 +231,7 @@ export default function SuperAdminWelcome() {
     );
   }
 
-  // Écran d'erreur si la clé est invalide
+  // Écran d'erreur
   if (keyValid === false) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
@@ -258,7 +261,7 @@ export default function SuperAdminWelcome() {
           )}
         </header>
 
-        {/* Affichage des identifiants temporaires si création récente */}
+        {/* Affichage des identifiants temporaires */}
         {tempCredentials && (
           <div className="mb-6 bg-green-50 border border-green-200 rounded-xl p-4">
             <div className="flex items-center justify-between mb-2">
@@ -336,8 +339,14 @@ export default function SuperAdminWelcome() {
           ) : (
             <form onSubmit={(e) => {
               e.preventDefault();
-              if (createData.password !== createData.confirmPassword) return toast.error("Mots de passe différents");
-              if (createData.password.length < 8) return toast.error("Le mot de passe doit faire 8 caractères minimum");
+              if (createData.password !== createData.confirmPassword) {
+                toast.error("Mots de passe différents");
+                return;
+              }
+              if (createData.password.length < 8) {
+                toast.error("Le mot de passe doit faire 8 caractères minimum");
+                return;
+              }
               createMutation.mutate({ ...createData, setup_key: storedKey || '' });
             }} className="space-y-4">
               {errors.create && <div className="text-red-600 text-sm bg-red-50 p-3 rounded-lg border border-red-100">{errors.create}</div>}
