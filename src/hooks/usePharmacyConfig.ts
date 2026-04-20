@@ -16,10 +16,12 @@ interface UsePharmacyConfigReturn {
   defaultMargin: number;
   isAutomaticPricing: boolean;
   workingHours: PharmacyConfig['workingHours'] | null;
-  salesType: SalesType; // AJOUTÉ : type de vente configuré
-  automaticPricingMethod: string; // AJOUTÉ : méthode de calcul automatique
-  automaticPricingValue: number; // AJOUTÉ : valeur pour le calcul automatique
-  calculAutoPrix: boolean; // AJOUTÉ : flag pour calcul auto des prix
+  salesType: SalesType;
+  automaticPricingMethod: string;
+  automaticPricingValue: number;
+  calculAutoPrix: boolean;
+  isOpenNow: boolean;
+  getNextOpeningTime: () => string | null;
 }
 
 const DEFAULT_CONFIG: Partial<PharmacyConfig> = {
@@ -27,7 +29,7 @@ const DEFAULT_CONFIG: Partial<PharmacyConfig> = {
   taxRate: 0,
   lowStockThreshold: 10,
   expiryWarningDays: 30,
-  salesType: 'both', // AJOUTÉ : valeur par défaut
+  salesType: 'both',
   marginConfig: {
     defaultMargin: 25,
     minMargin: 10,
@@ -59,6 +61,82 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
   XOF: 'CFA',
 };
 
+// Fonction utilitaire pour calculer si la pharmacie est ouverte
+const calculateIsOpenNow = (workingHours: PharmacyConfig['workingHours'] | null | undefined): boolean => {
+  if (!workingHours?.enabled) return true;
+  
+  const now = new Date();
+  const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentMinutes = currentHour * 60 + currentMinute;
+  
+  // Vérifier si le jour est ouvert
+  const daysOff = workingHours.daysOff || {};
+  const isOpenToday = daysOff[currentDay] !== false; // true si ouvert
+  
+  if (!isOpenToday) return false;
+  
+  // Convertir les heures
+  const [startHour, startMinute] = (workingHours.startTime || '08:00').split(':').map(Number);
+  const [endHour, endMinute] = (workingHours.endTime || '20:00').split(':').map(Number);
+  
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+  
+  // Gérer le cas où la plage traverse minuit
+  if (endMinutes < startMinutes) {
+    return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+  }
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+};
+
+// Fonction utilitaire pour calculer la prochaine ouverture
+const calculateNextOpeningTime = (workingHours: PharmacyConfig['workingHours'] | null | undefined): string | null => {
+  if (!workingHours?.enabled) return null;
+  
+  const now = new Date();
+  const currentDay = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentMinutes = currentHour * 60 + currentMinute;
+  
+  const daysOff = workingHours.daysOff || {};
+  const startTimeStr = workingHours.startTime || '08:00';
+  const [startHour, startMinute] = startTimeStr.split(':').map(Number);
+  const startMinutes = startHour * 60 + startMinute;
+  
+  const daysOrder = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const dayNamesFr: Record<string, string> = {
+    monday: 'lundi', tuesday: 'mardi', wednesday: 'mercredi',
+    thursday: 'jeudi', friday: 'vendredi', saturday: 'samedi', sunday: 'dimanche'
+  };
+  
+  // Vérifier si on est ouvert aujourd'hui mais pas encore ouvert
+  const isOpenToday = daysOff[currentDay] !== false;
+  if (isOpenToday && currentMinutes < startMinutes) {
+    return `${startTimeStr} (aujourd'hui)`;
+  }
+  
+  // Chercher le prochain jour ouvert
+  const currentIndex = daysOrder.indexOf(currentDay);
+  for (let i = 1; i <= 7; i++) {
+    const nextIndex = (currentIndex + i) % 7;
+    const nextDay = daysOrder[nextIndex];
+    const isOpen = daysOff[nextDay] !== false;
+    
+    if (isOpen) {
+      const dayName = dayNamesFr[nextDay] || nextDay;
+      if (i === 1) {
+        return `${startTimeStr} demain`;
+      }
+      return `${startTimeStr} ${dayName}`;
+    }
+  }
+  
+  return null;
+};
+
 /**
  * Hook pour récupérer et gérer la configuration d'une pharmacie
  * @param pharmacyId - ID de la pharmacie (optionnel)
@@ -82,35 +160,29 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
       console.log('usePharmacyConfig: Récupération config pour pharmacyId:', pharmacyId);
 
       try {
-        // Essayer de récupérer la configuration via l'API des pharmacies
         const response = await api.get(`/pharmacies/${pharmacyId}/config`);
         console.log('usePharmacyConfig: Config récupérée depuis /config:', response.data);
         
-        // S'assurer que salesType est présent
-        const config = response.data?.config || response.data;
+        const configData = response.data?.config || response.data;
         
-        // Si config est un objet direct (pas encapsulé dans .config)
-        if (config && typeof config === 'object') {
+        if (configData && typeof configData === 'object') {
           return {
-            ...config,
-            salesType: config.salesType || DEFAULT_CONFIG.salesType,
+            ...configData,
+            salesType: configData.salesType || DEFAULT_CONFIG.salesType,
           };
         }
         
-        return config;
+        return configData;
       } catch (err) {
         console.warn('usePharmacyConfig: Impossible de récupérer la config depuis /config, tentative alternative...', err);
 
         try {
-          // Fallback: récupérer la pharmacie complète
           const response = await api.get(`/pharmacies/${pharmacyId}`);
           console.log('usePharmacyConfig: Pharmacie récupérée:', response.data);
           
-          // Extraire la configuration des paramètres de la pharmacie
           const pharmacy = response.data;
-          const config = pharmacy?.config || {};
+          const configData = pharmacy?.config || {};
           
-          // Construire la configuration à partir des champs explicites si présents
           const fallbackConfig: Partial<PharmacyConfig> = {
             primaryCurrency: pharmacy?.primary_currency || pharmacy?.primaryCurrency || DEFAULT_CONFIG.primaryCurrency,
             taxRate: pharmacy?.tax_rate ?? pharmacy?.taxRate ?? DEFAULT_CONFIG.taxRate,
@@ -124,7 +196,7 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
           };
           
           return {
-            ...config,
+            ...configData,
             ...fallbackConfig,
           };
         } catch (fallbackErr) {
@@ -133,8 +205,8 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
         }
       }
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes (réduit pour plus de réactivité)
-    gcTime: 10 * 60 * 1000, // 10 minutes
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
     enabled: !!pharmacyId,
     retry: 2,
     retryDelay: 1000,
@@ -142,7 +214,6 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
 
   // Configuration fusionnée avec les valeurs par défaut
   const config = useMemo<PharmacyConfig | null>(() => {
-    // Si pas de pharmacyId, retourner null (pas de configuration)
     if (!pharmacyId) {
       console.log('usePharmacyConfig: Pas de pharmacyId, configuration null');
       return null;
@@ -160,9 +231,7 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
         ...DEFAULT_CONFIG.automaticPricing,
         ...(pharmacyData?.automaticPricing || {}),
       },
-      // S'assurer que salesType est défini
       salesType: (pharmacyData?.salesType || DEFAULT_CONFIG.salesType) as SalesType,
-      // S'assurer que calcul_auto_prix est défini
       calcul_auto_prix: pharmacyData?.calcul_auto_prix ?? DEFAULT_CONFIG.calcul_auto_prix,
       marge_par_defaut: pharmacyData?.marge_par_defaut ?? DEFAULT_CONFIG.marge_par_defaut,
       taux_tva: pharmacyData?.taux_tva ?? DEFAULT_CONFIG.taux_tva,
@@ -228,10 +297,18 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
     return config?.workingHours ?? null;
   }, [config]);
 
+  // Calculer si la pharmacie est ouverte
+  const isOpenNow = useMemo(() => {
+    return calculateIsOpenNow(workingHours);
+  }, [workingHours]);
+
+  // Calculer la prochaine heure d'ouverture
+  const getNextOpeningTime = useMemo(() => {
+    return () => calculateNextOpeningTime(workingHours);
+  }, [workingHours]);
+
   /**
    * Formate un prix selon la configuration de la pharmacie
-   * @param price - Prix à formater (nombre, string, undefined, null)
-   * @returns Chaîne formatée avec la devise
    */
   const formatPrice = useMemo(() => {
     return (price: number | string | undefined | null): string => {
@@ -251,11 +328,9 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
         numericPrice = price;
       }
 
-      // Recherche la devise active
-      const activeCurrency = config?.currencies?.find(c => c.code === primaryCurrency && c.isActive);
+      const activeCurrency = config?.currencies?.find((c: { code: string; isActive: boolean }) => c.code === primaryCurrency && c.isActive);
       const symbol = activeCurrency?.symbol || CURRENCY_SYMBOLS[primaryCurrency] || primaryCurrency;
 
-      // Formatage selon la devise
       let formattedValue: string;
       if (primaryCurrency === 'USD' || primaryCurrency === 'EUR' || primaryCurrency === 'GBP') {
         formattedValue = numericPrice.toLocaleString('en-US', {
@@ -263,7 +338,6 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
           maximumFractionDigits: 2,
         });
       } else {
-        // Pour CDF, XAF, etc. - pas de décimales
         formattedValue = Math.round(numericPrice).toLocaleString('fr-FR', {
           minimumFractionDigits: 0,
           maximumFractionDigits: 0,
@@ -291,10 +365,12 @@ export function usePharmacyConfig(pharmacyId?: string): UsePharmacyConfigReturn 
     defaultMargin,
     isAutomaticPricing,
     workingHours,
-    salesType, // AJOUTÉ
-    automaticPricingMethod, // AJOUTÉ
-    automaticPricingValue, // AJOUTÉ
-    calculAutoPrix, // AJOUTÉ
+    salesType,
+    automaticPricingMethod,
+    automaticPricingValue,
+    calculAutoPrix,
+    isOpenNow,
+    getNextOpeningTime,
   };
 }
 

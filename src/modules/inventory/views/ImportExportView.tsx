@@ -66,7 +66,12 @@ export default function ImportExportView({ pharmacyId, branchId }: ImportExportV
 
   const handleStartImport = async () => {
     if (selectedFile) {
-      await importProducts(selectedFile, importMode, duplicateActions);
+      // Forcer preserve_prices et preserve_quantities à true
+      // Les prix et quantités du fichier source sont toujours préservés
+      await importProducts(selectedFile, importMode, duplicateActions, {
+        preserve_prices: true,     // Toujours true - les prix ne sont jamais recalculés
+        preserve_quantities: true  // Toujours true - les quantités ne sont jamais modifiées
+      });
     }
   };
 
@@ -83,26 +88,50 @@ export default function ImportExportView({ pharmacyId, branchId }: ImportExportV
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // Fonction d'export corrigée
   const handleExportWithFilters = async () => {
-    const exportParams: any = {
+    if (!pharmacyId) {
+      console.error('Aucune pharmacie sélectionnée pour l\'export');
+      return;
+    }
+
+    // Construire les paramètres d'export
+    const exportParams: {
+      pharmacy_id: string;
+      branch_id?: string;
+      stock_status?: string;
+      expiry_status?: string;
+      category_id?: string;
+      search?: string;
+    } = {
       pharmacy_id: pharmacyId,
-      ...(branchId && { branch_id: branchId }),
     };
     
-    if (exportFilters.stock_status) {
-      exportParams.stock_status = exportFilters.stock_status;
-    }
-    if (exportFilters.expiry_status) {
-      exportParams.expiry_status = exportFilters.expiry_status;
-    }
-    if (exportFilters.category_id) {
-      exportParams.category_id = exportFilters.category_id;
-    }
-    if (exportFilters.search) {
-      exportParams.search = exportFilters.search;
+    // Ajouter branch_id seulement si présent
+    if (branchId && branchId.trim()) {
+      exportParams.branch_id = branchId;
     }
     
-    await exportStock(exportParams);
+    // Ajouter les filtres non vides
+    if (exportFilters.stock_status && exportFilters.stock_status !== '') {
+      exportParams.stock_status = exportFilters.stock_status;
+    }
+    if (exportFilters.expiry_status && exportFilters.expiry_status !== '') {
+      exportParams.expiry_status = exportFilters.expiry_status;
+    }
+    if (exportFilters.category_id && exportFilters.category_id !== '') {
+      exportParams.category_id = exportFilters.category_id;
+    }
+    if (exportFilters.search && exportFilters.search.trim() !== '') {
+      exportParams.search = exportFilters.search.trim();
+    }
+    
+    try {
+      // Appeler exportStock avec le format et les paramètres
+      await exportStock(exportFormat, exportParams);
+    } catch (error) {
+      console.error('Erreur lors de l\'export:', error);
+    }
   };
 
   const handleFormatChange = (format: ExportFormat) => {
@@ -166,6 +195,23 @@ export default function ImportExportView({ pharmacyId, branchId }: ImportExportV
                 <FileText size={18} />
                 {isDownloadingTemplate ? 'Téléchargement...' : 'Template CSV'}
               </button>
+            </div>
+
+            {/* Options de préservation des données - TOUJOURS ACTIVES */}
+            <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+              <p className="text-sm font-medium text-green-800 mb-2">✅ Protection des données importées</p>
+              <div className="flex items-center gap-2 text-sm text-green-700 mb-2">
+                <div className="h-5 w-5 bg-green-500 rounded-full flex items-center justify-center text-white text-xs font-bold">✓</div>
+                <span><strong>Prix d'achat et de vente conservés</strong> - Aucun recalcul automatique</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-green-700">
+                <div className="h-5 w-5 bg-green-500 rounded-full flex items-center justify-center text-white text-xs font-bold">✓</div>
+                <span><strong>Quantités exactes conservées</strong> - Pas de modification automatique</span>
+              </div>
+              <p className="text-xs text-green-700 mt-3 pt-2 border-t border-green-200">
+                ⚠️ <strong>Important:</strong> Les prix et quantités du fichier source sont toujours préservés. 
+                Aucun recalcul automatique n'est appliqué, même si la configuration de prix automatique est activée.
+              </p>
             </div>
 
             {/* Sélection fichier */}
@@ -304,6 +350,9 @@ export default function ImportExportView({ pharmacyId, branchId }: ImportExportV
                     </div>
                     <div className="text-sm text-green-600 mt-1">
                       {result.message || `${result.created} produits créés, ${result.updated} mis à jour, ${result.skipped} ignorés`}
+                    </div>
+                    <div className="text-xs text-green-600 mt-2 pt-1 border-t border-green-200">
+                      ✅ Les prix et quantités ont été importés sans modification
                     </div>
                   </div>
                 )}
@@ -453,6 +502,7 @@ export default function ImportExportView({ pharmacyId, branchId }: ImportExportV
           <li>• Les colonnes optionnelles: code, code-barres, date_expiration, catégorie, fournisseur, lot</li>
           <li>• Le prix de vente en <strong>{primaryCurrency}</strong> est requis pour chaque produit</li>
           <li>• Les dates d'expiration doivent être au format <strong>YYYY-MM-DD</strong></li>
+          <li>• <strong className="text-blue-800">✅ Important:</strong> Les prix et quantités importés sont toujours conservés sans modification</li>
           {branchId && (
             <li>• Les produits seront automatiquement liés à la branche <strong>{branchId}</strong></li>
           )}

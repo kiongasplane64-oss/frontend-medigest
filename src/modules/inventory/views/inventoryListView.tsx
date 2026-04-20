@@ -429,29 +429,34 @@ export default function InventoryListView({
   }, [calculateSellingPrice, config, formData.purchase_price, formData.has_tva, formData.tva_rate]);
 
   // Mettre à jour les prix automatiquement
+  //useEffect(() => {
+  // if (!calculAutoPrix || !isAutomaticPricing || toNumber(formData.purchase_price, 0) <= 0) {
+  //    return;
+  //  }
+
+  //  setFormData((prev) => {
+  //    const next = { ...prev };
+
+  //    if (salesType === 'wholesale') {
+   //     next.selling_price_wholesale = suggestedPrices.wholesale;
+   //     next.selling_price = suggestedPrices.wholesale;
+   //   } else if (salesType === 'retail') {
+   //     next.selling_price_retail = suggestedPrices.retail;
+   //     next.selling_price = suggestedPrices.retail;
+   //   } else {
+   //     next.selling_price_wholesale = suggestedPrices.wholesale;
+   //     next.selling_price_retail = suggestedPrices.retail;
+   //     next.selling_price = suggestedPrices.retail;
+  //    }
+
+  //    return next;
+  //  });
+  //}, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
   useEffect(() => {
-    if (!calculAutoPrix || !isAutomaticPricing || toNumber(formData.purchase_price, 0) <= 0) {
-      return;
-    }
-
-    setFormData((prev) => {
-      const next = { ...prev };
-
-      if (salesType === 'wholesale') {
-        next.selling_price_wholesale = suggestedPrices.wholesale;
-        next.selling_price = suggestedPrices.wholesale;
-      } else if (salesType === 'retail') {
-        next.selling_price_retail = suggestedPrices.retail;
-        next.selling_price = suggestedPrices.retail;
-      } else {
-        next.selling_price_wholesale = suggestedPrices.wholesale;
-        next.selling_price_retail = suggestedPrices.retail;
-        next.selling_price = suggestedPrices.retail;
-      }
-
-      return next;
-    });
-  }, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
+    // Le calcul automatique des prix est DÉSACTIVÉ
+    // Les prix saisis manuellement sont conservés tels quels
+    return;
+  }, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType]);
 
   // Vérifier l'existence d'un code-barres
   const checkBarcodeExists = useCallback(
@@ -513,7 +518,7 @@ export default function InventoryListView({
   }, [checkBarcodeExists]);
 
   // Soumettre le formulaire
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError(null);
 
@@ -530,43 +535,21 @@ export default function InventoryListView({
     setIsSubmitting(true);
 
     try {
-      // Déterminer le prix de vente selon le mode
+      // Utiliser TOUJOURS les prix saisis manuellement, jamais de calcul automatique
       let sellingPriceValue = 0;
       let sellingPriceWholesaleValue: number | undefined = undefined;
       let sellingPriceRetailValue: number | undefined = undefined;
       
-      if (calculAutoPrix && isAutomaticPricing) {
-        // Calcul automatique
-        const calculatedPrice = calculateSellingPrice(
-          formData.purchase_price, 
-          formData.has_tva, 
-          formData.tva_rate
-        );
-        
-        if (salesType === 'wholesale') {
-          sellingPriceWholesaleValue = calculatedPrice;
-          sellingPriceValue = calculatedPrice;
-        } else if (salesType === 'retail') {
-          sellingPriceRetailValue = calculatedPrice;
-          sellingPriceValue = calculatedPrice;
-        } else {
-          sellingPriceRetailValue = calculatedPrice;
-          sellingPriceWholesaleValue = calculatedPrice * 0.85; // 15% de remise pour le gros
-          sellingPriceValue = calculatedPrice;
-        }
+      if (salesType === 'wholesale') {
+        sellingPriceWholesaleValue = formData.selling_price_wholesale;
+        sellingPriceValue = formData.selling_price_wholesale;
+      } else if (salesType === 'retail') {
+        sellingPriceRetailValue = formData.selling_price_retail;
+        sellingPriceValue = formData.selling_price_retail;
       } else {
-        // Prix manuel
-        if (salesType === 'wholesale') {
-          sellingPriceWholesaleValue = formData.selling_price_wholesale;
-          sellingPriceValue = formData.selling_price_wholesale;
-        } else if (salesType === 'retail') {
-          sellingPriceRetailValue = formData.selling_price_retail;
-          sellingPriceValue = formData.selling_price_retail;
-        } else {
-          sellingPriceRetailValue = formData.selling_price_retail;
-          sellingPriceWholesaleValue = formData.selling_price_wholesale;
-          sellingPriceValue = formData.selling_price_retail;
-        }
+        sellingPriceRetailValue = formData.selling_price_retail;
+        sellingPriceWholesaleValue = formData.selling_price_wholesale;
+        sellingPriceValue = formData.selling_price_retail;
       }
 
       const payload: ProductCreate = {
@@ -593,7 +576,8 @@ export default function InventoryListView({
         is_active: formData.is_active,
         pharmacy_id: effectivePharmacyId,
         branch_id: effectiveBranchId || undefined,
-        calcul_auto_prix: calculAutoPrix && isAutomaticPricing,
+        // Désactiver le calcul automatique
+        calcul_auto_prix: false,
         marge_par_defaut: defaultMargin,
         sales_type: salesType,
       };
@@ -1053,33 +1037,18 @@ export default function InventoryListView({
                 />
               </div>
 
-              {/* Bloc de contrôle du calcul automatique */}
+              {/* Bloc de contrôle du calcul automatique - DÉSACTIVÉ */}
               <div className="md:col-span-3">
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
                   <div>
                     <span className="font-medium text-slate-700">Calcul automatique du prix</span>
                     <p className="text-xs text-slate-500 mt-1">
-                      {calculAutoPrix && isAutomaticPricing 
-                        ? "Le prix sera calculé automatiquement selon la configuration" 
-                        : !isAutomaticPricing 
-                          ? "Le calcul automatique est désactivé dans la configuration"
-                          : "Le prix sera saisi manuellement"}
+                      ⚠️ Le calcul automatique est désactivé. Les prix sont conservés tels quels.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setCalculAutoPrix(!calculAutoPrix)}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      calculAutoPrix && isAutomaticPricing ? 'bg-medical' : 'bg-slate-300'
-                    }`}
-                    disabled={!isAutomaticPricing}
-                  >
-                    <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        calculAutoPrix && isAutomaticPricing ? 'translate-x-6' : 'translate-x-1'
-                      }`}
-                    />
-                  </button>
+                  <div className="text-xs text-slate-400 bg-slate-200 px-2 py-1 rounded">
+                    DÉSACTIVÉ
+                  </div>
                 </div>
               </div>
 

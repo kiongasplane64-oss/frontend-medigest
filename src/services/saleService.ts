@@ -6,30 +6,21 @@ import { PaymentMethod } from './posService';
 // TYPES - ALIGNÉS AVEC LE BACKEND
 // ============================================
 
-/**
- * Création d'un item de vente
- * IMPORTANT: unit_price et tva_rate ne sont PAS envoyés
- * Le backend utilise les prix et TVA du stock
- */
 export interface SaleItemCreate {
   product_id: string;
   quantity: number;
   discount_percent?: number;
-  product_code?: string; 
+  product_code?: string;
   batch_number?: string;
   expiry_date?: string;
 }
 
-/**
- * Création d'une vente
- * IMPORTANT: total_amount n'est PAS envoyé, le backend recalcule
- */
 export interface SaleCreate {
   items: SaleItemCreate[];
   payment_method: PaymentMethod | string;
-  client_id?: string;
-  client_name?: string;
-  client_phone?: string;
+  customer_id?: string;
+  customer_name?: string;
+  customer_phone?: string;
   pharmacy_id?: string;
   is_credit?: boolean;
   credit_due_date?: string;
@@ -66,9 +57,9 @@ export interface SaleResponse {
   reference: string;
   tenant_id: string;
   pharmacy_id: string;
-  client_id?: string;
-  client_name?: string;
-  client_phone?: string;
+  customer_id?: string;
+  customer_name?: string;
+  customer_phone?: string;
   created_by: string;
   seller_name: string;
   payment_method: string;
@@ -113,9 +104,8 @@ export interface SaleListResponse {
 }
 
 export interface DailyStatsResponse {
-  date: string;
-  sales_count: number;
   total_amount: number;
+  sales_count: number;
   average_basket: number;
   items_sold: number;
   top_products: Array<{
@@ -133,7 +123,7 @@ export interface DailyStatsResponse {
 }
 
 export interface SaleStatsResponse {
-  today: DailyStatsResponse;
+  today: DailyStatsResponse & { date: string };
   week: {
     total: number;
     count: number;
@@ -209,8 +199,6 @@ class SaleService {
 
   /**
    * Crée une nouvelle vente
-   * IMPORTANT: N'envoie PAS unit_price, tva_rate, total_amount
-   * Le backend utilise les prix et TVA du stock
    */
   async createSale(data: SaleCreate): Promise<ApiResponse<SaleResponse>> {
     try {
@@ -250,7 +238,7 @@ class SaleService {
     is_credit?: boolean;
     start_date?: string;
     end_date?: string;
-    client_id?: string;
+    customer_id?: string;
     seller_id?: string;
     pharmacy_id?: string;
     search?: string;
@@ -282,6 +270,71 @@ class SaleService {
     } catch (error: any) {
       console.error('Erreur récupération vente:', error);
       throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Récupère les statistiques quotidiennes
+   * Appelée par posService.loadDailyStats()
+   */
+  async getDailyStats(params?: {
+    date?: string;
+    pharmacy_id?: string;
+  }): Promise<DailyStatsResponse> {
+    try {
+      const response = await api.get(`${this.baseUrl}/stats/daily`, { params });
+      const data = response.data;
+      
+      // Normaliser la réponse quel que soit le format
+      return {
+        total_amount: data?.total_amount ?? data?.total ?? 0,
+        sales_count: data?.sales_count ?? data?.count ?? 0,
+        average_basket: data?.average_basket ?? data?.average ?? 0,
+        items_sold: data?.items_sold ?? data?.itemsCount ?? 0,
+        top_products: data?.top_products ?? [],
+        by_pharmacy: data?.by_pharmacy ?? [],
+      };
+    } catch (error: any) {
+      console.error('Erreur récupération stats quotidiennes:', error);
+      // Retourner des valeurs par défaut pour ne pas bloquer l'UI
+      return {
+        total_amount: 0,
+        sales_count: 0,
+        average_basket: 0,
+        items_sold: 0,
+        top_products: [],
+        by_pharmacy: [],
+      };
+    }
+  }
+
+  /**
+   * Récupère les statistiques globales
+   */
+  async getStats(params?: {
+    start_date?: string;
+    end_date?: string;
+    pharmacy_id?: string;
+  }): Promise<SaleStatsResponse> {
+    try {
+      const response = await api.get(`${this.baseUrl}/stats/overview`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error('Erreur récupération stats:', error);
+      const defaultDaily: DailyStatsResponse = {
+        total_amount: 0,
+        sales_count: 0,
+        average_basket: 0,
+        items_sold: 0,
+        top_products: [],
+        by_pharmacy: [],
+      };
+      return {
+        today: { ...defaultDaily, date: new Date().toISOString().split('T')[0] },
+        week: { total: 0, count: 0, average: 0 },
+        month: { total: 0, count: 0, average: 0 },
+        year: { total: 0, count: 0, average: 0 },
+      };
     }
   }
 
@@ -323,62 +376,6 @@ class SaleService {
     } catch (error: any) {
       console.error('Erreur remboursement vente:', error);
       throw this.handleError(error);
-    }
-  }
-
-  /**
-   * Récupère les statistiques quotidiennes
-   */
-  async getDailyStats(params?: {
-    date?: string;
-    pharmacy_id?: string;
-  }): Promise<DailyStatsResponse> {
-    try {
-      const response = await api.get(`${this.baseUrl}/stats/daily`, { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Erreur récupération stats quotidiennes:', error);
-      return {
-        date: params?.date || new Date().toISOString().split('T')[0],
-        sales_count: 0,
-        total_amount: 0,
-        average_basket: 0,
-        items_sold: 0,
-        top_products: [],
-        by_pharmacy: [],
-      };
-    }
-  }
-
-  /**
-   * Récupère les statistiques globales
-   */
-  async getStats(params?: {
-    start_date?: string;
-    end_date?: string;
-    pharmacy_id?: string;
-  }): Promise<SaleStatsResponse> {
-    try {
-      const response = await api.get(`${this.baseUrl}/stats/overview`, { params });
-      return response.data;
-    } catch (error: any) {
-      console.error('Erreur récupération stats:', error);
-      const today = new Date().toISOString().split('T')[0];
-      const defaultStats: DailyStatsResponse = {
-        date: today,
-        sales_count: 0,
-        total_amount: 0,
-        average_basket: 0,
-        items_sold: 0,
-        top_products: [],
-        by_pharmacy: [],
-      };
-      return {
-        today: defaultStats,
-        week: { total: 0, count: 0, average: 0 },
-        month: { total: 0, count: 0, average: 0 },
-        year: { total: 0, count: 0, average: 0 },
-      };
     }
   }
 
@@ -502,14 +499,13 @@ class SaleService {
 
   /**
    * Crée une vente rapide
-   * IMPORTANT: price n'est PAS envoyé - le backend utilise le prix du stock
    */
   async quickSale(data: {
     product_id: string;
     quantity: number;
     payment_method: string;
-    client_name?: string;
-    client_phone?: string;
+    customer_name?: string;
+    customer_phone?: string;
     pharmacy_id?: string;
   }): Promise<ApiResponse<SaleResponse>> {
     try {
@@ -525,7 +521,7 @@ class SaleService {
    * Crée une vente à crédit
    */
   async createCreditSale(data: {
-    client_id: string;
+    customer_id: string;
     items: Omit<SaleItemCreate, 'discount_percent'>[];
     due_date: string;
     guarantee_deposit?: number;
@@ -547,7 +543,7 @@ class SaleService {
    * Récupère les ventes à crédit
    */
   async getCreditSales(params?: {
-    client_id?: string;
+    customer_id?: string;
     status?: 'pending' | 'partial' | 'paid' | 'overdue';
     due_before?: string;
     due_after?: string;

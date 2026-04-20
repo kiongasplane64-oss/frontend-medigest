@@ -176,14 +176,15 @@ export function useActivePharmacy(): UseActivePharmacyReturn {
     setIsLoadingService(true);
     try {
       const status = await pharmacyService.checkPharmacyServiceStatus(activeId);
+      
       setServiceStatus({
         in_service: status.in_service,
         restrictions_enabled: status.restrictions_enabled,
         current_time_utc: status.current_time_utc,
         current_time_local: status.current_time_local,
-        timezone: status.timezone,
+        timezone: status.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
         current_day: status.current_day,
-        is_working_day: status.is_working_day,
+        is_working_day: status.is_working_day ?? status.is_open_today ?? true,
         is_open_today: status.is_open_today,
         is_within_hours: status.is_within_hours,
         working_hours: status.working_hours,
@@ -192,18 +193,30 @@ export function useActivePharmacy(): UseActivePharmacyReturn {
       });
     } catch (err) {
       console.error('Erreur lors de la vérification du service:', err);
+      // Fallback avec calcul local
+      const now = new Date();
+      const localNow = new Date(now.toLocaleString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }));
+      const currentHour = localNow.getHours();
+      const currentMinutes = localNow.getMinutes();
+      const currentDay = localNow.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+      
+      // Heures par défaut (8h-20h)
+      const isWithinHours = (currentHour >= 8 && currentHour < 20) || 
+                           (currentHour === 20 && currentMinutes === 0);
+      const isWorkingDay = currentDay !== 'sunday';
+      
       setServiceStatus({
-        in_service: true,
-        restrictions_enabled: false,
-        current_time_utc: new Date().toISOString(),
-        current_time_local: new Date().toLocaleString(),
+        in_service: isWorkingDay && isWithinHours,
+        restrictions_enabled: true,
+        current_time_utc: now.toISOString(),
+        current_time_local: localNow.toISOString(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        current_day: new Date().toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase(),
-        is_working_day: true,
-        is_open_today: true,
-        is_within_hours: true,
-        working_hours: { start: '00:00', end: '23:59' },
-        message: 'Service disponible (vérification impossible)',
+        current_day: currentDay,
+        is_working_day: isWorkingDay,
+        is_open_today: isWorkingDay,
+        is_within_hours: isWithinHours,
+        working_hours: { start: '08:00', end: '20:00' },
+        message: isWorkingDay && isWithinHours ? '✅ En service' : '❌ Hors service',
         next_service_time: undefined,
       });
     } finally {
@@ -228,14 +241,12 @@ export function useActivePharmacy(): UseActivePharmacyReturn {
       // Mettre à jour les données ActivePharmacy
       const activePharmacy = await pharmacyService.getActivePharmacy();
       setActivePharmacyData(activePharmacy);
-      // Utiliser le résultat pour éviter l'erreur "result is declared but never used"
       console.log('Pharmacie active définie:', setActiveResult.message);
       return setActiveResult;
     },
     onSuccess: (result, pharmacyId) => {
       setActiveId(pharmacyId);
       localStorage.setItem(STORAGE_KEY, pharmacyId);
-      // Utiliser result pour confirmer le succès
       console.log('Succès:', result.message);
       // Invalider les caches
       queryClient.invalidateQueries({ queryKey: ['active-pharmacy'] });

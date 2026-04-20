@@ -1,4 +1,4 @@
-// hooks/useSubscription.ts (correction pour la requête des plans)
+// hooks/useSubscription.ts
 import { useAuthStore } from '@/store/useAuthStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useEffect, useState } from 'react';
@@ -96,10 +96,62 @@ const getPlanDescription = (planName: string): string => {
     pro: 'Pour les professionnels ayant besoin de plus de fonctionnalités',
     enterprise: 'Solution complète pour les grandes organisations',
     premium: 'Performance maximale et support prioritaire',
-    trial: "Période d'essai pour découvrir la plateforme"
+    trial: "Période d'essai pour découvrir la plateforme",
+    infinite: 'Utilisateurs et produits illimités'
   };
   const key = planName?.toLowerCase() || '';
   return descriptions[key] || `Plan ${planName} avec toutes les fonctionnalités incluses`;
+};
+
+const formatDateWithTimezone = (dateString: string | null | undefined): string => {
+  if (!dateString) return 'Non définie';
+  
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Date invalide';
+    
+    return date.toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return 'Date invalide';
+  }
+};
+
+const calculateDaysRemaining = (endDate: string | null | undefined): number => {
+  if (!endDate) return 0;
+  
+  try {
+    const expiry = new Date(endDate);
+    const now = new Date();
+    
+    const expiryDateOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+    const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    return Math.max(0, Math.ceil((expiryDateOnly.getTime() - nowDateOnly.getTime()) / (1000 * 3600 * 24)));
+  } catch {
+    return 0;
+  }
+};
+
+const isDateExpired = (endDate: string | null | undefined): boolean => {
+  if (!endDate) return true;
+  
+  try {
+    const expiry = new Date(endDate);
+    const now = new Date();
+    
+    const expiryDateOnly = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate());
+    const nowDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    return expiryDateOnly < nowDateOnly;
+  } catch {
+    return true;
+  }
 };
 
 // ============================================================================
@@ -135,31 +187,21 @@ export const useSubscription = () => {
     queryKey: subscriptionKeys.current(),
     queryFn: async (): Promise<SubscriptionResponse> => {
       try {
-        // Utiliser /status qui renvoie toutes les infos de l'abonnement
         const status = await subscriptionApi.getSubscription();
-        
-        // Récupérer l'utilisation pour avoir les limites
         const usage = await subscriptionApi.getSubscriptionUsage();
         
-        // Calculer les jours restants
-        let daysRemaining = 0;
-        let isTrial = false;
+        const daysRemaining = calculateDaysRemaining(status.end_date);
+        const isExpired = isDateExpired(status.end_date);
+        
+        let isTrial = status.is_trial || status.plan_name?.toLowerCase() === 'trial';
         let trialDaysRemaining = 0;
         
-        if (status.end_date) {
-          const endDate = new Date(status.end_date);
-          const now = new Date();
-          daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 3600 * 24)));
-        }
-        
         if (status.trial_end_date) {
-          const trialEnd = new Date(status.trial_end_date);
-          const now = new Date();
-          trialDaysRemaining = Math.max(0, Math.ceil((trialEnd.getTime() - now.getTime()) / (1000 * 3600 * 24)));
-          isTrial = status.is_trial || trialDaysRemaining > 0;
+          trialDaysRemaining = calculateDaysRemaining(status.trial_end_date);
+          isTrial = isTrial || trialDaysRemaining > 0;
         }
         
-        const isActive = status.status === 'active' && daysRemaining > 0;
+        const isActive = status.status === 'active' && !isExpired;
         
         return {
           subscription: {
@@ -190,7 +232,7 @@ export const useSubscription = () => {
       }
     },
     enabled: Boolean(isAuthenticated && user?.id),
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
     retry: 2,
     gcTime: 10 * 60 * 1000,
   });
@@ -207,7 +249,7 @@ export const useSubscription = () => {
     staleTime: 5 * 60 * 1000,
   });
 
-  // FIX: Plans disponibles - Version corrigée avec gestion d'erreur et transformation
+  // Plans disponibles
   const {
     data: availablePlansData,
     isLoading: plansLoading,
@@ -227,7 +269,6 @@ export const useSubscription = () => {
         
         console.log(`✅ ${plans.length} plans chargés avec succès`);
         
-        // Transformer et enrichir les plans
         return plans.map(plan => ({
           ...plan,
           is_popular: plan.is_popular || plan.name === 'professional' || plan.name === 'Pro' || plan.id === 'professional',
@@ -239,11 +280,10 @@ export const useSubscription = () => {
       }
     },
     enabled: isAuthenticated,
-    staleTime: 30 * 60 * 1000, // 30 minutes
+    staleTime: 30 * 60 * 1000,
     retry: 2,
   });
 
-  // Appliquer la valeur par défaut avec useMemo
   const availablePlans = useMemo(() => availablePlansData ?? [], [availablePlansData]);
 
   // Historique de facturation
@@ -258,7 +298,6 @@ export const useSubscription = () => {
     staleTime: 10 * 60 * 1000,
   });
 
-  // Extraire le tableau d'historique de la réponse
   const billingHistory = useMemo((): BillingHistoryResponse['billing_history'] => {
     return billingHistoryResponse?.billing_history || [];
   }, [billingHistoryResponse]);
@@ -267,7 +306,6 @@ export const useSubscription = () => {
   // MUTATIONS
   // ========================================
 
-  // Changement de plan
   const changePlanMutation = useMutation({
     mutationFn: async (planId: string) => {
       const plan = availablePlans.find(p => p.id === planId);
@@ -279,7 +317,7 @@ export const useSubscription = () => {
       queryClient.invalidateQueries({ queryKey: subscriptionKeys.current() });
       queryClient.invalidateQueries({ queryKey: subscriptionKeys.billing() });
       
-      if ('redirect' in data && data.redirect) {
+      if (data && 'redirect' in data && data.redirect) {
         navigate('/subscription/payment', { 
           state: { plan: data.plan },
           replace: true
@@ -288,7 +326,6 @@ export const useSubscription = () => {
     },
   });
 
-  // Annulation
   const cancelSubscriptionMutation = useMutation({
     mutationFn: () => subscriptionApi.cancelSubscription(),
     onSuccess: () => {
@@ -300,7 +337,6 @@ export const useSubscription = () => {
   // MÉMOS & CALCULS
   // ========================================
 
-  // Conversion en invoices
   const invoices = useMemo((): Invoice[] => 
     billingHistory.map(item => ({
       id: item.id,
@@ -312,7 +348,6 @@ export const useSubscription = () => {
     })), 
   [billingHistory]);
 
-  // Statut
   const subscriptionStatus = useMemo((): string => {
     if (subscriptionData?.subscription?.status) {
       return subscriptionData.subscription.status;
@@ -320,49 +355,26 @@ export const useSubscription = () => {
     return user?.subscription_status || 'inactive';
   }, [subscriptionData, user]);
 
-  // Vérifications expiration
   const checkExpiry = useCallback((): { isExpired: boolean; daysRemaining: number } => {
     const endDate = subscriptionData?.subscription?.end_date;
-    if (!endDate) {
-      return { isExpired: true, daysRemaining: 0 };
-    }
-    
-    try {
-      const expiry = new Date(endDate).getTime();
-      const now = new Date().getTime();
-      const daysRemaining = Math.max(0, Math.ceil((expiry - now) / (1000 * 3600 * 24)));
-      
-      return {
-        isExpired: expiry < now,
-        daysRemaining,
-      };
-    } catch {
-      return { isExpired: true, daysRemaining: 0 };
-    }
+    return {
+      isExpired: isDateExpired(endDate),
+      daysRemaining: calculateDaysRemaining(endDate),
+    };
   }, [subscriptionData?.subscription?.end_date]);
 
-  // Trial
   const trialInfo = useMemo(() => {
     const trialEndDate = subscriptionData?.subscription?.trial_end_date;
     if (!trialEndDate) {
       return { isTrial: false, daysRemaining: 0 };
     }
     
-    try {
-      const trialEnd = new Date(trialEndDate).getTime();
-      const now = new Date().getTime();
-      const daysRemaining = Math.max(0, Math.ceil((trialEnd - now) / (1000 * 3600 * 24)));
-      
-      return {
-        isTrial: subscriptionData.subscription?.is_trial || daysRemaining > 0,
-        daysRemaining,
-      };
-    } catch {
-      return { isTrial: false, daysRemaining: 0 };
-    }
+    const daysRemaining = calculateDaysRemaining(trialEndDate);
+    const isTrial = (subscriptionData?.subscription?.is_trial || daysRemaining > 0) && daysRemaining > 0;
+    
+    return { isTrial, daysRemaining };
   }, [subscriptionData?.subscription?.trial_end_date, subscriptionData?.subscription?.is_trial]);
 
-  // Accès
   const canAccess = useMemo((): boolean => {
     if (user?.role === 'super_admin') return true;
     if (subscriptionData?.can_access !== undefined) return subscriptionData.can_access;
@@ -371,7 +383,6 @@ export const useSubscription = () => {
     return !checkExpiry().isExpired;
   }, [user, subscriptionData, trialInfo, checkExpiry]);
 
-  // Message d'accès
   const accessMessage = useMemo((): string | null => {
     if (canAccess) return null;
     
@@ -390,7 +401,6 @@ export const useSubscription = () => {
     return 'Accès refusé. Vérifiez votre abonnement.';
   }, [canAccess, subscriptionData, checkExpiry, trialInfo]);
 
-  // Plan recommandé
   const recommendedPlan = useMemo((): SubscriptionPlan | null => {
     if (!availablePlans.length || !usageData) return null;
     
@@ -405,43 +415,18 @@ export const useSubscription = () => {
     }) || availablePlans[availablePlans.length - 1] || null;
   }, [availablePlans, usageData]);
 
-  // Date formatée
   const formattedExpiryDate = useMemo((): string => {
-    const endDate = subscriptionData?.subscription?.end_date;
-    if (!endDate) return 'Non définie';
-    
-    try {
-      return new Date(endDate).toLocaleDateString('fr-FR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      });
-    } catch {
-      return 'Date invalide';
-    }
+    return formatDateWithTimezone(subscriptionData?.subscription?.end_date);
   }, [subscriptionData?.subscription?.end_date]);
 
-  // Formatted start date
   const formattedStartDate = useMemo((): string => {
-    const startDate = subscriptionData?.subscription?.start_date;
-    if (!startDate) return 'Non définie';
-    
-    try {
-      return new Date(startDate).toLocaleDateString('fr-FR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      });
-    } catch {
-      return 'Date invalide';
-    }
+    return formatDateWithTimezone(subscriptionData?.subscription?.start_date);
   }, [subscriptionData?.subscription?.start_date]);
 
   // ========================================
   // EFFETS - Alertes d'expiration
   // ========================================
 
-  // Surveillance expiration et affichage des alertes
   useEffect(() => {
     const { daysRemaining, isExpired } = checkExpiry();
     const { daysRemaining: trialDays, isTrial: isTrialActive } = trialInfo;
@@ -450,20 +435,15 @@ export const useSubscription = () => {
     let alertDays: number | null = null;
     let alertMessage: string | null = null;
     
-    // Priorité aux alertes d'essai
     if (isTrialActive && trialDays > 0 && trialDays <= 7) {
       showAlert = true;
       alertDays = trialDays;
       alertMessage = `⚠️ Votre période d'essai se termine dans ${trialDays} jour${trialDays > 1 ? 's' : ''}. Souscrivez un abonnement pour continuer.`;
-    }
-    // Sinon alerte d'expiration d'abonnement
-    else if (!isExpired && daysRemaining > 0 && daysRemaining <= 7) {
+    } else if (!isExpired && daysRemaining > 0 && daysRemaining <= 7) {
       showAlert = true;
       alertDays = daysRemaining;
       alertMessage = `⏰ Votre abonnement expire dans ${daysRemaining} jour${daysRemaining > 1 ? 's' : ''}. Renouvelez dès maintenant !`;
-    }
-    // Alerte d'expiration imminente (1 jour)
-    else if (!isExpired && daysRemaining === 1) {
+    } else if (!isExpired && daysRemaining === 1) {
       showAlert = true;
       alertDays = 1;
       alertMessage = `🚨 DERNIER JOUR ! Votre abonnement expire aujourd'hui. Renouvelez immédiatement pour ne pas perdre l'accès.`;
@@ -544,7 +524,6 @@ export const useSubscription = () => {
 
   const { isExpired, daysRemaining } = checkExpiry();
 
-  // Log de debug pour les erreurs de plans (résout le warning)
   useEffect(() => {
     if (plansError) {
       console.error('❌ Erreur lors du chargement des plans:', plansError);
@@ -592,7 +571,7 @@ export const useSubscription = () => {
     
     // Erreurs
     error: subscriptionError,
-    plansError, // Exposer l'erreur des plans dans le retour
+    plansError,
     changePlanError: changePlanMutation.error,
     
     // Accès
@@ -659,11 +638,8 @@ export const useWritePermission = () => {
   const { isReadOnly, canAccess, user } = useSubscription();
   
   const canWrite = useCallback((): boolean => {
-    // Super admin a toujours accès
     if (user?.role === 'super_admin') return true;
-    // Lecture seule = pas d'écriture
     if (isReadOnly) return false;
-    // Accès complet autorisé
     return canAccess;
   }, [isReadOnly, canAccess, user]);
   

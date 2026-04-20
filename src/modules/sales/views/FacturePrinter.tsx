@@ -1,69 +1,51 @@
-// components/FacturePrinter.tsx
+// FacturePrinter.tsx - Version améliorée avec configuration réelle
 import React, { useRef, useEffect, useState } from 'react';
 import { formatDate, formatDateTime } from '@/utils/formatters';
 import { Printer, Download, QrCode } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import QRCode from 'qrcode';
+import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 
 interface Product {
   id: string;
   name: string;
-  price: number;      // Prix unitaire
+  price: number;
   quantity: number;
   code?: string;
+  discount_percent?: number;
+  discount_amount?: number;
 }
 
 interface Sale {
   id: string;
   receiptNumber?: string;
   items: Product[];
+  subtotal?: number;
   total: number;
+  discount_percent?: number;
+  discount_amount?: number;
   paymentMethod: string;
   timestamp: number;
   cashierName: string;
+  cashierId?: string;
   posName: string;
+  branchId?: string;
+  branchName?: string;
   sessionNumber: string;
-  clientName?: string;
-}
-
-interface PharmacyInfo {
-  name: string;
-  address: string;
-  phone: string;
-  email: string;
-  licenseNumber: string;
-  logoUrl?: string;
-}
-
-interface InvoiceConfig {
-  autoPrint: boolean;
-  autoSave: boolean;
-  fontSize: number;
-}
-
-interface CurrencyConfig {
-  code: string;
-  symbol: string;
-  exchangeRate: number;
+  customerName?: string;
 }
 
 interface FacturePrinterProps {
   sale: Sale;
-  pharmacyInfo: PharmacyInfo;
-  invoiceConfig: InvoiceConfig;
-  primaryCurrency: string;
-  currencies: CurrencyConfig[];
+  pharmacyId?: string;
   onClose: () => void;
   onPrint?: () => void;
 }
 
 export const FacturePrinter: React.FC<FacturePrinterProps> = ({
   sale,
-  pharmacyInfo,
-  invoiceConfig,
-  primaryCurrency,
-  currencies,
+  pharmacyId,
   onClose,
   onPrint
 }) => {
@@ -71,6 +53,31 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
   const printRef = useRef<HTMLDivElement>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [showQrCode, setShowQrCode] = useState<boolean>(true);
+  
+  // Récupérer la configuration réelle de la pharmacie
+  const { config: pharmacyConfig, isLoading: configLoading } = usePharmacyConfig(pharmacyId);
+  
+  // Utiliser la configuration réelle ou des valeurs par défaut temporaires
+  const pharmacyInfo = pharmacyConfig?.pharmacyInfo || {
+    name: 'Pharmacie',
+    address: '',
+    phone: '',
+    email: '',
+    licenseNumber: '',
+    logoUrl: '',
+  };
+  
+  const primaryCurrency = pharmacyConfig?.primaryCurrency || 'CDF';
+  const currencies = pharmacyConfig?.currencies || [
+    { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true },
+    { code: 'USD', symbol: '$', exchangeRate: 2800, isActive: true },
+  ];
+  
+  const invoiceConfig = {
+    autoPrint: false,
+    autoSave: true,
+    fontSize: 12,
+  };
 
   // Générer le QR code avec les détails de la facture
   useEffect(() => {
@@ -87,16 +94,19 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
         },
         cashier: sale.cashierName,
         pos: sale.posName,
+        branch: sale.branchName,
         session: sale.sessionNumber,
-        client: sale.clientName || 'Passager',
+        client: sale.customerName || 'Passager',
         items: sale.items.map(item => ({
           name: item.name,
           quantity: item.quantity,
           price: item.price,
           total: item.price * item.quantity,
+          discount: item.discount_percent,
           code: item.code
         })),
-        subtotal: sale.items.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+        subtotal: sale.subtotal || sale.items.reduce((sum, item) => sum + (item.price * item.quantity), 0),
+        discount: sale.discount_percent,
         total: sale.total,
         paymentMethod: sale.paymentMethod,
         currency: primaryCurrency,
@@ -208,12 +218,16 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
     }
   };
 
-  const displayPrice = (price: number, currencyCode: string = primaryCurrency): string => {
-    const currency = currencies.find(c => c.code === currencyCode);
-    if (!currency) return `${price.toFixed(2)} ${currencyCode}`;
+  const displayPrice = (price: number): string => {
+    const currency = currencies.find(c => c.code === primaryCurrency && c.isActive);
+    if (!currency) return `${price.toFixed(2)} ${primaryCurrency}`;
     
-    const convertedPrice = price / currency.exchangeRate;
-    return `${currency.symbol} ${convertedPrice.toFixed(2)}`;
+    // Si la devise primaire n'est pas CDF, convertir
+    if (primaryCurrency !== 'CDF') {
+      const convertedPrice = price / currency.exchangeRate;
+      return `${currency.symbol} ${convertedPrice.toFixed(2)}`;
+    }
+    return `${currency.symbol} ${price.toFixed(2)}`;
   };
 
   const getPaymentMethodLabel = (method: string): string => {
@@ -224,6 +238,10 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       default: return method;
     }
   };
+
+  const subtotal = sale.subtotal || sale.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const discountAmount = sale.discount_amount || (subtotal * (sale.discount_percent || 0) / 100);
+  const finalTotal = sale.total || (subtotal - discountAmount);
 
   const ReceiptContent = () => (
     <div 
@@ -248,11 +266,11 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
             style={{ maxWidth: '60px', maxHeight: '60px' }}
           />
         )}
-        <h2 className="font-bold text-lg">{pharmacyInfo.name}</h2>
-        <p className="text-xs">{pharmacyInfo.address}</p>
-        <p className="text-xs">Tel: {pharmacyInfo.phone}</p>
+        <h2 className="font-bold text-lg">{pharmacyInfo.name || 'Pharmacie'}</h2>
+        {pharmacyInfo.address && <p className="text-xs">{pharmacyInfo.address}</p>}
+        {pharmacyInfo.phone && <p className="text-xs">Tel: {pharmacyInfo.phone}</p>}
         {pharmacyInfo.email && <p className="text-xs">{pharmacyInfo.email}</p>}
-        <p className="text-xs">N° Licence: {pharmacyInfo.licenseNumber}</p>
+        {pharmacyInfo.licenseNumber && <p className="text-xs">N° Licence: {pharmacyInfo.licenseNumber}</p>}
         <div className="mt-2">
           <p className="font-bold">FACTURE</p>
           <p className="text-xs">N°: {sale.receiptNumber || sale.id}</p>
@@ -290,8 +308,9 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       <div className="mb-3 text-xs">
         <p>Caissier: {sale.cashierName}</p>
         <p>Caisse: {sale.posName}</p>
+        {sale.branchName && <p>Branche: {sale.branchName}</p>}
         <p>Session: {sale.sessionNumber}</p>
-        {sale.clientName && <p>Client: {sale.clientName}</p>}
+        {sale.customerName && <p>Client: {sale.customerName}</p>}
       </div>
 
       {/* Ligne de séparation */}
@@ -306,14 +325,27 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
           <span className="col-span-2 text-right">Total</span>
         </div>
         
-        {sale.items.map((item, index) => (
-          <div key={index} className="grid grid-cols-12 gap-1 text-xs mb-1">
-            <span className="col-span-6 truncate">{item.name}</span>
-            <span className="col-span-2 text-center">{item.quantity}</span>
-            <span className="col-span-2 text-right">{displayPrice(item.price)}</span>
-            <span className="col-span-2 text-right">{displayPrice(item.price * item.quantity)}</span>
-          </div>
-        ))}
+        {sale.items.map((item, index) => {
+          const itemTotal = item.price * item.quantity;
+          const itemDiscount = item.discount_amount || (itemTotal * (item.discount_percent || 0) / 100);
+          const itemFinalTotal = itemTotal - itemDiscount;
+          
+          return (
+            <div key={index} className="mb-2">
+              <div className="grid grid-cols-12 gap-1 text-xs">
+                <span className="col-span-6 truncate">{item.name}</span>
+                <span className="col-span-2 text-center">{item.quantity}</span>
+                <span className="col-span-2 text-right">{displayPrice(item.price)}</span>
+                <span className="col-span-2 text-right">{displayPrice(itemFinalTotal)}</span>
+              </div>
+              {item.discount_percent && item.discount_percent > 0 && (
+                <div className="text-[8px] text-green-600 ml-1">
+                  Remise: {item.discount_percent}% (-{displayPrice(itemDiscount)})
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Ligne de séparation */}
@@ -322,17 +354,25 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       {/* Sous-total */}
       <div className="flex justify-between text-xs mb-1">
         <span>Sous-total</span>
-        <span>{displayPrice(sale.items.reduce((sum, item) => sum + (item.price * item.quantity), 0))}</span>
+        <span>{displayPrice(subtotal)}</span>
       </div>
 
+      {/* Remise globale */}
+      {sale.discount_percent && sale.discount_percent > 0 && (
+        <div className="flex justify-between text-xs text-green-600 mb-1">
+          <span>Remise ({sale.discount_percent}%)</span>
+          <span>-{displayPrice(discountAmount)}</span>
+        </div>
+      )}
+
       {/* Total */}
-      <div className="flex justify-between font-bold text-base mb-2">
+      <div className="flex justify-between font-bold text-base mt-2 pt-1 border-t border-gray-300">
         <span>TOTAL</span>
-        <span>{displayPrice(sale.total)}</span>
+        <span>{displayPrice(finalTotal)}</span>
       </div>
 
       {/* Paiement */}
-      <div className="text-xs mb-3">
+      <div className="text-xs mt-2 pt-1">
         <p>Paiement: {getPaymentMethodLabel(sale.paymentMethod)}</p>
       </div>
 
@@ -343,6 +383,17 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       </div>
     </div>
   );
+
+  if (configLoading) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="rounded-3xl bg-white p-8 text-center shadow-2xl">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-slate-600">Chargement de la configuration...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

@@ -1,6 +1,6 @@
 // sections/GenerateCodeSection.tsx
 import { useState, useEffect } from 'react';
-import { Copy, Check, Search, Building2, Users, RefreshCw, X } from 'lucide-react';
+import { Search, Users, RefreshCw, X, Store } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
@@ -15,19 +15,23 @@ interface GeneratedCode {
   valid_until: string;
   created_at: string;
   status: string;
-  tenant_id?: string;
-  user_id?: string;
+  pharmacy_id?: string;
+  pharmacy_name?: string;
 }
 
-interface Tenant {
+interface Branch {
   id: string;
   name: string;
-  nom_pharmacie?: string;
-  email: string;
-  email_admin?: string;
-  tenant_code: string;
-  status: string;
-  current_plan?: string;
+  address?: string;
+  city?: string;
+  phone?: string;
+  email?: string;
+  code: string;
+  is_active: boolean;
+  is_main_branch: boolean;
+  tenant_id?: string;
+  parent_pharmacy_id?: string;
+  parent_pharmacy_name?: string;
 }
 
 interface User {
@@ -36,33 +40,70 @@ interface User {
   first_name?: string;
   last_name?: string;
   full_name?: string;
-  tenant_id?: string;
-  tenant_name?: string;
+  pharmacy_id?: string;
+  pharmacy_name?: string;
   role: string;
   is_active: boolean;
 }
 
+// Configuration des plans (harmonisée avec le backend)
 const plans = [
-  { id: 'starter', name: 'Starter', price_monthly: 5, price_yearly: 50, features: ['Basic features', 'Email support'] },
-  { id: 'pro', name: 'Pro', price_monthly: 8, price_yearly: 80, features: ['Advanced features', 'Priority support'] },
-  { id: 'enterprise', name: 'Enterprise', price_monthly: 15, price_yearly: 150, features: ['All features', 'Dedicated support'] }
+  { 
+    id: 'starter', 
+    name: 'Starter', 
+    price_monthly: 5, 
+    price_yearly: 48, 
+    duration_days: 30,
+    max_products: 1500,
+    max_users: 5,
+    features: ['5 Utilisateurs', '1500 Produits', 'Support email'] 
+  },
+  { 
+    id: 'professional', 
+    name: 'Professionnel', 
+    price_monthly: 8, 
+    price_yearly: 76.8, 
+    duration_days: 30,
+    max_products: 3000,
+    max_users: 20,
+    features: ['20 Utilisateurs', '3000 Produits', 'Transferts inter-stocks', 'Support prioritaire'] 
+  },
+  { 
+    id: 'enterprise', 
+    name: 'Entreprise', 
+    price_monthly: 15, 
+    price_yearly: 144, 
+    duration_days: 30,
+    max_products: 10000,
+    max_users: 20,
+    features: ['20 Utilisateurs', '10000 Produits', 'API d\'inventaire', 'Support 24/7'] 
+  },
+  { 
+    id: 'infinite', 
+    name: 'Infinite', 
+    price_monthly: 30, 
+    price_yearly: 288, 
+    duration_days: 30,
+    max_products: 0,
+    max_users: 0,
+    features: ['Utilisateurs illimités', 'Produits illimités', 'Multi-dépôts', 'Support dédié'] 
+  }
 ];
 
 export default function GenerateCodeSection() {
   const queryClient = useQueryClient();
   
   // Form states
-  const [planType, setPlanType] = useState('pro');
+  const [planType, setPlanType] = useState('professional');
   const [billingCycle, setBillingCycle] = useState('monthly');
   const [durationDays, setDurationDays] = useState(30);
   const [price, setPrice] = useState(0);
   const [notes, setNotes] = useState('');
   const [generatedCode, setGeneratedCode] = useState<GeneratedCode | null>(null);
-  const [copied, setCopied] = useState(false);
   
-  // Tenant/User selection states
-  const [selectionType, setSelectionType] = useState<'tenant' | 'user'>('tenant');
-  const [selectedTenantId, setSelectedTenantId] = useState<string>('');
+  // Branch/User selection states
+  const [selectionType, setSelectionType] = useState<'branch' | 'user'>('branch');
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
@@ -75,29 +116,29 @@ export default function GenerateCodeSection() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Query tenants
+  // Query branches (succursales)
   const { 
-    data: tenantsData, 
-    isLoading: isLoadingTenants, 
-    error: tenantsError,
-    refetch: refetchTenants 
+    data: branchesData, 
+    isLoading: isLoadingBranches, 
+    error: branchesError,
+    refetch: refetchBranches 
   } = useQuery({
-    queryKey: ['superadmin-tenants-list', debouncedSearchTerm],
+    queryKey: ['superadmin-branches-list', debouncedSearchTerm],
     queryFn: async () => {
-      const { data } = await api.get('/super-admin/tenants', {
+      const { data } = await api.get('/branches', {
         params: {
           page: 1,
           limit: 100,
           search: debouncedSearchTerm || undefined,
-          status_filter: 'active,trial',
+          is_active: true,
           sort_by: 'created_at',
           sort_order: 'desc'
         }
       });
       return data;
     },
-    enabled: selectionType === 'tenant',
-    staleTime: 30000, // 30 seconds
+    enabled: selectionType === 'branch',
+    staleTime: 30000,
   });
 
   // Query users
@@ -109,13 +150,13 @@ export default function GenerateCodeSection() {
   } = useQuery({
     queryKey: ['superadmin-users-list', debouncedSearchTerm],
     queryFn: async () => {
-      const { data } = await api.get('/super-admin/users', {
+      const { data } = await api.get('/users', {
         params: {
           page: 1,
           limit: 100,
           search: debouncedSearchTerm || undefined,
-          role: 'user,admin',
           is_active: true,
+          role: 'admin,user',
           sort_by: 'created_at',
           sort_order: 'desc'
         }
@@ -126,7 +167,7 @@ export default function GenerateCodeSection() {
     staleTime: 30000,
   });
 
-  // Mutation pour générer le code
+  // Mutation pour générer le code d'abonnement
   const generateMutation = useMutation({
     mutationFn: async (payload: any) => {
       const { data } = await api.post('/subscription-codes/admin/generate', payload);
@@ -135,13 +176,6 @@ export default function GenerateCodeSection() {
     onSuccess: (data) => {
       setGeneratedCode(data);
       toast.success('Code généré avec succès !');
-      
-      // Reset selection after successful generation (optional)
-      // setSelectedTenantId('');
-      // setSelectedUserId('');
-      // setNotes('');
-      
-      // Invalidate queries to refresh lists
       queryClient.invalidateQueries({ queryKey: ['superadmin-subscription-codes'] });
     },
     onError: (error: any) => {
@@ -151,17 +185,15 @@ export default function GenerateCodeSection() {
     }
   });
 
-  // Extract tenants from response
-  const tenants: Tenant[] = tenantsData?.tenants || [];
-  const users: User[] = usersData?.users || [];
+  const branches: Branch[] = branchesData?.branches || branchesData?.items || [];
+  const users: User[] = usersData?.users || usersData?.items || [];
 
-  // Get selected tenant details
-  const selectedTenant = tenants.find(t => t.id === selectedTenantId);
+  const selectedBranch = branches.find(b => b.id === selectedBranchId);
   const selectedUser = users.find(u => u.id === selectedUserId);
 
   const handleGenerate = () => {
-    if (selectionType === 'tenant' && !selectedTenantId) {
-      toast.error('Veuillez sélectionner une pharmacie');
+    if (selectionType === 'branch' && !selectedBranchId) {
+      toast.error('Veuillez sélectionner une succursale/branche');
       return;
     }
     if (selectionType === 'user' && !selectedUserId) {
@@ -169,50 +201,58 @@ export default function GenerateCodeSection() {
       return;
     }
 
+    let finalDurationDays = durationDays;
+    if (billingCycle === 'yearly') {
+      finalDurationDays = 365;
+    } else if (billingCycle === 'monthly' && durationDays === 30) {
+      finalDurationDays = 30;
+    }
+
     const payload: any = {
       plan_type: planType,
+      duration_days: finalDurationDays,
       billing_cycle: billingCycle,
-      duration_days: durationDays,
       price: price > 0 ? price : undefined,
       notes: notes.trim() || `Généré le ${new Date().toLocaleDateString('fr-FR')}`
     };
 
-    // Add tenant or user context
-    if (selectionType === 'tenant') {
-      payload.tenant_id = selectedTenantId;
-    } else {
-      payload.user_id = selectedUserId;
+    if (selectionType === 'branch') {
+      payload.pharmacy_id = selectedBranchId;
+    } else if (selectionType === 'user' && selectedUser?.pharmacy_id) {
+      payload.pharmacy_id = selectedUser.pharmacy_id;
     }
 
     generateMutation.mutate(payload);
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    toast.success('Code copié dans le presse-papiers !');
-    setTimeout(() => setCopied(false), 2000);
+  const getPlanDefaultDuration = () => {
+    const plan = plans.find(p => p.id === planType);
+    return plan?.duration_days || 30;
   };
 
-  const getPlanPrice = () => {
-    const plan = plans.find(p => p.id === planType);
-    if (!plan) return 0;
-    return billingCycle === 'monthly' ? plan.price_monthly : plan.price_yearly;
-  };
+  useEffect(() => {
+    if (billingCycle === 'monthly') {
+      setDurationDays(getPlanDefaultDuration());
+    } else {
+      setDurationDays(365);
+    }
+  }, [planType, billingCycle]);
 
   const getSelectedEntityInfo = () => {
-    if (selectionType === 'tenant' && selectedTenant) {
+    if (selectionType === 'branch' && selectedBranch) {
       return {
-        name: selectedTenant.name || selectedTenant.nom_pharmacie || 'Pharmacie',
-        email: selectedTenant.email || selectedTenant.email_admin,
-        code: selectedTenant.tenant_code,
-        type: 'pharmacie'
+        name: selectedBranch.name,
+        email: selectedBranch.email,
+        code: selectedBranch.code,
+        city: selectedBranch.city,
+        type: 'branche',
+        is_main: selectedBranch.is_main_branch
       };
     } else if (selectionType === 'user' && selectedUser) {
       return {
-        name: selectedUser.full_name || `${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || 'Utilisateur',
+        name: selectedUser.full_name || selectedUser.email,
         email: selectedUser.email,
-        tenant: selectedUser.tenant_name,
+        pharmacy: selectedUser.pharmacy_name,
         type: 'utilisateur'
       };
     }
@@ -220,8 +260,8 @@ export default function GenerateCodeSection() {
   };
 
   const handleRefresh = () => {
-    if (selectionType === 'tenant') {
-      refetchTenants();
+    if (selectionType === 'branch') {
+      refetchBranches();
     } else {
       refetchUsers();
     }
@@ -229,24 +269,23 @@ export default function GenerateCodeSection() {
   };
 
   const handleClearSelection = () => {
-    setSelectedTenantId('');
+    setSelectedBranchId('');
     setSelectedUserId('');
   };
 
   const selectedInfo = getSelectedEntityInfo();
-  const isLoading = selectionType === 'tenant' ? isLoadingTenants : isLoadingUsers;
-  const error = selectionType === 'tenant' ? tenantsError : usersError;
-  const items = selectionType === 'tenant' ? tenants : users;
+  const isLoading = selectionType === 'branch' ? isLoadingBranches : isLoadingUsers;
+  const error = selectionType === 'branch' ? branchesError : usersError;
+  const items = selectionType === 'branch' ? branches : users;
 
   return (
     <div className="max-w-6xl mx-auto">
-      {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-black text-slate-900 uppercase italic">
           Générer un code d'abonnement
         </h1>
         <p className="text-sm text-slate-500 mt-2">
-          Créez des codes d'activation pour les paiements cash et associez-les à une pharmacie ou un utilisateur
+          Créez des codes d'activation pour les paiements cash. L'abonnement est lié à une succursale/branche.
         </p>
       </div>
 
@@ -256,7 +295,7 @@ export default function GenerateCodeSection() {
           <h2 className="text-lg font-black text-slate-800 uppercase mb-6">Paramètres du code</h2>
           
           <div className="space-y-6">
-            {/* Tenant/User Selection Type */}
+            {/* Branch/User Selection Type */}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase mb-2">
                 Générer pour
@@ -265,25 +304,25 @@ export default function GenerateCodeSection() {
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectionType('tenant');
-                    setSelectedTenantId('');
+                    setSelectionType('branch');
+                    setSelectedBranchId('');
                     setSelectedUserId('');
                     setSearchTerm('');
                   }}
                   className={`p-4 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 ${
-                    selectionType === 'tenant'
+                    selectionType === 'branch'
                       ? 'bg-blue-500 text-white shadow-lg shadow-blue-200'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  <Building2 size={18} />
-                  Une pharmacie
+                  <Store size={18} />
+                  Une succursale/branche
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     setSelectionType('user');
-                    setSelectedTenantId('');
+                    setSelectedBranchId('');
                     setSelectedUserId('');
                     setSearchTerm('');
                   }}
@@ -303,7 +342,7 @@ export default function GenerateCodeSection() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="block text-xs font-bold text-slate-600 uppercase">
-                  {selectionType === 'tenant' ? 'Sélectionner une pharmacie' : 'Sélectionner un utilisateur'}
+                  {selectionType === 'branch' ? 'Sélectionner une succursale/branche' : 'Sélectionner un utilisateur'}
                 </label>
                 <button
                   onClick={handleRefresh}
@@ -319,7 +358,7 @@ export default function GenerateCodeSection() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                   <input
                     type="text"
-                    placeholder={selectionType === 'tenant' ? "Rechercher par nom, code ou email..." : "Rechercher par nom, email..."}
+                    placeholder={selectionType === 'branch' ? "Rechercher par nom, code ou email..." : "Rechercher par nom, email..."}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="w-full pl-10 pr-4 p-3 bg-slate-50 border border-slate-200 rounded-2xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
@@ -350,36 +389,36 @@ export default function GenerateCodeSection() {
               ) : items.length === 0 ? (
                 <div className="p-8 bg-slate-50 rounded-2xl text-center">
                   <p className="text-sm text-slate-500">
-                    {searchTerm ? 'Aucun résultat trouvé' : `Aucun ${selectionType === 'tenant' ? 'tenant' : 'utilisateur'} disponible`}
+                    {searchTerm ? 'Aucun résultat trouvé' : `Aucun ${selectionType === 'branch' ? 'succursale' : 'utilisateur'} disponible`}
                   </p>
                 </div>
               ) : (
                 <select
-                  value={selectionType === 'tenant' ? selectedTenantId : selectedUserId}
+                  value={selectionType === 'branch' ? selectedBranchId : selectedUserId}
                   onChange={(e) => {
-                    if (selectionType === 'tenant') {
-                      setSelectedTenantId(e.target.value);
+                    if (selectionType === 'branch') {
+                      setSelectedBranchId(e.target.value);
                     } else {
                       setSelectedUserId(e.target.value);
                     }
                   }}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
                 >
-                  <option value="">-- Choisir {selectionType === 'tenant' ? 'une pharmacie' : 'un utilisateur'} --</option>
+                  <option value="">-- Choisir {selectionType === 'branch' ? 'une succursale' : 'un utilisateur'} --</option>
                   {items.map((item: any) => {
-                    if (selectionType === 'tenant') {
-                      const tenant = item as Tenant;
+                    if (selectionType === 'branch') {
+                      const branch = item as Branch;
                       return (
-                        <option key={tenant.id} value={tenant.id}>
-                          {tenant.name || tenant.nom_pharmacie} - {tenant.tenant_code} ({tenant.email || tenant.email_admin})
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name} {branch.is_main_branch && '(Principale)'} - {branch.code} ({branch.city || 'Ville inconnue'})
                         </option>
                       );
                     } else {
                       const user = item as User;
-                      const userName = user.full_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email;
+                      const userName = user.full_name || user.email;
                       return (
                         <option key={user.id} value={user.id}>
-                          {userName} - {user.email} {user.tenant_name ? `(${user.tenant_name})` : ''}
+                          {userName} - {user.email} {user.pharmacy_name ? `(${user.pharmacy_name})` : ''}
                         </option>
                       );
                     }
@@ -396,11 +435,15 @@ export default function GenerateCodeSection() {
                     <p className="text-xs font-bold text-blue-700 uppercase mb-1">Destinataire</p>
                     <p className="text-sm font-medium text-blue-900">{selectedInfo.name}</p>
                     <p className="text-xs text-blue-600 mt-0.5">{selectedInfo.email}</p>
-                    {selectedInfo.type === 'pharmacie' && (selectedInfo as any).code && (
-                      <p className="text-xs text-blue-500 mt-0.5">Code: {(selectedInfo as any).code}</p>
+                    {selectedInfo.type === 'branche' && (
+                      <>
+                        <p className="text-xs text-blue-500 mt-0.5">Code: {selectedInfo.code}</p>
+                        {selectedInfo.city && <p className="text-xs text-blue-500">Ville: {selectedInfo.city}</p>}
+                        {selectedInfo.is_main && <p className="text-xs text-green-600 mt-0.5">✓ Succursale principale</p>}
+                      </>
                     )}
-                    {selectedInfo.type === 'utilisateur' && (selectedInfo as any).tenant && (
-                      <p className="text-xs text-blue-500 mt-0.5">Pharmacie: {(selectedInfo as any).tenant}</p>
+                    {selectedInfo.type === 'utilisateur' && selectedInfo.pharmacy && (
+                      <p className="text-xs text-blue-500 mt-0.5">Succursale: {selectedInfo.pharmacy}</p>
                     )}
                   </div>
                   <button
@@ -418,7 +461,7 @@ export default function GenerateCodeSection() {
             {/* Plan Selection */}
             <div>
               <label htmlFor="plan-select" className="block text-xs font-bold text-slate-600 uppercase mb-2">
-                Plan
+                Plan d'abonnement
               </label>
               <select
                 id="plan-select"
@@ -428,12 +471,14 @@ export default function GenerateCodeSection() {
               >
                 {plans.map(plan => (
                   <option key={plan.id} value={plan.id}>
-                    {plan.name} ({plan.price_monthly} €/mois ou {plan.price_yearly} €/an)
+                    {plan.name} - {plan.price_monthly}€/mois ou {plan.price_yearly}€/an
+                    {plan.max_products === 0 ? ' (Produits illimités)' : ` (${plan.max_products} produits max)`}
                   </option>
                 ))}
               </select>
             </div>
 
+            {/* Billing Cycle */}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase mb-2">
                 Cycle de facturation
@@ -448,7 +493,8 @@ export default function GenerateCodeSection() {
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Mensuel ({getPlanPrice()} €)
+                  Mensuel ({plans.find(p => p.id === planType)?.price_monthly || 0} €)
+                  <span className="block text-[10px] opacity-80 mt-1">30 jours</span>
                 </button>
                 <button
                   type="button"
@@ -459,14 +505,16 @@ export default function GenerateCodeSection() {
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Annuel ({getPlanPrice()} €)
+                  Annuel ({plans.find(p => p.id === planType)?.price_yearly || 0} €)
+                  <span className="block text-[10px] opacity-80 mt-1">365 jours</span>
                 </button>
               </div>
             </div>
 
+            {/* Duration Days */}
             <div>
               <label htmlFor="duration-days" className="block text-xs font-bold text-slate-600 uppercase mb-2">
-                Durée de l'abonnement (jours)
+                Durée personnalisée (jours)
               </label>
               <input
                 id="duration-days"
@@ -479,12 +527,16 @@ export default function GenerateCodeSection() {
               />
               <p className="text-xs text-slate-400 mt-1">
                 {durationDays} jours = {Math.floor(durationDays / 30)} mois
+                {billingCycle === 'yearly' && durationDays !== 365 && (
+                  <span className="text-amber-600 ml-2">⚠️ Cycle annuel recommandé: 365 jours</span>
+                )}
               </p>
             </div>
 
+            {/* Custom Price */}
             <div>
               <label htmlFor="price" className="block text-xs font-bold text-slate-600 uppercase mb-2">
-                Prix personnalisé (laisser 0 pour le prix par défaut)
+                Prix personnalisé (0 = prix par défaut)
               </label>
               <div className="relative">
                 <input
@@ -500,6 +552,7 @@ export default function GenerateCodeSection() {
               </div>
             </div>
 
+            {/* Notes */}
             <div>
               <label htmlFor="notes" className="block text-xs font-bold text-slate-600 uppercase mb-2">
                 Notes (optionnel)
@@ -514,9 +567,10 @@ export default function GenerateCodeSection() {
               />
             </div>
 
+            {/* Generate Button */}
             <button
               onClick={handleGenerate}
-              disabled={generateMutation.isPending || (!selectedTenantId && !selectedUserId)}
+              disabled={generateMutation.isPending || (!selectedBranchId && !selectedUserId)}
               className="w-full py-5 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-sm hover:bg-slate-800 transition-all disabled:bg-slate-300 disabled:cursor-not-allowed shadow-xl active:scale-95"
             >
               {generateMutation.isPending ? (
@@ -525,9 +579,16 @@ export default function GenerateCodeSection() {
                   Génération en cours...
                 </div>
               ) : (
-                'Générer le code'
+                'Générer le code d\'abonnement'
               )}
             </button>
+
+            <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200">
+              <p className="text-xs text-amber-700">
+                ℹ️ L'abonnement sera lié à la succursale/branche sélectionnée. 
+                L'utilisateur qui active le code devra avoir cette succursale comme branche active.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -546,13 +607,6 @@ export default function GenerateCodeSection() {
                 <div className="text-5xl font-mono font-black tracking-wider mb-4 select-all break-all">
                   {generatedCode.code}
                 </div>
-                <button
-                  onClick={() => copyToClipboard(generatedCode.code)}
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-white/20 rounded-xl hover:bg-white/30 transition-all font-bold text-sm"
-                >
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                  {copied ? 'Copié !' : 'Copier le code'}
-                </button>
               </div>
             </div>
 
@@ -568,6 +622,12 @@ export default function GenerateCodeSection() {
               <div className="flex justify-between items-center pb-2 border-b border-white/20">
                 <span className="text-white/70 text-sm">Prix</span>
                 <span className="font-bold text-xl">{generatedCode.price} {generatedCode.currency}</span>
+              </div>
+              <div className="flex justify-between items-center pb-2 border-b border-white/20">
+                <span className="text-white/70 text-sm">Succursale</span>
+                <span className="font-bold text-right break-all text-sm">
+                  {generatedCode.pharmacy_name || generatedCode.pharmacy_id || 'Générique'}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-white/70 text-sm">Valide jusqu'au</span>
@@ -591,7 +651,8 @@ export default function GenerateCodeSection() {
 
             <div className="mt-6 p-4 bg-blue-500/30 rounded-2xl border border-white/20">
               <p className="text-xs text-center text-white/90">
-                💡 Ce code peut être envoyé au client pour activer son abonnement dans l'espace dédié
+                💡 Ce code peut être envoyé au client. Il devra l'activer depuis son espace 
+                avec sa succursale active sélectionnée.
               </p>
             </div>
           </div>

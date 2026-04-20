@@ -126,7 +126,7 @@ export interface SaleData {
   posName: string;
   sessionId: string;
   clientType: string;
-  clientName?: string;
+  customerName?: string;
   currency: string;
   exchangeRate: number;
   pharmacy_id?: string;
@@ -226,7 +226,7 @@ export class PosService {
   };
   isOnline = true;
   
-  clientName = 'Passager';
+  customerName = 'Passager';
   
   // Timer pour synchronisation périodique
   private syncIntervalId: NodeJS.Timeout | null = null;
@@ -264,7 +264,7 @@ export class PosService {
       stats: observable,
       config: observable,
       isOnline: observable,
-      clientName: observable,
+      customerName: observable,
       
       total: computed,
       totalItems: computed,
@@ -292,7 +292,7 @@ export class PosService {
       setOnlineStatus: action,
       loadInitialData: action,
       filterProducts: action,
-      setClientName: action,
+      setCustomerName: action,
       startPeriodicSync: action,
       stopPeriodicSync: action,
     });
@@ -500,9 +500,9 @@ export class PosService {
     }
   }
 
-  setClientName(name: string) {
-    this.clientName = name || 'Passager';
-    this.stats.currentClient = this.clientName;
+  setCustomerName(name: string) {
+    this.customerName = name || 'Passager';
+    this.stats.currentClient = this.customerName;
     this.onStatsChange?.(this.stats);
   }
 
@@ -749,7 +749,7 @@ export class PosService {
       const newStats = {
         total: Number(response?.total_amount || 0),
         salesCount: Number(response?.sales_count || 0),
-        currentClient: this.clientName,
+        currentClient: this.customerName,
       };
 
       this.updateStats(newStats);
@@ -941,7 +941,7 @@ export class PosService {
     this.setProcessing(true);
 
     const cartSnapshot = this.cart.map(item => ({ ...item }));
-    const clientNameSnapshot = this.clientName;
+    const customerNameSnapshot = this.customerName;
     const paymentMethodSnapshot = this.paymentMethod;
     const timestamp = Date.now();
     const tempId = `temp-${timestamp}`;
@@ -969,7 +969,7 @@ export class PosService {
       cashierName: this.cashierInfo.name,
       posName: this.cashierInfo.posName,
       sessionNumber: this.cashierInfo.sessionNumber,
-      clientName: clientNameSnapshot,
+      customerName: customerNameSnapshot,
       status: 'pending',
       synced: false,
     };
@@ -988,7 +988,7 @@ export class PosService {
     this.updateStats({
       total: this.stats.total + totalAmount,
       salesCount: this.stats.salesCount + 1,
-      currentClient: clientNameSnapshot,
+      currentClient: customerNameSnapshot,
     });
 
     if (this.config.invoice.autoPrint) {
@@ -1050,7 +1050,7 @@ export class PosService {
     this.productsMap.clear();
     this.categories = [];
     this.filteredProducts = [];
-    this.clientName = 'Passager';
+    this.customerName = 'Passager';
     this.stopPeriodicSync();
   }
 }

@@ -33,14 +33,13 @@ import UserSessionModal from '@/components/UserSessionModal';
 import EditUserModal from '@/components/EditUserModal';
 
 // Interface pour les données utilisateur avec affectation
-// Compatible avec les modals qui attendent name et full_name
 interface PharmacyUser {
   id: string;
   email: string;
   role: string;
   is_active: boolean;
   full_name?: string;
-  name: string;  // Rendre obligatoire pour la compatibilité avec UserSessionModal
+  name: string;
   pharmacy_id?: string;
   branch_id?: string;
   permissions?: UserPermissions;
@@ -139,12 +138,8 @@ export default function UsersPage() {
         search: searchTerm
       });
 
-      // 🔍 LOG POUR DEBUG
       console.log('📊 Utilisateurs reçus du backend:', response);
-      response.forEach((user: any) => {
-        console.log(`👤 Utilisateur: ${user.email}, Rôle reçu: "${user.role}", Type: ${typeof user.role}`);
-      });
-      // Mapper les données pour s'assurer qu'elles correspondent à PharmacyUser
+      
       return (response as any[]).map(user => {
         const displayName = user.full_name || user.name || user.email?.split('@')[0] || 'Utilisateur';
         return {
@@ -153,7 +148,7 @@ export default function UsersPage() {
           role: user.role,
           is_active: user.is_active,
           full_name: user.full_name || user.name,
-          name: displayName, // Toujours défini
+          name: displayName,
           pharmacy_id: user.pharmacy_id,
           branch_id: user.branch_id,
           permissions: user.permissions,
@@ -205,7 +200,10 @@ export default function UsersPage() {
   // 4. Récupération de l'usage de l'abonnement
   const { data: usageData } = useQuery<SubscriptionUsage>({
     queryKey: ['subscription-usage'],
-    queryFn: getSubscriptionUsage
+    queryFn: async () => {
+      const result = await getSubscriptionUsage();
+      return result;
+    }
   });
 
   // 5. Mutation pour la création d'utilisateur
@@ -434,26 +432,23 @@ export default function UsersPage() {
   };
 
   // Traduire le rôle en français
-  // Traduire le rôle en français
-const translateRole = (role: string): string => {
-  const normalizedRole = (role || '').toLowerCase().trim();
-  const roles: Record<string, string> = {
-    admin: 'Administrateur',
-    super_admin: 'Super Administrateur',
-    manager: 'Gestionnaire',
-    gestionnaire: 'Gestionnaire',
-    pharmacist: 'Pharmacien',
-    pharmacien: 'Pharmacien',
-    vendeur: 'Vendeur',
-    caissier: 'Caissier',
-    stockiste: 'Stockiste',
-    comptable: 'Comptable',
-    preparateur: 'Préparateur'
+  const translateRole = (role: string): string => {
+    const normalizedRole = (role || '').toLowerCase().trim();
+    const roles: Record<string, string> = {
+      admin: 'Administrateur',
+      super_admin: 'Super Administrateur',
+      manager: 'Gestionnaire',
+      gestionnaire: 'Gestionnaire',
+      pharmacist: 'Pharmacien',
+      pharmacien: 'Pharmacien',
+      vendeur: 'Vendeur',
+      caissier: 'Caissier',
+      stockiste: 'Stockiste',
+      comptable: 'Comptable',
+      preparateur: 'Préparateur'
+    };
+    return roles[normalizedRole] || role;
   };
-  const translated = roles[normalizedRole] || role;
-  console.log(`🔄 Traduction rôle: "${role}" -> "${translated}"`);
-  return translated;
-};
 
   if (loadingUsers || isLoadingCurrentUser) {
     return (

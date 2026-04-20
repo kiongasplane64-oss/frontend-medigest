@@ -922,167 +922,205 @@ class InventoryService {
     }
   }
 
-  // =========================================================
-  // EXPORT / IMPORT
-  // =========================================================
+  // services/inventoryService.ts (fonctions corrigées)
 
-  async exportStock(format: ExportFormat = 'excel', filters?: {
-    pharmacy_id?: string;
-    category_id?: string;
-    category?: string;
-    search?: string;
-    stock_status?: string;
-    expiry_status?: string;
-    include_sales_stats?: boolean;
-  }): Promise<Blob> {
-    try {
-      const params = this.cleanParams({
-        format,
-        ...filters
-      });
-      
-      const response = await api.get(`${this.baseUrl}/export`, {
-        params,
-        responseType: 'blob',
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Erreur export stock:', error);
-      throw error;
-    }
+// =========================================================
+// EXPORT / IMPORT (PARTIE CORRIGÉE)
+// =========================================================
+
+async exportStock(format: ExportFormat = 'excel', filters?: {
+  pharmacy_id?: string;
+  branch_id?: string;
+  category_id?: string;
+  category?: string;
+  search?: string;
+  stock_status?: string;
+  expiry_status?: string;
+  include_sales_stats?: boolean;
+}): Promise<Blob> {
+  try {
+    const params = this.cleanParams({
+      format,
+      ...filters
+    });
+    
+    const response = await api.get(`${this.baseUrl}/export`, {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Erreur export stock:', error);
+    throw error;
   }
+}
 
-  async getImportTemplate(format: 'excel' | 'csv' = 'excel'): Promise<Blob> {
-    try {
-      const response = await api.get(`${this.baseUrl}/import/template`, {
-        params: { format },
-        responseType: 'blob',
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Erreur récupération template import:', error);
-      throw error;
-    }
+async getImportTemplate(format: 'excel' | 'csv' = 'excel'): Promise<Blob> {
+  try {
+    const response = await api.get(`${this.baseUrl}/import/template`, {
+      params: { format },
+      responseType: 'blob',
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Erreur récupération template import:', error);
+    throw error;
   }
+}
 
-  async previewImport(file: File): Promise<ImportPreviewResponse> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+async previewImport(file: File): Promise<ImportPreviewResponse> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
 
-      const response = await api.post(`${this.baseUrl}/import/preview`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+    const response = await api.post(`${this.baseUrl}/import/preview`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
 
-      const data = response.data;
-      
-      const products: ImportPreviewProduct[] = (data.products || []).map((p: any) => ({
-        name: p.name,
-        code: p.code,
-        barcode: p.barcode,
-        quantity: p.quantity,
-        purchase_price: p.purchase_price,
-        selling_price: p.selling_price,
-        expiry_date: p.expiry_date,
-        category: p.category,
-        location: p.location,
-        supplier: p.supplier,
-        batch_number: p.batch_number,
-        existingProduct: p.existing_product,
-        action: p.action || 'update'
-      }));
+    const data = response.data;
+    
+    const normalizeNumber = (value: any): number => {
+      if (value === undefined || value === null || value === '') return 0;
+      const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+      return isNaN(num) ? 0 : num;
+    };
+    
+    const products: ImportPreviewProduct[] = (data.products || []).map((p: any) => ({
+      name: p.name || '',
+      code: p.code || '',
+      barcode: p.barcode || '',
+      quantity: normalizeNumber(p.quantity),
+      purchase_price: normalizeNumber(p.purchase_price),
+      selling_price: normalizeNumber(p.selling_price),
+      selling_price_wholesale: p.selling_price_wholesale ? normalizeNumber(p.selling_price_wholesale) : undefined,
+      selling_price_retail: p.selling_price_retail ? normalizeNumber(p.selling_price_retail) : undefined,
+      expiry_date: p.expiry_date || '',
+      category: p.category || '',
+      location: p.location || '',
+      supplier: p.supplier || '',
+      batch_number: p.batch_number || '',
+      existingProduct: p.existing_product || null,
+      action: p.action || 'update'
+    }));
 
-      const duplicates: ImportPreviewProduct[] = (data.duplicates || []).map((p: any) => ({
-        name: p.name,
-        code: p.code,
-        barcode: p.barcode,
-        quantity: p.quantity,
-        purchase_price: p.purchase_price,
-        selling_price: p.selling_price,
-        expiry_date: p.expiry_date,
-        category: p.category,
-        location: p.location,
-        supplier: p.supplier,
-        batch_number: p.batch_number,
-        existingProduct: p.existing_product,
-        action: p.action || 'update'
-      }));
+    const duplicates: ImportPreviewProduct[] = (data.duplicates || []).map((p: any) => ({
+      name: p.name || '',
+      code: p.code || '',
+      barcode: p.barcode || '',
+      quantity: normalizeNumber(p.quantity),
+      purchase_price: normalizeNumber(p.purchase_price),
+      selling_price: normalizeNumber(p.selling_price),
+      selling_price_wholesale: p.selling_price_wholesale ? normalizeNumber(p.selling_price_wholesale) : undefined,
+      selling_price_retail: p.selling_price_retail ? normalizeNumber(p.selling_price_retail) : undefined,
+      expiry_date: p.expiry_date || '',
+      category: p.category || '',
+      location: p.location || '',
+      supplier: p.supplier || '',
+      batch_number: p.batch_number || '',
+      existingProduct: p.existing_product || null,
+      action: p.action || 'update'
+    }));
 
-      const newProducts: ImportPreviewProduct[] = (data.new_products || []).map((p: any) => ({
-        name: p.name,
-        code: p.code,
-        barcode: p.barcode,
-        quantity: p.quantity,
-        purchase_price: p.purchase_price,
-        selling_price: p.selling_price,
-        expiry_date: p.expiry_date,
-        category: p.category,
-        location: p.location,
-        supplier: p.supplier,
-        batch_number: p.batch_number,
-        existingProduct: null,
-        action: 'create'
-      }));
+    const newProducts: ImportPreviewProduct[] = (data.new_products || []).map((p: any) => ({
+      name: p.name || '',
+      code: p.code || '',
+      barcode: p.barcode || '',
+      quantity: normalizeNumber(p.quantity),
+      purchase_price: normalizeNumber(p.purchase_price),
+      selling_price: normalizeNumber(p.selling_price),
+      selling_price_wholesale: p.selling_price_wholesale ? normalizeNumber(p.selling_price_wholesale) : undefined,
+      selling_price_retail: p.selling_price_retail ? normalizeNumber(p.selling_price_retail) : undefined,
+      expiry_date: p.expiry_date || '',
+      category: p.category || '',
+      location: p.location || '',
+      supplier: p.supplier || '',
+      batch_number: p.batch_number || '',
+      existingProduct: null,
+      action: 'create'
+    }));
 
-      return {
-        products,
-        duplicates,
-        newProducts,
-        summary: {
-          total_products: products.length,
-          new_products_count: newProducts.length,
-          duplicates_count: duplicates.length,
-          errors_count: data.skipped_rows || 0,
-          categories_missing: data.categories_missing || [],
-          manufacturers_missing: data.manufacturers_missing || [],
-          suppliers_missing: data.suppliers_missing || []
-        },
-        headers: data.columns_used || [],
-        template_version: data.template_version || '1.0'
-      };
-    } catch (error) {
-      console.error('Erreur preview import:', error);
-      throw error;
-    }
+    return {
+      products,
+      duplicates,
+      newProducts,
+      summary: {
+        total_products: products.length,
+        new_products_count: newProducts.length,
+        duplicates_count: duplicates.length,
+        errors_count: data.skipped_rows || 0,
+        categories_missing: data.categories_missing || [],
+        manufacturers_missing: data.manufacturers_missing || [],
+        suppliers_missing: data.suppliers_missing || []
+      },
+      headers: data.columns_used || [],
+      template_version: data.template_version || '1.0'
+    };
+  } catch (error) {
+    console.error('Erreur preview import:', error);
+    throw error;
   }
+}
 
-  async importProducts(
-    file: File, 
-    mode: 'add' | 'replace' | 'update' = 'add',
-    duplicateActions?: Record<string, string>
-  ): Promise<BulkImportResult> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+/**
+ * Importer des produits depuis un fichier
+ * @param formData - FormData contenant le fichier et les options d'import
+ *                    Options possibles:
+ *                    - file: le fichier à importer
+ *                    - mode: 'add' | 'replace' | 'update'
+ *                    - duplicate_actions: JSON string des actions pour les doublons
+ *                    - preserve_prices: 'true' pour conserver les prix du fichier
+ *                    - preserve_quantities: 'true' pour conserver les quantités du fichier
+ */
+async importProducts(formData: FormData): Promise<BulkImportResult> {
+  try {
+    const response = await api.post(`${this.baseUrl}/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
 
-      const params: Record<string, string> = { mode };
-      if (duplicateActions) {
-        params.duplicate_actions = JSON.stringify(duplicateActions);
-      }
-
-      const response = await api.post(`${this.baseUrl}/import`, formData, {
-        params,
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-
-      const data = response.data;
-      
-      return {
-        success: data.success ?? true,
-        message: data.message || 'Import terminé',
-        imported_count: data.created || data.imported_count || 0,
-        updated_count: data.updated || data.updated_count || 0,
-        created: data.created || 0,
-        updated: data.updated || 0,
-        skipped: data.skipped || 0,
-        failed_count: data.skipped || data.failed_count || 0,
-        errors: data.errors || []
-      };
-    } catch (error) {
-      console.error('Erreur import produits:', error);
-      throw error;
-    }
+    const data = response.data;
+    
+    return {
+      success: data.success ?? true,
+      message: data.message || 'Import terminé',
+      imported_count: data.created || data.imported_count || 0,
+      updated_count: data.updated || data.updated_count || 0,
+      created: data.created || 0,
+      updated: data.updated || 0,
+      skipped: data.skipped || 0,
+      failed_count: data.skipped || data.failed_count || 0,
+      errors: data.errors || []
+    };
+  } catch (error) {
+    console.error('Erreur import produits:', error);
+    throw error;
   }
+}
+
+// Version alternative avec paramètres individuels (pour compatibilité)
+async importProductsWithParams(
+  file: File, 
+  mode: 'add' | 'replace' | 'update' = 'add',
+  duplicateActions?: Record<string, string>,
+  options?: { preserve_prices?: boolean; preserve_quantities?: boolean }
+): Promise<BulkImportResult> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mode', mode);
+  
+  if (duplicateActions) {
+    formData.append('duplicate_actions', JSON.stringify(duplicateActions));
+  }
+  
+  if (options?.preserve_prices) {
+    formData.append('preserve_prices', 'true');
+  }
+  
+  if (options?.preserve_quantities) {
+    formData.append('preserve_quantities', 'true');
+  }
+  
+  return this.importProducts(formData);
+}
 
   // =========================================================
   // RECHERCHE

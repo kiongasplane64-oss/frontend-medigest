@@ -129,7 +129,11 @@ export default function SubscriptionPage() {
   const [showPaymentOptions, setShowPaymentOptions] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<ExtendedPlan | null>(null);
 
-  // HOOKS DE REQUÊTE
+  // ========================================
+  // REQUÊTES - CORRECTION DES TYPES
+  // ========================================
+
+  // 1. Abonnement
   const { 
     data: subscriptionData, 
     isLoading: loadingSubscription,
@@ -137,10 +141,11 @@ export default function SubscriptionPage() {
     refetch: refetchSubscription
   } = useQuery<ExtendedSubscription>({
     queryKey: ['subscription'],
-    queryFn: getSubscription,
+    queryFn: () => getSubscription(),
     retry: 2
   });
   
+  // 2. Utilisation - CORRIGÉ
   const { 
     data: usageData, 
     isLoading: loadingUsage,
@@ -148,11 +153,11 @@ export default function SubscriptionPage() {
     refetch: refetchUsage
   } = useQuery<SubscriptionUsage>({
     queryKey: ['subscription-usage'],
-    queryFn: getSubscriptionUsage,
+    queryFn: () => getSubscriptionUsage(false),
     retry: 2
   });
   
-  // CORRECTION ICI : utiliser une fonction fléchée sans paramètre
+  // 3. Plans disponibles - CORRIGÉ
   const { 
     data: plansData, 
     isLoading: loadingPlans,
@@ -160,17 +165,15 @@ export default function SubscriptionPage() {
     refetch: refetchPlans
   } = useQuery<ExtendedPlan[]>({
     queryKey: ['subscription-plans'],
-    queryFn: () => getAvailablePlans(false), // Appel direct avec false
+    queryFn: () => getAvailablePlans(false),
     retry: 2
   });
 
-  // MUTATION - CORRIGÉE : envoie seulement les données nécessaires
+  // MUTATION
   const mutation = useMutation({
     mutationFn: (plan: ExtendedPlan) => {
-      // Extraire uniquement les données nécessaires pour l'API
-      // Le backend attend { plan: string, billing_cycle: string }
       const payload = {
-        plan: plan.type || plan.id || '',  // Le type du plan (ex: 'pro', 'starter')
+        plan: plan.type || plan.id || '',
         billing_cycle: plan.billing_cycle || 'monthly'
       };
       

@@ -53,8 +53,8 @@ export interface OfflineSale {
   posId?: string;
   posName?: string;
   sessionId?: string;
-  clientType?: string;
-  clientName?: string;
+  customerType?: string;
+  customerName?: string;
   receiptNumber?: string;
   synced?: boolean;
   synced_at?: number;
@@ -81,7 +81,7 @@ export interface OfflineDailyStats {
   date: string; // Format YYYY-MM-DD - Utilisé comme clé primaire
   total: number;
   salesCount: number;
-  currentClient: string;
+  currentCustomer: string;
   updatedAt: number;
 }
 
@@ -140,7 +140,7 @@ export class OfflineDatabase extends Dexie {
         const sales = await trans.table('sales').toArray();
         for (const sale of sales) {
           const updates: any = {};
-          if (sale.clientName === undefined) updates.clientName = sale.clientType || 'Passager';
+          if (sale.customerName === undefined) updates.customerName = sale.customerType || 'Passager';
           if (sale.synced === undefined) updates.synced = sale.status === 'synced';
           if (sale.synced_at === undefined && sale.status === 'synced') updates.synced_at = Date.now();
           
@@ -401,7 +401,7 @@ export class OfflineDatabase extends Dexie {
           date,
           total: stats.total || 0,
           salesCount: stats.salesCount || 0,
-          currentClient: stats.currentClient || 'Passager',
+          currentCustomer: stats.currentCustomer || 'Passager',
           updatedAt: Date.now()
         } as OfflineDailyStats);
       }
@@ -412,7 +412,7 @@ export class OfflineDatabase extends Dexie {
           date,
           total: stats.total || 0,
           salesCount: stats.salesCount || 0,
-          currentClient: stats.currentClient || 'Passager',
+          currentCustomer: stats.currentCustomer || 'Passager',
           updatedAt: Date.now()
         } as OfflineDailyStats);
       } catch (fallbackError) {

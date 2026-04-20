@@ -41,7 +41,7 @@ interface NormalizedSale {
   total_amount: number;
   payment_method: string;
   seller_name?: string;
-  client_name?: string;
+  customer_name?: string;
   items?: Array<{
     product_id: string;
     product_name: string;
@@ -163,7 +163,7 @@ export default function Rapports() {
       total_amount: sale.total_amount,
       payment_method: sale.payment_method,
       seller_name: sale.seller_name,
-      client_name: sale.client_name,
+      customer_name: sale.customer_name,
       items: sale.items?.map((item: any) => ({
         product_id: item.product_id,
         product_name: item.product_name,
@@ -185,7 +185,7 @@ export default function Rapports() {
       total_amount: sale.total,
       payment_method: sale.paymentMethod,
       seller_name: sale.cashierName,
-      client_name: sale.clientName,
+      customer_name: sale.customerName,
       items: sale.items?.map((item: any) => ({
         product_id: item.id,
         product_name: item.name,
@@ -424,7 +424,7 @@ export default function Rapports() {
           total: s.total_amount,
           paymentMethod: s.payment_method,
           cashier: s.seller_name,
-          client: s.client_name,
+          customer: s.customer_name,
           items: s.items?.length || 0,
           synced: s.synced
         }))

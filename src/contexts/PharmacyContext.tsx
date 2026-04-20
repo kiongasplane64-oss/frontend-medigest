@@ -16,7 +16,8 @@ interface Pharmacy {
   phone: string | null;
   email: string | null;
   is_active: boolean;
-  is_main: boolean;
+  opening_hours: string | null;
+  pharmacist_in_charge: string | null;
   config: Record<string, any>;
   created_at: string;
   updated_at: string;
@@ -33,6 +34,7 @@ interface Branch {
   city: string;
   phone: string | null;
   email: string | null;
+  manager_name?: string | null;
 }
 
 interface PharmacyContextType {
@@ -49,6 +51,7 @@ interface PharmacyContextType {
   clearPharmacy: () => void;
   isLoading: boolean;
   error: string | null;
+  refreshCurrentPharmacy: () => Promise<void>;
 }
 
 const PharmacyContext = createContext<PharmacyContextType | undefined>(undefined);
@@ -86,26 +89,64 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
     return null;
   }, [location.pathname]);
 
-  // Charger les pharmacies de l'utilisateur
+  // Obtenir le token d'authentification
+  const getAuthToken = useCallback(() => {
+    return localStorage.getItem('access_token');
+  }, []);
+
+  // Headers pour les requêtes API
+  const getHeaders = useCallback(() => {
+    const token = getAuthToken();
+    return {
+      'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` }),
+    };
+  }, [getAuthToken]);
+
+  // Charger les pharmacies de l'utilisateur (depuis /api/v1/pharmacies/)
   const loadPharmacies = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     
     try {
-      const response = await fetch('/api/v1/pharmacies/user');
-      if (!response.ok) {
-        throw new Error('Erreur lors du chargement des pharmacies');
+      const token = getAuthToken();
+      if (!token) {
+        console.warn('No auth token found');
+        setIsLoading(false);
+        return;
       }
+
+      // Utiliser l'endpoint GET /api/v1/pharmacies/
+      const response = await fetch('/api/v1/pharmacies/', {
+        headers: getHeaders(),
+      });
+      
+      if (response.status === 401) {
+        // Non authentifié, rediriger vers login
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('currentPharmacy');
+        localStorage.removeItem('currentBranch');
+        window.location.href = '/login';
+        return;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`Erreur ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
-      setPharmacies(data.pharmacies || []);
+      
+      // L'API retourne directement un tableau de pharmacies
+      const pharmaciesList = Array.isArray(data) ? data : (data.pharmacies || data.data || []);
+      setPharmacies(pharmaciesList);
       
       // Vérifier si une pharmacie est stockée dans localStorage
       const storedPharmacy = localStorage.getItem('currentPharmacy');
       if (storedPharmacy) {
         try {
           const parsed = JSON.parse(storedPharmacy);
-          const found = (data.pharmacies || []).find((p: Pharmacy) => p.id === parsed.id);
-          if (found) {
+          const found = pharmaciesList.find((p: Pharmacy) => p.id === parsed.id);
+          if (found && found.is_active) {
             setCurrentPharmacy(found);
             await loadBranches(found.id);
             return;
@@ -115,11 +156,11 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
         }
       }
       
-      // Sinon, utiliser la pharmacie de l'URL ou la première
+      // Sinon, utiliser la pharmacie de l'URL ou la première active
       const urlPharmacyId = getPharmacyIdFromUrl();
       if (urlPharmacyId) {
-        const found = (data.pharmacies || []).find((p: Pharmacy) => p.id === urlPharmacyId);
-        if (found) {
+        const found = pharmaciesList.find((p: Pharmacy) => p.id === urlPharmacyId);
+        if (found && found.is_active) {
           setCurrentPharmacy(found);
           localStorage.setItem('currentPharmacy', JSON.stringify(found));
           await loadBranches(found.id);
@@ -128,37 +169,72 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
       }
       
       // Prendre la première pharmacie active
-      const firstActive = (data.pharmacies || []).find((p: Pharmacy) => p.is_active);
+      const firstActive = pharmaciesList.find((p: Pharmacy) => p.is_active === true);
       if (firstActive) {
         setCurrentPharmacy(firstActive);
         localStorage.setItem('currentPharmacy', JSON.stringify(firstActive));
         await loadBranches(firstActive.id);
+      } else if (pharmaciesList.length > 0) {
+        // Si aucune n'est active, prendre la première
+        setCurrentPharmacy(pharmaciesList[0]);
+        localStorage.setItem('currentPharmacy', JSON.stringify(pharmaciesList[0]));
+        await loadBranches(pharmaciesList[0].id);
       }
     } catch (err) {
       console.error('Error loading pharmacies:', err);
-      setError(err instanceof Error ? err.message : 'Erreur de chargement');
+      setError(err instanceof Error ? err.message : 'Erreur de chargement des pharmacies');
     } finally {
       setIsLoading(false);
     }
-  }, [getPharmacyIdFromUrl]);
+  }, [getPharmacyIdFromUrl, getHeaders, getAuthToken]);
+
+  // Rafraîchir la pharmacie courante
+  const refreshCurrentPharmacy = useCallback(async () => {
+    if (!currentPharmacy) return;
+    
+    try {
+      const response = await fetch(`/api/v1/pharmacies/${currentPharmacy.id}`, {
+        headers: getHeaders(),
+      });
+      
+      if (response.ok) {
+        const updated = await response.json();
+        setCurrentPharmacy(updated);
+        localStorage.setItem('currentPharmacy', JSON.stringify(updated));
+        
+        // Mettre à jour dans la liste
+        setPharmacies(prev => 
+          prev.map(p => p.id === updated.id ? updated : p)
+        );
+      }
+    } catch (err) {
+      console.error('Error refreshing pharmacy:', err);
+    }
+  }, [currentPharmacy, getHeaders]);
 
   // Charger les branches d'une pharmacie
   const loadBranches = useCallback(async (pharmacyId: string) => {
     try {
-      const response = await fetch(`/api/v1/pharmacies/${pharmacyId}/branches`);
+      const response = await fetch(`/api/v1/pharmacies/${pharmacyId}/branches`, {
+        headers: getHeaders(),
+      });
+      
       if (!response.ok) {
-        throw new Error('Erreur lors du chargement des branches');
+        throw new Error(`Erreur ${response.status}: ${response.statusText}`);
       }
+      
       const data = await response.json();
-      setBranches(data.branches || []);
+      // L'API retourne directement un tableau de branches
+      const branchesList = Array.isArray(data) ? data : (data.branches || data.data || []);
+      setBranches(branchesList);
       
       // Vérifier si une branche est stockée
       const storedBranch = localStorage.getItem('currentBranch');
       if (storedBranch) {
         try {
           const parsed = JSON.parse(storedBranch);
-          const found = (data.branches || []).find((b: Branch) => b.id === parsed.id);
-          if (found) {
+          const found = branchesList.find((b: Branch) => b.id === parsed.id);
+          if (found && found.is_active) {
             setCurrentBranch(found);
             return;
           }
@@ -167,39 +243,60 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
         }
       }
       
-      // Prendre la branche principale ou la première
-      const mainBranch = (data.branches || []).find((b: Branch) => b.is_main_branch);
-      if (mainBranch) {
+      // Prendre la branche principale ou la première active
+      const mainBranch = branchesList.find((b: Branch) => b.is_main_branch === true);
+      if (mainBranch && mainBranch.is_active !== false) {
         setCurrentBranch(mainBranch);
         localStorage.setItem('currentBranch', JSON.stringify(mainBranch));
-      } else if (data.branches && data.branches.length > 0) {
-        setCurrentBranch(data.branches[0]);
-        localStorage.setItem('currentBranch', JSON.stringify(data.branches[0]));
+      } else if (branchesList.length > 0) {
+        const firstActive = branchesList.find((b: Branch) => b.is_active !== false);
+        setCurrentBranch(firstActive || branchesList[0]);
+        localStorage.setItem('currentBranch', JSON.stringify(firstActive || branchesList[0]));
+      } else {
+        // Pas de branches, créer une branche virtuelle
+        setCurrentBranch(null);
+        localStorage.removeItem('currentBranch');
       }
     } catch (err) {
       console.error('Error loading branches:', err);
+      setBranches([]);
+      setCurrentBranch(null);
     }
-  }, []);
+  }, [getHeaders]);
 
   // Changer de pharmacie
   const switchPharmacy = useCallback(async (pharmacyId: string) => {
     setIsLoading(true);
+    setError(null);
+    
     try {
       const pharmacy = pharmacies.find(p => p.id === pharmacyId);
-      if (pharmacy) {
-        setCurrentPharmacy(pharmacy);
-        localStorage.setItem('currentPharmacy', JSON.stringify(pharmacy));
-        await loadBranches(pharmacyId);
-        
-        // Rediriger vers la nouvelle pharmacie
-        const newPath = location.pathname?.replace(/\/pharmacie\/[^\/]+/, `/pharmacie/${pharmacyId}`);
-        if (newPath && newPath !== location.pathname) {
-          navigate(newPath);
-        }
+      if (!pharmacy) {
+        throw new Error('Pharmacie non trouvée');
+      }
+      
+      if (!pharmacy.is_active) {
+        throw new Error('Cette pharmacie est désactivée');
+      }
+      
+      setCurrentPharmacy(pharmacy);
+      localStorage.setItem('currentPharmacy', JSON.stringify(pharmacy));
+      
+      // Réinitialiser la branche courante
+      setCurrentBranch(null);
+      localStorage.removeItem('currentBranch');
+      
+      // Charger les branches de la nouvelle pharmacie
+      await loadBranches(pharmacyId);
+      
+      // Rediriger vers la nouvelle pharmacie si nécessaire
+      const newPath = location.pathname?.replace(/\/pharmacie\/[^\/]+/, `/pharmacie/${pharmacyId}`);
+      if (newPath && newPath !== location.pathname) {
+        navigate(newPath);
       }
     } catch (err) {
       console.error('Error switching pharmacy:', err);
-      setError(err instanceof Error ? err.message : 'Erreur lors du changement');
+      setError(err instanceof Error ? err.message : 'Erreur lors du changement de pharmacie');
     } finally {
       setIsLoading(false);
     }
@@ -234,7 +331,7 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
     const urlPharmacyId = getPharmacyIdFromUrl();
     if (urlPharmacyId && currentPharmacy && currentPharmacy.id !== urlPharmacyId) {
       const found = pharmacies.find(p => p.id === urlPharmacyId);
-      if (found) {
+      if (found && found.is_active) {
         setCurrentPharmacy(found);
         localStorage.setItem('currentPharmacy', JSON.stringify(found));
         loadBranches(found.id);
@@ -256,6 +353,7 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
     clearPharmacy,
     isLoading,
     error,
+    refreshCurrentPharmacy,
   };
 
   return (
@@ -267,14 +365,20 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
 
 // Hook pour les pages qui nécessitent une pharmacie
 export function useRequiredPharmacy() {
-  const { currentPharmacy, isLoading, error } = usePharmacy();
+  const { currentPharmacy, isLoading, error, pharmacies } = usePharmacy();
+  const navigate = useNavigate();
   
   useEffect(() => {
     if (!isLoading && !currentPharmacy && !error) {
-      // Rediriger vers la sélection de pharmacie
-      window.location.href = '/pharmacies';
+      if (pharmacies.length > 0) {
+        // Rediriger vers la première pharmacie disponible
+        navigate(`/pharmacie/${pharmacies[0].id}`);
+      } else {
+        // Rediriger vers la création de pharmacie
+        navigate('/pharmacies/create');
+      }
     }
-  }, [currentPharmacy, isLoading, error]);
+  }, [currentPharmacy, isLoading, error, pharmacies, navigate]);
   
   return { pharmacy: currentPharmacy, isLoading, error };
 }

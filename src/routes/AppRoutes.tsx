@@ -25,7 +25,6 @@ import Sidebar from '@/layouts/Sidebar';
 // Vues du Dashboard
 import Dashboard from '@/modules/stats/views/Dashboard';
 import InventoryListView from '@/modules/inventory/views/inventoryListView';
-import POS from '@/modules/sales/views/POS';
 import VendorPos from '@/modules/vendor/VendorPos';
 import TransferList from '@/modules/inventory/views/TransferList';
 import ProfitAnalysis from '@/modules/benefice/views/benefice';
@@ -209,8 +208,6 @@ export default function AppRoutes() {
           <Route path="/dashboard" element={<Dashboard />} />
           
           {/* Opérations commerciales */}
-          <Route path="/sales" element={<POS />} />
-          <Route path="/pos" element={<POS />} />
           <Route path="/vendor-pos" element={<VendorPos />} />
           <Route path="/factures" element={<Facture />} />
           <Route path="/historique" element={<Historique />} />

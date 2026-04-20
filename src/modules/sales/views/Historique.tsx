@@ -28,7 +28,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
 import { useSaleStore, type LocalSale } from '@/store/saleStore';
-import { type SaleResponse } from '@/services/saleService';
+import { type SaleResponse, type SaleItemResponse } from '@/services/saleService';
 
 // Types
 interface SaleItem {
@@ -53,7 +53,7 @@ interface Sale {
   branchName?: string;
   sessionNumber?: string;
   receiptNumber?: string;
-  clientName?: string;
+  customerName?: string;
   status?: 'completed' | 'pending' | 'cancelled';
   synced?: boolean;
   isLocal?: boolean;
@@ -104,18 +104,9 @@ interface MonthlyStats {
   byBranch: Map<string, { branchName: string; amount: number; count: number }>;
 }
 
-interface YearlyStats {
-  year: number;
-  totalAmount: number;
-  totalSales: number;
-  byUser: Map<string, { userName: string; amount: number; count: number }>;
-  byBranch: Map<string, { branchName: string; amount: number; count: number }>;
-}
-
 type ViewMode = 'sales' | 'users' | 'branches' | 'analytics';
 type PeriodType = 'today' | 'week' | 'month' | 'year' | 'custom';
 
-// Constantes
 const MONTHS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const DAYS_FR = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
@@ -134,7 +125,6 @@ export default function Historique() {
     resetFailedSales,
   } = useSaleStore();
 
-  // États
   const [search, setSearch] = useState('');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [periodType, setPeriodType] = useState<PeriodType>('today');
@@ -151,9 +141,8 @@ export default function Historique() {
   const itemsPerPage = 20;
   const pendingCount = getPendingCount();
 
-  // Chargement initial
   useEffect(() => {
-    void loadData();
+    loadData();
   }, []);
 
   async function loadData() {
@@ -166,9 +155,9 @@ export default function Historique() {
     } catch (error) {
       console.error('Erreur chargement historique:', error);
       toast({
-        title: "Erreur",
-        description: "Impossible de charger l'historique",
-        variant: "destructive",
+        title: "Mode hors-ligne",
+        description: "Affichage des données locales uniquement",
+        variant: "default",
       });
     } finally {
       setLoading(false);
@@ -182,16 +171,9 @@ export default function Historique() {
       if (isOnline) {
         await syncPendingSales();
       }
-      toast({
-        title: "Succès",
-        description: "Historique mis à jour",
-      });
+      toast({ title: "Succès", description: "Historique mis à jour" });
     } catch (error) {
-      toast({
-        title: "Erreur",
-        description: "Erreur lors du rafraîchissement",
-        variant: "destructive",
-      });
+      toast({ title: "Erreur", description: "Erreur lors du rafraîchissement", variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -199,69 +181,83 @@ export default function Historique() {
 
   const handleRetryFailed = () => {
     resetFailedSales();
-    toast({
-      title: "Réessai",
-      description: "Tentative de re-synchronisation des ventes échouées",
-    });
+    toast({ title: "Réessai", description: "Tentative de re-synchronisation des ventes échouées" });
   };
 
-  // Normalisation des ventes API
+  // Helper pour s'assurer que total est un nombre
+  const getTotalAmount = (sale: any): number => {
+    if (typeof sale.total === 'number') return sale.total;
+    if (typeof sale.total === 'string') return parseFloat(sale.total) || 0;
+    if (sale.total_amount && typeof sale.total_amount === 'number') return sale.total_amount;
+    if (sale.total_amount && typeof sale.total_amount === 'string') return parseFloat(sale.total_amount) || 0;
+    return 0;
+  };
+
+  // Fonction pour formater les prix avec la devise FC
+  const formatPrice = (price: number): string => {
+    return price.toFixed(2) + ' FC';
+  };
+
   function normalizeApiSale(sale: SaleResponse): Sale {
+    // S'assurer que les items ont un nom correct
+    const items = (sale.items || []).map((item: SaleItemResponse) => ({
+      id: item.product_id,
+      name: item.product_name || (item as any).name || 'Produit sans nom',
+      price: item.unit_price || 0,
+      quantity: item.quantity || 0,
+      code: item.product_code,
+    }));
+
     return {
       id: sale.id,
-      items: (sale.items || []).map(item => ({
-        id: item.product_id,
-        name: item.product_name,
-        price: item.unit_price,
-        quantity: item.quantity,
-        code: item.product_code,
-      })),
-      total: sale.total_amount,
-      paymentMethod: sale.payment_method,
+      items,
+      total: getTotalAmount(sale),
+      paymentMethod: sale.payment_method || 'cash',
       timestamp: new Date(sale.created_at).getTime(),
       cashierName: sale.seller_name,
       cashierId: sale.created_by,
       posName: sale.pharmacy_id,
       branchId: sale.pharmacy_id,
-      branchName: `Branche ${sale.pharmacy_id?.slice(-4) || 'Principale'}`,
+      branchName: sale.pharmacy_id ? `Branche ${sale.pharmacy_id.slice(-4)}` : 'Branche Principale',
       sessionNumber: sale.reference?.slice(0, 8),
       receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
-      clientName: sale.client_name || 'Passager',
+      customerName: sale.customer_name || 'Passager',
       status: sale.status as 'completed' | 'pending' | 'cancelled',
       synced: true,
       isLocal: false,
     };
   }
 
-  // Normalisation des ventes locales avec valeurs par défaut
   function normalizeLocalSale(sale: LocalSale): Sale {
+    // S'assurer que les items ont un nom correct
+    const items = sale.items.map(item => ({
+      id: item.id,
+      name: item.name || 'Produit sans nom',
+      price: item.price || 0,
+      quantity: item.quantity || 0,
+      code: item.code,
+    }));
+
     return {
       id: sale.id,
-      items: sale.items.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        code: item.code,
-      })),
-      total: sale.total,
+      items,
+      total: getTotalAmount(sale),
       paymentMethod: sale.paymentMethod,
       timestamp: sale.timestamp,
       cashierName: sale.cashierName,
-      cashierId: sale.cashierId || 'unknown',  // Valeur par défaut
+      cashierId: sale.cashierId || 'unknown',
       posName: sale.posName,
-      branchId: sale.branchId || 'main',       // Valeur par défaut
-      branchName: sale.branchName || 'Branche Principale', // Valeur par défaut
+      branchId: sale.branchId || 'main',
+      branchName: sale.branchName || 'Branche Principale',
       sessionNumber: sale.sessionNumber,
       receiptNumber: sale.receiptNumber,
-      clientName: sale.clientName || 'Passager',
+      customerName: sale.customerName || 'Passager',
       status: sale.status,
       synced: sale.synced,
       isLocal: true,
     };
   }
 
-  // Toutes les ventes combinées
   const allSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);
     const localNormalized = localSales.map(normalizeLocalSale);
@@ -270,7 +266,6 @@ export default function Historique() {
     return combined;
   }, [apiSales, localSales]);
 
-  // Filtrage par période
   const getDateFilteredSales = useMemo(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -313,7 +308,6 @@ export default function Historique() {
     }
   }, [allSales, periodType, customStartDate, customEndDate, selectedYear]);
 
-  // Filtrage supplémentaire
   const filteredSales = useMemo(() => {
     let filtered = getDateFilteredSales;
     
@@ -333,7 +327,7 @@ export default function Historique() {
       const term = search.toLowerCase().trim();
       filtered = filtered.filter(sale => {
         const saleNumber = getSaleNumber(sale).toLowerCase();
-        const client = getClientName(sale).toLowerCase();
+        const client = getCustomerName(sale).toLowerCase();
         const cashier = getCashierName(sale).toLowerCase();
         return (
           saleNumber.includes(term) ||
@@ -347,7 +341,6 @@ export default function Historique() {
     return filtered;
   }, [getDateFilteredSales, paymentFilter, selectedUserId, selectedBranchId, search]);
 
-  // Pagination
   const paginatedSales = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
     const end = start + itemsPerPage;
@@ -358,10 +351,6 @@ export default function Historique() {
     };
   }, [filteredSales, currentPage]);
 
-  // ============================================
-  // STATISTIQUES PAR UTILISATEUR
-  // ============================================
-  
   const userStats = useMemo((): UserStats[] => {
     const userMap = new Map<string, UserStats>();
     
@@ -409,10 +398,6 @@ export default function Historique() {
     return result.sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredSales]);
 
-  // ============================================
-  // STATISTIQUES PAR BRANCHE
-  // ============================================
-  
   const branchStats = useMemo((): BranchStats[] => {
     const branchMap = new Map<string, BranchStats>();
     const uniqueUsersPerBranch = new Map<string, Set<string>>();
@@ -454,10 +439,6 @@ export default function Historique() {
     return result.sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredSales]);
 
-  // ============================================
-  // STATISTIQUES HEBDOMADAIRES DÉTAILLÉES
-  // ============================================
-  
   const weeklyDetails = useMemo((): DailySaleDetail[] => {
     if (periodType !== 'week') return [];
     
@@ -490,7 +471,6 @@ export default function Historique() {
         timestamp: sale.timestamp,
       }));
       
-      // Agréger par utilisateur pour le jour
       const userMap = new Map<string, typeof salesDetails[0]>();
       salesDetails.forEach(detail => {
         if (!userMap.has(detail.userId)) {
@@ -511,10 +491,6 @@ export default function Historique() {
     return weekDays;
   }, [filteredSales, periodType]);
 
-  // ============================================
-  // STATISTIQUES MENSUELLES DÉTAILLÉES
-  // ============================================
-  
   const monthlyStats = useMemo((): MonthlyStats[] => {
     const monthMap = new Map<string, MonthlyStats>();
     
@@ -540,7 +516,6 @@ export default function Historique() {
       stats.totalAmount += sale.total;
       stats.totalSales++;
       
-      // Par utilisateur
       const userId = sale.cashierId || 'unknown';
       const userName = sale.cashierName || 'Inconnu';
       if (!stats.byUser.has(userId)) {
@@ -550,7 +525,6 @@ export default function Historique() {
       userStatsMonth.amount += sale.total;
       userStatsMonth.count++;
       
-      // Par branche
       const branchId = sale.branchId || 'main';
       const branchName = sale.branchName || 'Branche Principale';
       if (!stats.byBranch.has(branchId)) {
@@ -567,77 +541,22 @@ export default function Historique() {
     });
   }, [filteredSales]);
 
-  // ============================================
-  // STATISTIQUES ANNUELLES (10 ANS)
-  // ============================================
-  
-  const yearlyStats = useMemo((): YearlyStats[] => {
-    const yearMap = new Map<number, YearlyStats>();
-    const currentYear = new Date().getFullYear();
-    const startYear = currentYear - 10;
-    
-    // Initialiser les 10 dernières années
-    for (let y = startYear; y <= currentYear; y++) {
-      yearMap.set(y, {
-        year: y,
-        totalAmount: 0,
-        totalSales: 0,
-        byUser: new Map(),
-        byBranch: new Map(),
-      });
-    }
-    
-    filteredSales.forEach(sale => {
-      const year = new Date(sale.timestamp).getFullYear();
-      if (year < startYear) return;
-      
-      const stats = yearMap.get(year);
-      if (!stats) return;
-      
-      stats.totalAmount += sale.total;
-      stats.totalSales++;
-      
-      const userId = sale.cashierId || 'unknown';
-      const userName = sale.cashierName || 'Inconnu';
-      if (!stats.byUser.has(userId)) {
-        stats.byUser.set(userId, { userName, amount: 0, count: 0 });
-      }
-      const userStatsYear = stats.byUser.get(userId)!;
-      userStatsYear.amount += sale.total;
-      userStatsYear.count++;
-      
-      const branchId = sale.branchId || 'main';
-      const branchName = sale.branchName || 'Branche Principale';
-      if (!stats.byBranch.has(branchId)) {
-        stats.byBranch.set(branchId, { branchName, amount: 0, count: 0 });
-      }
-      const branchStatsYear = stats.byBranch.get(branchId)!;
-      branchStatsYear.amount += sale.total;
-      branchStatsYear.count++;
-    });
-    
-    return Array.from(yearMap.values()).sort((a, b) => b.year - a.year);
-  }, [filteredSales]);
-
-  // Statistiques globales
   const globalStats = useMemo(() => {
-    const totalAmount = filteredSales.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const totalAmount = filteredSales.reduce((sum, sale) => sum + (sale.total || 0), 0);
     const totalSales = filteredSales.length;
     const totalItems = filteredSales.reduce(
-      (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + Number(item.quantity || 0), 0),
+      (sum, sale) => sum + sale.items.reduce((itemSum, item) => itemSum + (item.quantity || 0), 0),
       0
     );
     const averageTicket = totalSales > 0 ? totalAmount / totalSales : 0;
     return { 
-      totalAmount: Number(totalAmount) || 0, 
-      totalSales: Number(totalSales) || 0, 
-      totalItems: Number(totalItems) || 0, 
-      averageTicket: Number(averageTicket) || 0 
+      totalAmount: totalAmount || 0, 
+      totalSales: totalSales || 0, 
+      totalItems: totalItems || 0, 
+      averageTicket: averageTicket || 0 
     };
   }, [filteredSales]);
 
-
-  // Helpers
   function getSaleNumber(sale: Sale): string {
     return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
   }
@@ -646,8 +565,8 @@ export default function Historique() {
     return sale.cashierName || user?.nom_complet || user?.email || 'Inconnu';
   }
 
-  function getClientName(sale: Sale): string {
-    return sale.clientName || 'Passager';
+  function getCustomerName(sale: Sale): string {
+    return sale.customerName || 'Passager';
   }
 
   function formatDate(timestamp: number): string {
@@ -686,23 +605,19 @@ export default function Historique() {
     }
   }
 
-  // Export CSV
   async function exportToCSV() {
     try {
-      const headers = [
-        'Numero', 'Date', 'Heure', 'Client', 'Caissier', 'Branche',
-        'Articles', 'Total', 'Paiement', 'Statut', 'Synchronisé'
-      ];
+      const headers = ['Numero', 'Date', 'Heure', 'Client', 'Caissier', 'Branche', 'Articles', 'Total (FC)', 'Paiement', 'Statut', 'Synchronisé'];
 
       const csvData = filteredSales.map((sale) => [
         getSaleNumber(sale),
         formatDate(sale.timestamp),
         new Date(sale.timestamp).toLocaleTimeString('fr-FR'),
-        getClientName(sale),
+        getCustomerName(sale),
         getCashierName(sale),
         sale.branchName || 'Branche Principale',
-        sale.items.reduce((sum, item) => sum + item.quantity, 0),
-        sale.total.toFixed(2),
+        sale.items.reduce((sum, item) => sum + (item.quantity || 0), 0),
+        (sale.total || 0).toFixed(2),
         getPaymentMethodLabel(sale.paymentMethod),
         sale.status === 'cancelled' ? 'Annulée' : 'Terminée',
         sale.synced ? 'Oui' : 'Non',
@@ -727,7 +642,6 @@ export default function Historique() {
     }
   }
 
-  // Impression
   function printSale(sale: Sale) {
     const printWindow = window.open('', '_blank', 'width=420,height=720');
     if (!printWindow) return;
@@ -754,15 +668,15 @@ export default function Historique() {
               <div class="meta">${formatDateTime(sale.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(sale)}</div>
               <div class="meta">Branche: ${sale.branchName || 'Principale'}</div>
-              <div class="meta">Client: ${getClientName(sale)}</div>
+              <div class="meta">Client: ${getCustomerName(sale)}</div>
             </div>
             ${sale.items.map(item => `
               <div class="row">
                 <span>${item.quantity} x ${escapeHtml(item.name)}</span>
-                <span>${(item.price * item.quantity).toFixed(2)} $</span>
+                <span>${((item.price || 0) * (item.quantity || 0)).toFixed(2)} FC</span>
               </div>
             `).join('')}
-            <div class="row total"><span>Total</span><span>${sale.total.toFixed(2)} $</span></div>
+            <div class="row total"><span>Total</span><span>${(sale.total || 0).toFixed(2)} FC</span></div>
             <div class="meta" style="text-align:center; margin-top:16px;">Paiement: ${getPaymentMethodLabel(sale.paymentMethod)}</div>
           </div>
         </body>
@@ -792,7 +706,6 @@ export default function Historique() {
 
   const isLoading = loading || storeLoading;
 
-  // Récupérer les listes uniques pour les filtres
   const uniqueUsers = useMemo(() => {
     const users = new Map<string, string>();
     allSales.forEach(sale => {
@@ -815,7 +728,6 @@ export default function Historique() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Bannières de synchronisation */}
       {pendingCount > 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-amber-500 px-4 py-2 text-sm font-medium text-white">
           <div className="flex items-center gap-2">
@@ -834,7 +746,6 @@ export default function Historique() {
         </div>
       )}
 
-      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-4 md:px-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
@@ -862,7 +773,7 @@ export default function Historique() {
       </header>
 
       <main className="p-4 md:p-6">
-        {/* Filtres principaux */}
+        {/* Filtres */}
         <div className="mb-6 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div className="relative">
@@ -880,7 +791,7 @@ export default function Historique() {
               onChange={(e) => { setPeriodType(e.target.value as PeriodType); setCurrentPage(1); }}
               className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="today">Aujourd&apos;hui</option>
+              <option value="today">Aujourd'hui</option>
               <option value="week">Cette semaine</option>
               <option value="month">Ce mois</option>
               <option value="year">Année ({selectedYear})</option>
@@ -930,7 +841,7 @@ export default function Historique() {
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100"><TrendingUp size={20} className="text-blue-600" /></div>
-              <div><p className="text-xs text-slate-400">Chiffre d&apos;affaires</p><p className="text-xl font-black text-slate-800">{globalStats.totalAmount.toFixed(2)} $</p></div>
+              <div><p className="text-xs text-slate-400">Chiffre d'affaires</p><p className="text-xl font-black text-slate-800">{formatPrice(globalStats.totalAmount)}</p></div>
             </div>
           </div>
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
@@ -948,12 +859,12 @@ export default function Historique() {
           <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100"><CreditCard size={20} className="text-amber-600" /></div>
-              <div><p className="text-xs text-slate-400">Ticket moyen</p><p className="text-xl font-black text-slate-800">{globalStats.averageTicket.toFixed(2)} $</p></div>
+              <div><p className="text-xs text-slate-400">Ticket moyen</p><p className="text-xl font-black text-slate-800">{formatPrice(globalStats.averageTicket)}</p></div>
             </div>
           </div>
         </div>
 
-        {/* Navigation des onglets */}
+        {/* Navigation onglets */}
         <div className="mb-6 flex flex-wrap gap-2 border-b border-slate-200">
           <button onClick={() => setViewMode('sales')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'sales' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
             📋 Ventes
@@ -965,11 +876,11 @@ export default function Historique() {
             🏪 Par Branche
           </button>
           <button onClick={() => setViewMode('analytics')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'analytics' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
-            📊 Analyses (Semaine/Mois/Année)
+            📊 Analyses
           </button>
         </div>
 
-        {/* Vue des ventes individuelles */}
+        {/* Vue Ventes */}
         {viewMode === 'sales' && (
           <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-100 p-4 md:p-5">
@@ -994,11 +905,11 @@ export default function Historique() {
                           {sale.status === 'cancelled' && <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">Annulée</span>}
                         </div>
                         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-                          <div><p className="text-xs text-slate-400">Client</p><p className="font-semibold text-slate-800">{getClientName(sale)}</p></div>
+                          <div><p className="text-xs text-slate-400">Client</p><p className="font-semibold text-slate-800">{getCustomerName(sale)}</p></div>
                           <div><p className="text-xs text-slate-400">Caissier</p><p className="font-semibold text-slate-800">{getCashierName(sale)}</p></div>
                           <div><p className="text-xs text-slate-400">Branche</p><p className="font-semibold text-slate-800">{sale.branchName || 'Principale'}</p></div>
-                          <div><p className="text-xs text-slate-400">Articles</p><p className="font-semibold text-slate-800">{sale.items.reduce((sum, item) => sum + item.quantity, 0)}</p></div>
-                          <div><p className="text-xs text-slate-400">Montant</p><p className="text-lg font-black text-blue-600">{sale.total.toFixed(2)} $</p></div>
+                          <div><p className="text-xs text-slate-400">Articles</p><p className="font-semibold text-slate-800">{sale.items.reduce((sum, item) => sum + (item.quantity || 0), 0)}</p></div>
+                          <div><p className="text-xs text-slate-400">Montant</p><p className="text-lg font-black text-blue-600">{formatPrice(sale.total || 0)}</p></div>
                         </div>
                       </div>
                       <div className="flex shrink-0 gap-2">
@@ -1024,12 +935,11 @@ export default function Historique() {
           </section>
         )}
 
-        {/* Vue par utilisateur */}
+        {/* Vue Utilisateurs */}
         {viewMode === 'users' && (
           <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
             <div className="border-b border-slate-100 p-4 md:p-5">
               <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><User size={20} className="text-blue-600" /> Statistiques par utilisateur</h2>
-              <p className="text-sm text-slate-400">Dernière vente, total par utilisateur et répartition par branche</p>
             </div>
             <div className="divide-y divide-slate-100">
               {userStats.length === 0 ? (
@@ -1045,12 +955,6 @@ export default function Historique() {
                           <p className="text-xs text-slate-400">ID: {stats.userId === 'unknown' ? 'Non assigné' : stats.userId}</p>
                         </div>
                       </div>
-                      <div className="flex gap-4">
-                        <div className="text-right">
-                          <p className="text-xs text-slate-400">Dernière vente</p>
-                          <p className="text-sm font-semibold text-slate-700">{stats.lastSaleFormatted || 'Jamais'}</p>
-                        </div>
-                      </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <div className="rounded-xl bg-slate-50 p-3">
@@ -1059,29 +963,17 @@ export default function Historique() {
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-400">CA total</p>
-                        <p className="text-xl font-bold text-emerald-600">{stats.totalAmount.toFixed(2)} $</p>
+                        <p className="text-xl font-bold text-emerald-600">{formatPrice(stats.totalAmount)}</p>
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-400">Ticket moyen</p>
-                        <p className="text-xl font-bold text-blue-600">{stats.averageTicket.toFixed(2)} $</p>
+                        <p className="text-xl font-bold text-blue-600">{formatPrice(stats.averageTicket)}</p>
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-400">Branches actives</p>
-                        <p className="text-xl font-bold text-violet-600">{stats.salesByBranch.size}</p>
+                        <p className="text-xs text-slate-400">Dernière vente</p>
+                        <p className="text-sm font-semibold text-slate-700">{stats.lastSaleFormatted || 'Jamais'}</p>
                       </div>
                     </div>
-                    {stats.salesByBranch.size > 0 && (
-                      <div className="mt-4">
-                        <p className="mb-2 text-sm font-semibold text-slate-600">Détail par branche :</p>
-                        <div className="flex flex-wrap gap-2">
-                          {Array.from(stats.salesByBranch.entries()).map(([branchId, branch]) => (
-                            <div key={branchId} className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
-                              <span className="font-medium">{branch.branchName}</span>: {branch.amount.toFixed(2)} $ ({branch.count} ventes)
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ))
               )}
@@ -1089,7 +981,7 @@ export default function Historique() {
           </section>
         )}
 
-        {/* Vue par branche */}
+        {/* Vue Branches */}
         {viewMode === 'branches' && (
           <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
             <div className="border-b border-slate-100 p-4 md:p-5">
@@ -1110,18 +1002,18 @@ export default function Historique() {
                         </div>
                       </div>
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-400">Total ventes</p>
                         <p className="text-xl font-bold text-slate-800">{branch.totalSales}</p>
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-400">CA total</p>
-                        <p className="text-xl font-bold text-emerald-600">{branch.totalAmount.toFixed(2)} $</p>
+                        <p className="text-xl font-bold text-emerald-600">{formatPrice(branch.totalAmount)}</p>
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-400">Ticket moyen</p>
-                        <p className="text-xl font-bold text-blue-600">{branch.averageTicket.toFixed(2)} $</p>
+                        <p className="text-xl font-bold text-blue-600">{formatPrice(branch.averageTicket)}</p>
                       </div>
                     </div>
                   </div>
@@ -1131,15 +1023,13 @@ export default function Historique() {
           </section>
         )}
 
-        {/* Vue Analyses (Semaine/Mois/Année) */}
+        {/* Vue Analyses */}
         {viewMode === 'analytics' && (
           <div className="space-y-6">
-            {/* Détail de la semaine */}
             {periodType === 'week' && weeklyDetails.length > 0 && (
               <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
                 <div className="border-b border-slate-100 p-4 md:p-5">
                   <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><Calendar size={20} className="text-blue-600" /> Détail de la semaine</h2>
-                  <p className="text-sm text-slate-400">Ventes par jour, par utilisateur</p>
                 </div>
                 <div className="divide-y divide-slate-100">
                   {weeklyDetails.map((day) => (
@@ -1154,9 +1044,8 @@ export default function Historique() {
                               <div className="flex items-center gap-2">
                                 <User size={14} className="text-slate-400" />
                                 <span className="font-medium">{sale.userName}</span>
-                                <span className="text-xs text-slate-400">({sale.branchName})</span>
                               </div>
-                              <div className="font-semibold text-emerald-600">{sale.amount.toFixed(2)} $</div>
+                              <div className="font-semibold text-emerald-600">{formatPrice(sale.amount)}</div>
                               <div className="text-xs text-slate-400">{sale.count} vente(s)</div>
                             </div>
                           ))}
@@ -1168,84 +1057,27 @@ export default function Historique() {
               </section>
             )}
 
-            {/* Statistiques mensuelles */}
             {monthlyStats.length > 0 && (
               <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
                 <div className="border-b border-slate-100 p-4 md:p-5">
                   <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><BarChart3 size={20} className="text-blue-600" /> Statistiques mensuelles</h2>
                 </div>
                 <div className="divide-y divide-slate-100">
-                  {monthlyStats.map((month) => (
+                  {monthlyStats.slice(0, 6).map((month) => (
                     <div key={`${month.year}-${month.month}`} className="p-4">
                       <h3 className="mb-3 font-bold text-slate-700">{month.monthName} {month.year}</h3>
                       <div className="grid gap-4 md:grid-cols-2">
-                        <div>
-                          <p className="mb-2 text-sm font-semibold text-slate-600">📊 Global</p>
-                          <div className="rounded-xl bg-slate-50 p-3">
-                            <p>CA total: <span className="font-bold text-emerald-600">{month.totalAmount.toFixed(2)} $</span></p>
-                            <p>Ventes: {month.totalSales}</p>
-                            <p>Moyenne: {(month.totalAmount / month.totalSales || 0).toFixed(2)} $</p>
-                          </div>
-                        </div>
-                        <div>
-                          <p className="mb-2 text-sm font-semibold text-slate-600">👥 Par utilisateur</p>
-                          <div className="space-y-1">
-                            {Array.from(month.byUser.entries()).map(([userId, user]) => (
-                              <div key={userId} className="rounded-lg bg-slate-50 p-2 text-sm">
-                                <span className="font-medium">{user.userName}</span>: {user.amount.toFixed(2)} $ ({user.count} ventes)
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="md:col-span-2">
-                          <p className="mb-2 text-sm font-semibold text-slate-600">🏪 Par branche</p>
-                          <div className="flex flex-wrap gap-2">
-                            {Array.from(month.byBranch.entries()).map(([branchId, branch]) => (
-                              <div key={branchId} className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
-                                <span className="font-medium">{branch.branchName}</span>: {branch.amount.toFixed(2)} $
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Statistiques annuelles (10 ans) */}
-            {yearlyStats.length > 0 && (
-              <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
-                <div className="border-b border-slate-100 p-4 md:p-5">
-                  <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><TrendingUp size={20} className="text-blue-600" /> Statistiques annuelles (10 ans)</h2>
-                </div>
-                <div className="divide-y divide-slate-100">
-                  {yearlyStats.map((year) => (
-                    <div key={year.year} className="p-4">
-                      <h3 className="mb-3 font-bold text-slate-700">Année {year.year}</h3>
-                      <div className="grid gap-4 md:grid-cols-3">
                         <div className="rounded-xl bg-slate-50 p-3">
-                          <p className="text-xs text-slate-400">CA total</p>
-                          <p className="text-xl font-bold text-emerald-600">{year.totalAmount.toFixed(2)} $</p>
-                          <p className="text-sm text-slate-500">{year.totalSales} ventes</p>
+                          <p>CA total: <span className="font-bold text-emerald-600">{formatPrice(month.totalAmount)}</span></p>
+                          <p>Ventes: {month.totalSales}</p>
+                          <p>Moyenne: {formatPrice(month.totalAmount / (month.totalSales || 1))}</p>
                         </div>
                         <div>
-                          <p className="mb-1 text-sm font-semibold text-slate-600">Top utilisateurs</p>
+                          <p className="mb-2 text-sm font-semibold text-slate-600">Top utilisateurs</p>
                           <div className="space-y-1">
-                            {Array.from(year.byUser.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, 3).map(([userId, user]) => (
-                              <div key={userId} className="rounded-lg bg-slate-50 p-1.5 text-xs">
-                                {user.userName}: {user.amount.toFixed(2)} $
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                        <div>
-                          <p className="mb-1 text-sm font-semibold text-slate-600">Par branche</p>
-                          <div className="flex flex-wrap gap-1">
-                            {Array.from(year.byBranch.entries()).map(([branchId, branch]) => (
-                              <div key={branchId} className="rounded-lg bg-slate-100 px-2 py-1 text-xs">
-                                {branch.branchName}: {branch.amount.toFixed(0)} $
+                            {Array.from(month.byUser.entries()).slice(0, 3).map(([userId, user]) => (
+                              <div key={userId} className="rounded-lg bg-slate-50 p-2 text-sm">
+                                <span className="font-medium">{user.userName}</span>: {formatPrice(user.amount)}
                               </div>
                             ))}
                           </div>
@@ -1260,7 +1092,7 @@ export default function Historique() {
         )}
       </main>
 
-      {/* Modal de détails */}
+      {/* Modal détails */}
       {selectedSale && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
@@ -1282,23 +1114,42 @@ export default function Historique() {
                 <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Date</p><p className="font-bold text-slate-800">{formatDateTime(selectedSale.timestamp)}</p></div>
                 <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Caissier</p><p className="font-bold text-slate-800">{getCashierName(selectedSale)}</p></div>
                 <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Branche</p><p className="font-bold text-slate-800">{selectedSale.branchName || 'Principale'}</p></div>
-                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Client</p><p className="font-bold text-slate-800">{getClientName(selectedSale)}</p></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Client</p><p className="font-bold text-slate-800">{getCustomerName(selectedSale)}</p></div>
                 <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Paiement</p><span className={`inline-block rounded-full px-2.5 py-1 text-xs font-bold ${getPaymentMethodColor(selectedSale.paymentMethod)}`}>{getPaymentMethodLabel(selectedSale.paymentMethod)}</span></div>
+                <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Total</p><p className="text-xl font-bold text-blue-600">{formatPrice(selectedSale.total || 0)}</p></div>
               </div>
 
+              {/* Section articles dans le modal de détails */}
               <div className="overflow-hidden rounded-2xl border border-slate-100">
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><h4 className="font-bold text-slate-800">Articles</h4></div>
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                  <h4 className="font-bold text-slate-800">Articles</h4>
+                </div>
                 <div className="divide-y divide-slate-100">
                   {selectedSale.items.map((item, idx) => (
-                    <div key={`${item.id || idx}`} className="flex items-center justify-between gap-4 px-4 py-3">
-                      <div><p className="font-semibold text-slate-800">{item.name}</p><p className="text-xs text-slate-400">{item.price.toFixed(2)} $/unité</p></div>
-                      <div className="text-right"><p className="font-semibold text-slate-800">{item.quantity} × {item.price.toFixed(2)} $</p><p className="text-sm font-bold text-blue-600">{(item.price * item.quantity).toFixed(2)} $</p></div>
+                    <div key={idx} className="flex flex-col gap-2 px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-slate-800">
+                            {item.name || 'Produit sans nom'}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {item.quantity} × {(item.price || 0).toFixed(2)} FC
+                            {item.code ? ` · ${item.code}` : ''}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold text-slate-800">
+                            {item.quantity} × {(item.price || 0).toFixed(2)} FC
+                          </p>
+                          <p className="text-sm font-bold text-blue-600">
+                            {((item.price || 0) * (item.quantity || 0)).toFixed(2)} FC
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
-
-              <div className="rounded-2xl bg-blue-50 p-4"><div className="flex items-center justify-between text-lg font-black"><span>Total</span><span className="text-blue-600">{selectedSale.total.toFixed(2)} $</span></div></div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 bg-slate-50 p-5 md:p-6">

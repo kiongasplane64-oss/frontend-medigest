@@ -17,28 +17,65 @@ import { Link } from 'react-router-dom';
 import { useToast } from '@/hooks/useToast';
 import { useSaleStore, type LocalSale } from '@/store/saleStore';
 import { type SaleResponse } from '@/services/saleService';
+import { FacturePrinter } from './FacturePrinter';
 
 // Types unifiés pour l'affichage
+interface InvoiceItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  code?: string;
+  discount_percent?: number;
+  discount_amount?: number;
+  total?: number;
+}
+
 interface Invoice {
   id: string;
   receiptNumber?: string;
-  items: Array<{
-    id: string;
-    name: string;
-    price: number;
-    quantity: number;
-    code?: string;
-  }>;
+  items: InvoiceItem[];
+  subtotal?: number;
   total: number;
   paymentMethod: string;
   timestamp: number;
   cashierName?: string;
+  cashierId?: string;
   posName?: string;
+  branchId?: string;
+  branchName?: string;
   sessionNumber?: string;
-  clientName?: string;
+  customerName?: string;
   status?: string;
   synced: boolean;
   isLocal?: boolean;
+  discount_percent?: number;
+  discount_amount?: number;
+  pharmacyId?: string;
+}
+
+// Type pour les items de vente API
+interface ApiSaleItem {
+  product_id: string;
+  product_name: string;
+  name?: string; //
+  unit_price: number;
+  quantity: number;
+  product_code?: string;
+  discount_percent?: number;
+  discount_amount?: number;
+}
+
+// Fonction utilitaire pour convertir en nombre
+function toNumber(value: any, defaultValue: number = 0): number {
+  const num = Number(value);
+  return isNaN(num) ? defaultValue : num;
+}
+
+// Fonction pour formater un prix
+function formatPriceValue(price: any): string {
+  const num = toNumber(price);
+  return num.toFixed(2);
 }
 
 export default function Facture() {
@@ -50,13 +87,15 @@ export default function Facture() {
     syncPendingSales,
     loading: storeLoading,
     getPendingCount,
-    resetFailedSales, // getSalesWithLocal retiré
+    resetFailedSales,
   } = useSaleStore();
 
   const [search, setSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [filterDate, setFilterDate] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showPrinter, setShowPrinter] = useState(false);
+  const [invoiceToPrint, setInvoiceToPrint] = useState<Invoice | null>(null);
 
   const pendingCount = getPendingCount();
 
@@ -69,7 +108,6 @@ export default function Facture() {
     setLoading(true);
     try {
       await fetchSales();
-      // Tenter de synchroniser les ventes en attente
       await syncPendingSales();
     } catch (error) {
       console.error('Erreur chargement factures:', error);
@@ -83,7 +121,6 @@ export default function Facture() {
     }
   }
 
-  // Fonction de rafraîchissement manuel
   const handleRefresh = async () => {
     setLoading(true);
     try {
@@ -104,7 +141,6 @@ export default function Facture() {
     }
   };
 
-  // Réessayer les ventes en échec
   const handleRetryFailed = () => {
     resetFailedSales();
     toast({
@@ -114,61 +150,91 @@ export default function Facture() {
   };
 
   // Normalisation d'une vente API vers Invoice
-  function normalizeApiSaleToInvoice(sale: SaleResponse): Invoice {
-    return {
-      id: sale.id,
-      receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
-      items: (sale.items || []).map(item => ({
-        id: item.product_id,
-        name: item.product_name,
-        price: item.unit_price,
-        quantity: item.quantity,
-        code: item.product_code,
-      })),
-      total: sale.total_amount,
-      paymentMethod: sale.payment_method,
-      timestamp: new Date(sale.created_at).getTime(),
-      cashierName: sale.seller_name,
-      posName: sale.pharmacy_id,
-      sessionNumber: sale.reference?.slice(0, 8),
-      clientName: sale.client_name || 'Passager',
-      status: sale.status,
-      synced: true,
-      isLocal: false,
-    };
-  }
+function normalizeApiSaleToInvoice(sale: SaleResponse): Invoice {
+  // Cast des items avec le type étendu
+  const saleItems = (sale.items || []) as ApiSaleItem[];
+  
+  const items = saleItems.map((item) => ({
+    id: item.product_id,
+    name: item.product_name || item.name || 'Produit sans nom', // Correction: s'assurer que le nom est présent
+    price: toNumber(item.unit_price),
+    quantity: toNumber(item.quantity, 1),
+    code: item.product_code,
+    discount_percent: toNumber((item as any).discount_percent),
+    discount_amount: toNumber((item as any).discount_amount),
+    total: (toNumber(item.unit_price) * toNumber(item.quantity)) - toNumber((item as any).discount_amount),
+  }));
+
+  const subtotal = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const discount_amount = toNumber((sale as any).discount_amount);
+  const totalAmount = toNumber(sale.total_amount);
+
+  return {
+    id: sale.id,
+    receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
+    items,
+    subtotal,
+    total: totalAmount,
+    discount_percent: toNumber((sale as any).discount_percent),
+    discount_amount,
+    paymentMethod: sale.payment_method,
+    timestamp: new Date(sale.created_at).getTime(),
+    cashierName: sale.seller_name,
+    cashierId: sale.created_by,
+    posName: sale.pharmacy_id,
+    branchId: (sale as any).branch_id,
+    branchName: (sale as any).branch_name,
+    sessionNumber: sale.reference?.slice(0, 8),
+    customerName: sale.customer_name || 'Passager',
+    status: sale.status,
+    synced: true,
+    isLocal: false,
+    pharmacyId: sale.pharmacy_id,
+  };
+}
 
   // Normalisation d'une vente locale vers Invoice
-  function normalizeLocalSaleToInvoice(sale: LocalSale): Invoice {
-    return {
-      id: sale.id,
-      receiptNumber: sale.receiptNumber,
-      items: sale.items.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        code: item.code,
-      })),
-      total: sale.total,
-      paymentMethod: sale.paymentMethod,
-      timestamp: sale.timestamp,
-      cashierName: sale.cashierName,
-      posName: sale.posName,
-      sessionNumber: sale.sessionNumber,
-      clientName: sale.clientName || 'Passager',
-      status: sale.status,
-      synced: sale.synced,
-      isLocal: true,
-    };
-  }
+function normalizeLocalSaleToInvoice(sale: LocalSale): Invoice {
+  const items = sale.items.map(item => ({
+    id: item.id,
+    name: item.name || 'Produit sans nom', // Correction: s'assurer que le nom est présent
+    price: toNumber(item.price),
+    quantity: toNumber(item.quantity, 1),
+    code: item.code,
+    discount_percent: toNumber((item as any).discount_percent),
+    discount_amount: toNumber((item as any).discount_amount),
+    total: (toNumber(item.price) * toNumber(item.quantity)) - toNumber((item as any).discount_amount),
+  }));
+
+  return {
+    id: sale.id,
+    receiptNumber: sale.receiptNumber,
+    items,
+    subtotal: toNumber((sale as any).subtotal),
+    total: toNumber(sale.total),
+    discount_percent: toNumber((sale as any).discount_percent),
+    discount_amount: toNumber((sale as any).discount_amount),
+    paymentMethod: sale.paymentMethod,
+    timestamp: sale.timestamp,
+    cashierName: sale.cashierName,
+    cashierId: sale.cashierId,
+    posName: sale.posName,
+    branchId: (sale as any).branchId,
+    branchName: (sale as any).branchName,
+    sessionNumber: sale.sessionNumber,
+    customerName: sale.customerName || 'Passager',
+    status: sale.status,
+    synced: sale.synced,
+    isLocal: true,
+    pharmacyId: (sale as any).pharmacy_id,
+  };
+}
 
   // Récupération et combinaison des factures
   const invoices = useMemo(() => {
     const apiInvoices = apiSales.map(normalizeApiSaleToInvoice);
     const localInvoices = localSales.map(normalizeLocalSaleToInvoice);
     
-    // Combiner et trier par date décroissante
     const combined = [...localInvoices, ...apiInvoices];
     combined.sort((a, b) => b.timestamp - a.timestamp);
     
@@ -190,7 +256,7 @@ export default function Facture() {
       const term = search.trim().toLowerCase();
       result = result.filter((invoice) => {
         const invoiceNumber = getInvoiceNumber(invoice).toLowerCase();
-        const client = getClientName(invoice).toLowerCase();
+        const client = getCustomerName(invoice).toLowerCase();
         const cashier = getCashierName(invoice).toLowerCase();
         return (
           invoiceNumber.includes(term) ||
@@ -216,8 +282,8 @@ export default function Facture() {
     return invoice.posName || 'POS-01';
   }
 
-  function getClientName(invoice: Invoice): string {
-    return invoice.clientName || 'Passager';
+  function getCustomerName(invoice: Invoice): string {
+    return invoice.customerName || 'Passager';
   }
 
   function getPaymentLabel(method: string): string {
@@ -244,156 +310,48 @@ export default function Facture() {
     });
   }
 
-  // Impression
-  function printInvoice(invoice: Invoice) {
-    const printWindow = window.open('', '_blank', 'width=420,height=720');
-    if (!printWindow) return;
-
-    const html = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Facture #${getInvoiceNumber(invoice)}</title>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-              font-family: 'Courier New', monospace;
-              padding: 20px;
-              background: white;
-            }
-            .invoice {
-              max-width: 320px;
-              margin: 0 auto;
-            }
-            .header {
-              text-align: center;
-              margin-bottom: 20px;
-              border-bottom: 1px dashed #ccc;
-              padding-bottom: 12px;
-            }
-            .header h2 {
-              margin: 0 0 8px 0;
-              font-size: 18px;
-            }
-            .meta {
-              font-size: 11px;
-              color: #666;
-              margin: 2px 0;
-            }
-            .pending-badge {
-              background: #f59e0b;
-              color: white;
-              padding: 2px 6px;
-              border-radius: 4px;
-              font-size: 10px;
-              display: inline-block;
-              margin-top: 8px;
-            }
-            .items {
-              margin: 16px 0;
-            }
-            .item {
-              display: flex;
-              justify-content: space-between;
-              gap: 12px;
-              margin-bottom: 6px;
-              font-size: 12px;
-            }
-            .item-name {
-              flex: 1;
-              word-break: break-word;
-            }
-            .total {
-              font-weight: bold;
-              border-top: 1px solid #000;
-              padding-top: 8px;
-              margin-top: 8px;
-              font-size: 14px;
-            }
-            .footer {
-              text-align: center;
-              font-size: 10px;
-              color: #666;
-              margin-top: 20px;
-              border-top: 1px dashed #ccc;
-              padding-top: 12px;
-            }
-            .payment {
-              margin-top: 12px;
-              text-align: center;
-              font-size: 11px;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="invoice">
-            <div class="header">
-              <h2>GoApp Pharmacie</h2>
-              <div class="meta">Facture #${getInvoiceNumber(invoice)}</div>
-              <div class="meta">${formatDate(invoice.timestamp)}</div>
-              <div class="meta">Caissier: ${getCashierName(invoice)}</div>
-              <div class="meta">Caisse: ${getPosName(invoice)}</div>
-              <div class="meta">Client: ${getClientName(invoice)}</div>
-              ${!invoice.synced ? '<div class="pending-badge">En attente de synchronisation</div>' : ''}
-            </div>
-
-            <div class="items">
-              ${invoice.items
-                .map(
-                  (item) => `
-                    <div class="item">
-                      <span class="item-name">${item.quantity} × ${escapeHtml(item.name)}</span>
-                      <span>${(item.price * item.quantity).toFixed(2)} $</span>
-                    </div>
-                  `,
-                )
-                .join('')}
-            </div>
-
-            <div class="item total">
-              <span>TOTAL</span>
-              <span>${Number(invoice.total).toFixed(2)} $</span>
-            </div>
-
-            <div class="payment">
-              Paiement: ${getPaymentLabel(invoice.paymentMethod)}
-            </div>
-
-            <div class="footer">
-              Merci de votre visite<br />
-              Retrouvez-nous sur GoApp
-            </div>
-          </div>
-        </body>
-      </html>
-    `;
-
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+  // Affichage sécurisé du total
+  function displayTotal(total: any): string {
+    return formatPriceValue(total);
   }
 
-  // Téléchargement
+  // Utilisation du FacturePrinter unifié
+  const handlePrintWithPrinter = (invoice: Invoice) => {
+    setInvoiceToPrint(invoice);
+    setShowPrinter(true);
+  };
+
+  const handleClosePrinter = () => {
+    setShowPrinter(false);
+    setInvoiceToPrint(null);
+  };
+
+  // Téléchargement en TXT (simplifié)
   function downloadInvoice(invoice: Invoice) {
+    const itemsText = invoice.items
+      .map((item) => {
+        const itemTotal = item.price * item.quantity;
+        const discountText = item.discount_percent ? ` (remise ${item.discount_percent}%)` : '';
+        return `  ${item.quantity} x ${item.name}${discountText} = ${itemTotal.toFixed(2)} FC`;
+      })
+      .join('\n');
+
     const content = `========================================
 FACTURE #${getInvoiceNumber(invoice)}
 ========================================
 Date: ${formatDate(invoice.timestamp)}
 Caissier: ${getCashierName(invoice)}
 Caisse: ${getPosName(invoice)}
-Client: ${getClientName(invoice)}
+Client: ${getCustomerName(invoice)}
 Paiement: ${getPaymentLabel(invoice.paymentMethod)}
 ${!invoice.synced ? 'STATUT: En attente de synchronisation\n' : ''}
 ----------------------------------------
 ARTICLES:
-${invoice.items
-  .map((item) => `  ${item.quantity} x ${item.name} = ${(item.quantity * item.price).toFixed(2)} $`)
-  .join('\n')}
+${itemsText}
 ----------------------------------------
-TOTAL: ${Number(invoice.total).toFixed(2)} $
+${invoice.discount_percent ? `Remise globale: ${invoice.discount_percent}%\n` : ''}
+Sous-total: ${formatPriceValue(invoice.subtotal || invoice.items.reduce((s, i) => s + (i.price * i.quantity), 0))} FC
+TOTAL: ${displayTotal(invoice.total)} FC
 ========================================
 Merci de votre visite
     `;
@@ -407,16 +365,6 @@ Merci de votre visite
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-  }
-
-  // Helper pour échapper le HTML
-  function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 
   const isLoading = loading || storeLoading;
@@ -568,10 +516,10 @@ Merci de votre visite
                         <span className="text-sm text-slate-400">{formatDate(invoice.timestamp)}</span>
                       </div>
 
-                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                         <div>
                           <p className="text-xs text-slate-400">Client</p>
-                          <p className="font-semibold text-slate-800">{getClientName(invoice)}</p>
+                          <p className="font-semibold text-slate-800">{getCustomerName(invoice)}</p>
                         </div>
 
                         <div>
@@ -586,7 +534,7 @@ Merci de votre visite
 
                         <div>
                           <p className="text-xs text-slate-400">Total</p>
-                          <p className="text-lg font-black text-blue-600">{Number(invoice.total).toFixed(2)} $</p>
+                          <p className="text-lg font-black text-blue-600">{displayTotal(invoice.total)} FC</p>
                         </div>
                       </div>
                     </div>
@@ -601,7 +549,7 @@ Merci de votre visite
                       </button>
 
                       <button
-                        onClick={() => printInvoice(invoice)}
+                        onClick={() => handlePrintWithPrinter(invoice)}
                         className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
                         title="Imprimer"
                       >
@@ -661,7 +609,7 @@ Merci de votre visite
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-2xl bg-slate-50 p-4">
                   <p className="mb-1 text-xs text-slate-400">Client</p>
-                  <p className="font-bold text-slate-800">{getClientName(selectedInvoice)}</p>
+                  <p className="font-bold text-slate-800">{getCustomerName(selectedInvoice)}</p>
                 </div>
 
                 <div className="rounded-2xl bg-slate-50 p-4">
@@ -681,39 +629,64 @@ Merci de votre visite
               </div>
 
               <div className="overflow-hidden rounded-2xl border border-slate-100">
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
-                  <h4 className="font-bold text-slate-800">Articles</h4>
-                </div>
-
-                <div className="divide-y divide-slate-100">
-                  {selectedInvoice.items.map((item, idx) => (
-                    <div key={`${item.id || idx}`} className="flex items-center justify-between gap-4 px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-slate-800">{item.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {item.quantity} × {Number(item.price).toFixed(2)} $
-                          {item.code ? ` · ${item.code}` : ''}
+              <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                <h4 className="font-bold text-slate-800">Articles</h4>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {selectedInvoice.items.map((item, idx) => {
+                  const itemTotal = item.price * item.quantity;
+                  const discountAmount = item.discount_amount || (itemTotal * (item.discount_percent || 0) / 100);
+                  const finalTotal = itemTotal - discountAmount;
+                  
+                  return (
+                    <div key={`${item.id || idx}`} className="flex flex-col gap-2 px-4 py-3">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold text-slate-800">
+                            {item.name || 'Produit sans nom'}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {item.quantity} × {item.price.toFixed(2)} FC
+                            {item.code ? ` · ${item.code}` : ''}
+                          </p>
+                        </div>
+                        <p className="shrink-0 font-bold text-blue-600">
+                          {finalTotal.toFixed(2)} FC
                         </p>
                       </div>
-
-                      <p className="shrink-0 font-bold text-blue-600">
-                        {(Number(item.price) * Number(item.quantity)).toFixed(2)} $
-                      </p>
+                      {item.discount_percent && item.discount_percent > 0 && (
+                        <p className="text-xs text-green-600">
+                          Remise: {item.discount_percent}% (-{discountAmount.toFixed(2)} FC)
+                        </p>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
+            </div>
+              {/* Sous-total et remise globale */}
+              {selectedInvoice.discount_percent && selectedInvoice.discount_percent > 0 && (
+                <div className="rounded-2xl bg-amber-50 p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>Remise globale</span>
+                    <span className="text-green-600">-{selectedInvoice.discount_percent}%</span>
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-2xl bg-blue-50 p-4">
                 <div className="flex items-center justify-between text-lg font-black">
                   <span>Total</span>
-                  <span className="text-blue-600">{Number(selectedInvoice.total).toFixed(2)} $</span>
+                  <span className="text-blue-600">{displayTotal(selectedInvoice.total)} FC</span>
                 </div>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <button
-                  onClick={() => printInvoice(selectedInvoice)}
+                  onClick={() => {
+                    setSelectedInvoice(null);
+                    handlePrintWithPrinter(selectedInvoice);
+                  }}
                   className="flex items-center justify-center gap-2 rounded-2xl bg-blue-600 py-3 font-bold text-white hover:bg-blue-700"
                 >
                   <Printer size={18} />
@@ -739,6 +712,40 @@ Merci de votre visite
             </div>
           </div>
         </div>
+      )}
+
+      {/* FacturePrinter unifié avec les vraies données de la pharmacie */}
+      {showPrinter && invoiceToPrint && (
+        <FacturePrinter
+          sale={{
+            id: invoiceToPrint.id,
+            receiptNumber: invoiceToPrint.receiptNumber,
+            items: invoiceToPrint.items.map(item => ({
+              id: item.id,
+              name: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              code: item.code,
+              discount_percent: item.discount_percent,
+              discount_amount: item.discount_amount,
+            })),
+            subtotal: invoiceToPrint.subtotal || invoiceToPrint.items.reduce((s, i) => s + (i.price * i.quantity), 0),
+            total: toNumber(invoiceToPrint.total),
+            discount_percent: invoiceToPrint.discount_percent,
+            discount_amount: invoiceToPrint.discount_amount,
+            paymentMethod: invoiceToPrint.paymentMethod as any,
+            timestamp: invoiceToPrint.timestamp,
+            cashierName: getCashierName(invoiceToPrint),
+            cashierId: invoiceToPrint.cashierId,
+            posName: getPosName(invoiceToPrint),
+            branchId: invoiceToPrint.branchId,
+            branchName: invoiceToPrint.branchName,
+            sessionNumber: invoiceToPrint.sessionNumber || '001',
+            customerName: getCustomerName(invoiceToPrint),
+          }}
+          pharmacyId={invoiceToPrint.pharmacyId}
+          onClose={handleClosePrinter}
+        />
       )}
     </div>
   );

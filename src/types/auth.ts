@@ -11,6 +11,24 @@ export interface User {
   subscription_end_date?: string; // À ajouter
 }
 
+export interface SuperAdminLoginResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  expires_in: number;
+  refresh_expires_in: number;
+  access_type: string;
+  user: {
+    id: string;
+    email: string;
+    nom_complet: string;
+    role: string;
+    is_newly_created?: boolean;
+  };
+  temp_password?: string;
+  message?: string;
+}
+
 // Types unifiés pour toute l'application
 export interface UserResponse {
   id: string;

@@ -357,9 +357,10 @@ export const setActivePharmacy = async (pharmacyId: string): Promise<{ id: strin
 };
 
 /**
- * Récupère la pharmacie active de l'utilisateur (me)
- */
+ * Récupère la pharmacie active de l'utilisateur
+  */
 export const getMyActivePharmacy = async (): Promise<{ pharmacy_id: string; name: string }> => {
+  // CORRECTION: L'endpoint correct est /pharmacies/me/active-pharmacy
   const { data } = await api.get('/pharmacies/me/active-pharmacy');
   return data;
 };
@@ -631,9 +632,21 @@ export const checkPharmacyServiceStatus = async (pharmacyId: string): Promise<Se
 
 /**
  * Récupère les utilisateurs en ligne
+ * 
  */
 export const getOnlineUsers = async (pharmacyId: string): Promise<OnlineUsersResponse> => {
   const { data } = await api.get(`/pharmacies/${pharmacyId}/online-users`);
+  return data;
+};
+
+/**
+ * Récupère la liste des plans disponibles
+ * CORRECTION: Cette fonction devrait être dans subscriptionService, pas pharmacyService
+ * Mais si elle existe ici, rediriger
+ */
+export const getAvailablePlans = async (includeTrial: boolean = false): Promise<any> => {
+  // Rediriger vers subscriptionService ou implémenter correctement
+  const { data } = await api.get(`/subscriptions/plans${includeTrial ? '?include_trial=true' : ''}`);
   return data;
 };
 

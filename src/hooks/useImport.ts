@@ -10,6 +10,11 @@ interface UseImportOptions {
   onPreviewError?: (error: Error) => void;
 }
 
+interface ImportOptions {
+  preserve_prices?: boolean;
+  preserve_quantities?: boolean;
+}
+
 interface UseImportReturn {
   // État
   isPreviewing: boolean;
@@ -26,7 +31,8 @@ interface UseImportReturn {
   importProducts: (
     file: File, 
     mode?: 'add' | 'replace' | 'update',
-    duplicateActions?: Record<string, string>
+    duplicateActions?: Record<string, string>,
+    options?: ImportOptions
   ) => Promise<BulkImportResult | null>;
   downloadTemplate: (format?: 'excel' | 'csv') => Promise<void>;
   reset: () => void;
@@ -36,6 +42,32 @@ interface UseImportReturn {
   duplicateActions: Record<string, string>;
   getProductKey: (product: ImportPreviewProduct) => string;
 }
+
+// Fonction utilitaire pour normaliser les nombres
+const normalizeNumber = (value: unknown): number => {
+  if (value === undefined || value === null || value === '') return 0;
+  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+  return isNaN(num) ? 0 : num;
+};
+
+// Type pour les données brutes de l'API avec propriétés optionnelles
+type RawImportPreviewProduct = {
+  name: string;
+  code?: string;
+  barcode?: string;
+  quantity?: number;
+  purchase_price?: number;
+  selling_price?: number;
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
+  expiry_date?: string;
+  category?: string;
+  location?: string;
+  supplier?: string;
+  batch_number?: string;
+  existingProduct?: unknown;
+  action?: string;
+};
 
 export const useImport = (options: UseImportOptions = {}): UseImportReturn => {
   const {
@@ -71,18 +103,44 @@ export const useImport = (options: UseImportOptions = {}): UseImportReturn => {
     
     try {
       const previewData = await inventoryService.previewImport(file);
-      setPreview(previewData);
+      
+      // Traitement des données de prévisualisation pour garantir des valeurs numériques correctes
+      const processedData: ImportPreviewResponse = {
+        ...previewData,
+        products: previewData.products.map((product) => {
+          const rawProduct = product as unknown as RawImportPreviewProduct;
+          return {
+            ...product,
+            purchase_price: normalizeNumber(rawProduct.purchase_price),
+            selling_price: normalizeNumber(rawProduct.selling_price),
+            selling_price_wholesale: rawProduct.selling_price_wholesale ? normalizeNumber(rawProduct.selling_price_wholesale) : undefined,
+            selling_price_retail: rawProduct.selling_price_retail ? normalizeNumber(rawProduct.selling_price_retail) : undefined,
+          };
+        }),
+        duplicates: previewData.duplicates.map((dup) => {
+          const rawDup = dup as unknown as RawImportPreviewProduct;
+          return {
+            ...dup,
+            purchase_price: normalizeNumber(rawDup.purchase_price),
+            selling_price: normalizeNumber(rawDup.selling_price),
+            selling_price_wholesale: rawDup.selling_price_wholesale ? normalizeNumber(rawDup.selling_price_wholesale) : undefined,
+            selling_price_retail: rawDup.selling_price_retail ? normalizeNumber(rawDup.selling_price_retail) : undefined,
+          };
+        }),
+      };
+      
+      setPreview(processedData);
       
       // Initialiser les actions par défaut pour les doublons
       const defaultActions: Record<string, string> = {};
-      previewData.duplicates.forEach(dup => {
+      processedData.duplicates.forEach(dup => {
         const key = getProductKey(dup);
         defaultActions[key] = 'update';
       });
       setDuplicateActions(defaultActions);
       
-      onPreviewSuccess?.(previewData);
-      return previewData;
+      onPreviewSuccess?.(processedData);
+      return processedData;
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Erreur lors de la prévisualisation');
       setPreviewError(error);
@@ -94,11 +152,12 @@ export const useImport = (options: UseImportOptions = {}): UseImportReturn => {
     }
   }, [getProductKey, onPreviewSuccess, onPreviewError]);
 
-  // Importer les produits
+  // Importer les produits avec support des options de préservation
   const importProducts = useCallback(async (
     file: File,
     mode: 'add' | 'replace' | 'update' = 'add',
-    actions?: Record<string, string>
+    actions?: Record<string, string>,
+    options?: ImportOptions
   ): Promise<BulkImportResult | null> => {
     setIsImporting(true);
     setImportError(null);
@@ -106,7 +165,22 @@ export const useImport = (options: UseImportOptions = {}): UseImportReturn => {
     
     try {
       const actionsToUse = actions || duplicateActions;
-      const importResult = await inventoryService.importProducts(file, mode, actionsToUse);
+      
+      // Créer un FormData pour envoyer le fichier et les paramètres
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', mode);
+      formData.append('duplicate_actions', JSON.stringify(actionsToUse));
+      
+      // Ajouter les options de préservation si spécifiées
+      if (options?.preserve_prices) {
+        formData.append('preserve_prices', 'true');
+      }
+      if (options?.preserve_quantities) {
+        formData.append('preserve_quantities', 'true');
+      }
+      
+      const importResult = await inventoryService.importProducts(formData);
       setResult(importResult);
       onSuccess?.(importResult);
       return importResult;
@@ -129,7 +203,16 @@ export const useImport = (options: UseImportOptions = {}): UseImportReturn => {
     try {
       const blob = await inventoryService.getImportTemplate(format);
       const filename = `template_import_produits.${format === 'excel' ? 'xlsx' : 'csv'}`;
-      inventoryService.downloadBlob(blob, filename);
+      
+      // Créer un lien de téléchargement
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Erreur lors du téléchargement du template');
       setError(error);
