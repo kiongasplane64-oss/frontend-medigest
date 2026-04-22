@@ -332,7 +332,7 @@ export default function CapitalPage() {
     
     try {
       const branchParam = selectedBranch !== 'all' ? `&branch_id=${selectedBranch}` : '';
-      const response = await fetch(`/api/v1/capital/?include_transactions=true${branchParam}`);
+      const response = await fetch(`/capital/?include_transactions=true${branchParam}`);
       if (!response.ok) throw new Error('Erreur lors du chargement du capital');
       const data = await response.json();
       setCapital(data);
@@ -350,7 +350,7 @@ export default function CapitalPage() {
     
     try {
       const branchParam = selectedBranch !== 'all' ? `&branch_id=${selectedBranch}` : '';
-      const response = await fetch(`/api/v1/capital/performance${branchParam}`);
+      const response = await fetch(`/capital/performance${branchParam}`);
       if (!response.ok) throw new Error('Erreur lors du chargement des performances');
       const data = await response.json();
       setPerformance(data);
@@ -367,7 +367,7 @@ export default function CapitalPage() {
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       params.append('months', evolutionMonths.toString());
       
-      const response = await fetch(`/api/v1/capital/evolution?${params}`);
+      const response = await fetch(`/capital/evolution?${params}`);
       if (!response.ok) throw new Error('Erreur lors du chargement de l\'évolution');
       const data = await response.json();
       setEvolution(data.evolution || []);
@@ -384,7 +384,7 @@ export default function CapitalPage() {
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       params.append('period_type', periodType);
       
-      const response = await fetch(`/api/v1/capital/turnover?${params}`);
+      const response = await fetch(`/capital/turnover?${params}`);
       if (!response.ok) throw new Error('Erreur lors du chargement du CA');
       const data = await response.json();
       setTurnoverStats(data);
@@ -401,7 +401,7 @@ export default function CapitalPage() {
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       params.append('months', '12');
       
-      const response = await fetch(`/api/v1/capital/turnover/trend?${params}`);
+      const response = await fetch(`/capital/turnover/trend?${params}`);
       if (!response.ok) throw new Error('Erreur lors du chargement de la tendance');
       const data = await response.json();
       setTurnoverTrend(data.trend || []);
@@ -417,7 +417,7 @@ export default function CapitalPage() {
       const params = new URLSearchParams();
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       
-      const response = await fetch(`/api/v1/capital/financial-report?${params}`);
+      const response = await fetch(`/capital/financial-report?${params}`);
       if (!response.ok) throw new Error('Erreur lors du chargement du rapport');
       const data = await response.json();
       setFinancialReport(data);
@@ -451,7 +451,7 @@ export default function CapitalPage() {
     }
 
     try {
-      const response = await fetch('/api/v1/capital/add', {
+      const response = await fetch('/capital/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -481,7 +481,7 @@ export default function CapitalPage() {
     }
 
     try {
-      const response = await fetch('/api/v1/capital/withdraw', {
+      const response = await fetch('/capital/withdraw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -511,7 +511,7 @@ export default function CapitalPage() {
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       params.append('format', format);
       
-      const response = await fetch(`/api/v1/capital/financial-report?${params}`);
+      const response = await fetch(`/capital/financial-report?${params}`);
       if (!response.ok) throw new Error('Erreur lors de l\'export');
       
       const blob = await response.blob();
@@ -539,7 +539,7 @@ export default function CapitalPage() {
       if (selectedBranch !== 'all') params.append('branch_id', selectedBranch);
       params.append('force_update', 'true');
       
-      const response = await fetch(`/api/v1/capital/turnover/sync?${params}`, { method: 'POST' });
+      const response = await fetch(`/capital/turnover/sync?${params}`, { method: 'POST' });
       if (!response.ok) throw new Error('Erreur lors de la synchronisation');
       
       toast({ title: 'Succès', description: 'CA synchronisé avec succès' });

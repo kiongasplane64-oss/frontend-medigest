@@ -117,7 +117,7 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
       }
 
       // Utiliser l'endpoint GET /api/v1/pharmacies/
-      const response = await fetch('/api/v1/pharmacies/', {
+      const response = await fetch('/pharmacies/', {
         headers: getHeaders(),
       });
       
@@ -193,7 +193,7 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
     if (!currentPharmacy) return;
     
     try {
-      const response = await fetch(`/api/v1/pharmacies/${currentPharmacy.id}`, {
+      const response = await fetch(`/pharmacies/${currentPharmacy.id}`, {
         headers: getHeaders(),
       });
       
@@ -215,7 +215,7 @@ export function PharmacyProvider({ children }: PharmacyProviderProps) {
   // Charger les branches d'une pharmacie
   const loadBranches = useCallback(async (pharmacyId: string) => {
     try {
-      const response = await fetch(`/api/v1/pharmacies/${pharmacyId}/branches`, {
+      const response = await fetch(`/pharmacies/${pharmacyId}/branches`, {
         headers: getHeaders(),
       });
       

@@ -45,6 +45,7 @@ import Monitoring from '@/modules/inventory/views/monitoring';
 import Inventory from '@/modules/inventory/views/inventory';
 import { useAuthStore } from '@/store/useAuthStore';
 import CapitalPage from '@/modules/finance/capital/capital';
+import StockReport from '@/modules/vendor/stockReport';
 
 // ========== COMPOSANTS WRAPPERS ==========
 
@@ -212,6 +213,7 @@ export default function AppRoutes() {
           <Route path="/factures" element={<Facture />} />
           <Route path="/historique" element={<Historique />} />
           <Route path="/rapports" element={<Rapports />} />
+          <Route path="/stock-report" element={<StockReport />} />
           
           {/* Gestion des stocks */}
           <Route path="/stock" element={<InventoryListView />} />

@@ -1,4 +1,3 @@
-// frontend/src/pages/ProfitAnalysis.tsx
 import { 
   TrendingUp, 
   ArrowLeft,

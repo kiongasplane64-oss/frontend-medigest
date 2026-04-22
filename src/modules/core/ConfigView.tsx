@@ -1,38 +1,38 @@
 import { useState, useEffect } from 'react';
 import { 
-  Settings, 
-  DollarSign, 
-  Percent, 
-  Bell, 
-  Save, 
   RefreshCcw,
-  ShieldCheck,
+  XCircle,
+  AlertTriangle,
   Clock,
   Building2,
-  Palette,
-  Plus,
   X,
   ToggleLeft,
   ToggleRight,
   CreditCard,
-  AlertTriangle,
   Sun,
   Moon,
   Monitor,
   CheckCircle,
-  XCircle,
   Upload,
+  Settings,
+  Save,
+  ShieldCheck,
+  DollarSign,
+  Percent,
+  Bell,
+  Palette,
+  Plus,
   Printer,
   FileText,
   Package,
   PackageOpen,
-  Clock as ClockIcon,
   TrendingUp,
   Settings2,
   Calendar,
   Trash2,
   Edit,
   Check,
+  Database
 } from 'lucide-react';
 import api from '@/api/client';
 import OutOfService from './endehors';
@@ -104,6 +104,35 @@ interface AutomaticPricingConfig {
   value: number;
 }
 
+interface SubscriptionConfig {
+  plan: string;
+  max_users: number;
+  max_products: number;
+  max_transactions_per_month: number;
+  features: {
+    inventory_management: boolean;
+    sales: boolean;
+    reports: boolean;
+    multi_currency: boolean;
+    pos_integration: boolean;
+    api_access: boolean;
+  };
+  start_date?: string;
+  end_date?: string;
+  is_trial: boolean;
+  trial_ends_at?: string;
+}
+
+interface OperationalConfig {
+  workingHours?: WorkingHours | null;
+  lowStockThreshold?: number | null;
+  expiryWarningDays?: number | null;
+  allowNegativeStock?: boolean | null;
+  currencies?: CurrencyConfig[] | null;
+  taxRate?: number | null;
+  salesType?: string | null;
+}
+
 interface Branch {
   id: string;
   name: string;
@@ -122,6 +151,9 @@ interface Branch {
   created_at: string;
   updated_at?: string;
   config?: BranchConfigData;
+  subscription_config?: SubscriptionConfig;
+  operational_config?: OperationalConfig;
+  subscription_status: 'trial' | 'active' | 'expired' | 'suspended';
 }
 
 interface BranchConfigData {
@@ -136,6 +168,53 @@ interface BranchConfig {
   branches: Branch[];
   main_branch_id?: string;
   main_branch_name?: string;
+}
+
+interface ResolvedConfig {
+  working_hours: WorkingHours;
+  currencies: CurrencyConfig[];
+  low_stock_threshold: number;
+  expiry_warning_days: number;
+  allow_negative_stock: boolean;
+  tax_rate: number;
+  sales_type: string;
+  subscription_features: {
+    plan: string;
+    max_users: number;
+    max_products: number;
+    max_transactions_per_month: number;
+    features: {
+      inventory_management: boolean;
+      sales: boolean;
+      reports: boolean;
+      multi_currency: boolean;
+      pos_integration: boolean;
+      api_access: boolean;
+    };
+  };
+}
+
+interface BranchFeaturesResponse {
+  branch_id: string;
+  branch_name: string;
+  subscription_status: string;
+  features: {
+    plan: string;
+    max_users: number;
+    max_products: number;
+    max_transactions_per_month: number;
+    features: Record<string, boolean>;
+  };
+  usage: {
+    current_users: number;
+    max_users: number;
+    current_products: number;
+    max_products: number;
+    current_transactions_this_month: number;
+    max_transactions_per_month: number;
+  };
+  can_add_user: boolean;
+  can_add_product: boolean;
 }
 
 type SalesType = 'wholesale' | 'retail' | 'both';
@@ -293,16 +372,6 @@ const DEFAULT_INVOICE: InvoiceConfig = { autoPrint: false, autoSave: true, fontS
 const DEFAULT_REPORT: ReportConfig = { defaultFontSize: 12 };
 const DEFAULT_ROUNDING: RoundingConfig = { enabled: false, precision: 0, method: 'nearest' };
 
-// Fuseaux horaires supportés
-const SUPPORTED_TIMEZONES = [
-  { value: 'Africa/Kinshasa', label: 'Africa/Kinshasa (UTC+1)' },
-  { value: 'Africa/Lubumbashi', label: 'Africa/Lubumbashi (UTC+2)' },
-  { value: 'Africa/Johannesburg', label: 'Africa/Johannesburg (UTC+2)' },
-  { value: 'Africa/Lagos', label: 'Africa/Lagos (UTC+1)' },
-  { value: 'Europe/Paris', label: 'Europe/Paris (UTC+1/UTC+2)' },
-  { value: 'UTC', label: 'UTC' },
-];
-
 // ============================================
 // COMPOSANT PRINCIPAL
 // ============================================
@@ -323,6 +392,12 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   // États pour les branches
   const [showBranchModal, setShowBranchModal] = useState(false);
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
+  const [showBranchConfigPanel, setShowBranchConfigPanel] = useState(false);
+  const [branchResolvedConfig, setBranchResolvedConfig] = useState<ResolvedConfig | null>(null);
+  const [branchFeatures, setBranchFeatures] = useState<BranchFeaturesResponse | null>(null);
+  const [loadingBranchConfig, setLoadingBranchConfig] = useState(false);
+  
   const [branchFormData, setBranchFormData] = useState<Partial<Branch>>({
     name: '',
     address: '',
@@ -332,6 +407,11 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     email: '',
     manager_id: '',
   });
+  
+  // État pour la configuration opérationnelle d'une branche
+  const [branchOperationalConfig, setBranchOperationalConfig] = useState<OperationalConfig>({});
+  const [editingOperationalConfig, setEditingOperationalConfig] = useState(false);
+  
   const [availableUsers, setAvailableUsers] = useState<User[]>([]);
   
   const { timezone: browserTimezone, offset: browserOffset } = useTimezone();
@@ -549,26 +629,23 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   };
 
-  // Ligne 575 - Correction
-const loadAvailableUsers = async () => {
-  try {
-    // ✅ Correction : Utiliser le bon paramètre
-    const response = await api.get('/users', {
-      params: { tenant_id: pharmacyData?.tenant_id, limit: 100 }
-    });
-    // Vérifier la structure de la réponse
-    if (response.data && Array.isArray(response.data)) {
-      setAvailableUsers(response.data);
-    } else if (response.data && response.data.items) {
-      setAvailableUsers(response.data.items);
-    } else {
+  const loadAvailableUsers = async () => {
+    try {
+      const response = await api.get('/users', {
+        params: { tenant_id: pharmacyData?.tenant_id, limit: 100 }
+      });
+      if (response.data && Array.isArray(response.data)) {
+        setAvailableUsers(response.data);
+      } else if (response.data && response.data.items) {
+        setAvailableUsers(response.data.items);
+      } else {
+        setAvailableUsers([]);
+      }
+    } catch (err) {
+      console.error('Erreur lors du chargement des utilisateurs:', err);
       setAvailableUsers([]);
     }
-  } catch (err) {
-    console.error('Erreur lors du chargement des utilisateurs:', err);
-    setAvailableUsers([]);
-  }
-};
+  };
 
   const checkServiceStatus = async () => {
     try {
@@ -577,6 +654,79 @@ const loadAvailableUsers = async () => {
       setOutOfService(!response.data.in_service);
     } catch (err) {
       console.error('Erreur lors de la vérification du service:', err);
+    }
+  };
+
+  // ============================================
+  // GESTION DES BRANCHES - CONFIGURATION RÉSOLUE
+  // ============================================
+
+  const loadBranchResolvedConfig = async (branch: Branch) => {
+    setLoadingBranchConfig(true);
+    try {
+      const response = await api.get<ResolvedConfig>(`/branches/${branch.id}/resolved-config`);
+      setBranchResolvedConfig(response.data);
+      
+      const featuresResponse = await api.get<BranchFeaturesResponse>(`/branches/${branch.id}/subscription/features`);
+      setBranchFeatures(featuresResponse.data);
+      
+      // Initialiser la configuration opérationnelle
+      setBranchOperationalConfig({
+        workingHours: branch.operational_config?.workingHours || null,
+        lowStockThreshold: branch.operational_config?.lowStockThreshold ?? null,
+        expiryWarningDays: branch.operational_config?.expiryWarningDays ?? null,
+        allowNegativeStock: branch.operational_config?.allowNegativeStock ?? null,
+        currencies: branch.operational_config?.currencies || null,
+        taxRate: branch.operational_config?.taxRate ?? null,
+        salesType: branch.operational_config?.salesType || null,
+      });
+      
+    } catch (err) {
+      console.error('Erreur lors du chargement de la config résolue:', err);
+      setError("Erreur lors du chargement de la configuration de la succursale");
+    } finally {
+      setLoadingBranchConfig(false);
+    }
+  };
+
+  const updateBranchOperationalConfig = async (branchId: string, updates: OperationalConfig) => {
+    try {
+      const response = await api.patch(`/branches/${branchId}/operational-config`, updates);
+      // Mettre à jour la branche dans la liste
+      setConfig(prev => ({
+        ...prev,
+        branchConfig: {
+          ...prev.branchConfig,
+          branches: prev.branchConfig.branches.map(b => 
+            b.id === branchId 
+              ? { ...b, operational_config: { ...b.operational_config, ...updates }, updated_at: new Date().toISOString() }
+              : b
+          )
+        }
+      }));
+      setSuccess("Configuration de la succursale mise à jour");
+      setTimeout(() => setSuccess(null), 3000);
+      return response.data;
+    } catch (err) {
+      console.error('Erreur lors de la mise à jour:', err);
+      setError("Erreur lors de la mise à jour de la configuration");
+      throw err;
+    }
+  };
+
+  const resetBranchOperationalConfig = async (branchId: string, key: string) => {
+    try {
+      await api.delete(`/branches/${branchId}/operational-config/${key}`);
+      // Recharger la configuration résolue
+      const branch = config.branchConfig.branches.find(b => b.id === branchId);
+      if (branch) {
+        await loadBranchResolvedConfig(branch);
+      }
+      setSuccess(`Configuration '${key}' réinitialisée`);
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      console.error('Erreur lors de la réinitialisation:', err);
+      setError("Erreur lors de la réinitialisation");
     }
   };
 
@@ -604,7 +754,6 @@ const loadAvailableUsers = async () => {
     setSuccess(null);
     
     try {
-      // Construire les devises en fonction du mode
       let currenciesToSave = [...config.currencies];
       
       if (config.currencyMode === 'cdf_only') {
@@ -645,7 +794,7 @@ const loadAvailableUsers = async () => {
         theme: config.theme,
         initialCapital: config.initialCapital,
         branchConfig: config.branchConfig,
-        salesType: config.salesType,  // ← Envoyer directement la chaîne
+        salesType: config.salesType,
         calcul_auto_prix: config.automaticPricing.enabled,
         marge_par_defaut: config.marginConfig.defaultMargin,
         taux_tva: config.taxRate,
@@ -778,88 +927,100 @@ const loadAvailableUsers = async () => {
     setShowBranchModal(true);
   };
 
+  const openBranchConfigPanel = async (branch: Branch) => {
+    setSelectedBranch(branch);
+    setShowBranchConfigPanel(true);
+    await loadBranchResolvedConfig(branch);
+  };
+
   const handleCreateBranch = async () => {
-  if (!branchFormData.name) {
-    setError("Le nom de la succursale est requis");
-    return;
-  }
-
-  try {
-    // Récupérer le manager sélectionné
-    const selectedManager = availableUsers.find(u => u.id === branchFormData.manager_id);
-    
-    // Construire l'objet complet pour l'API
-    const branchData = {
-      name: branchFormData.name.trim(),
-      code: branchFormData.code || `${pharmacyData?.name?.substring(0, 3).toUpperCase() || 'BR'}_${Date.now()}`,
-      address: branchFormData.address || '',
-      city: branchFormData.city || '',
-      country: branchFormData.country || 'CD',
-      phone: branchFormData.phone || '',
-      email: branchFormData.email || '',
-      manager_id: branchFormData.manager_id || null,
-      manager_name: selectedManager?.nom_complet || null,
-      latitude: null,
-      longitude: null,
-      opening_hours: null,
-      config: {
-        // Hériter de la configuration de la pharmacie
-        workingHours: config.workingHours,
-        marginConfig: config.marginConfig,
-        automaticPricing: config.automaticPricing,
-        rounding: config.rounding,
-        invoice: config.invoice,
-        report: config.report,
-        // Marquer comme ayant hérité de la config parente
-        inheritedFromParent: true
-      },
-      is_active: true
-    };
-
-    console.log('Envoi des données de succursale:', branchData);
-
-    const response = await api.post(`/pharmacies/${pharmacyId}/branches`, branchData);
-    
-    setConfig({
-      ...config,
-      branchConfig: {
-        ...config.branchConfig,
-        currentBranches: (config.branchConfig.currentBranches || 0) + 1,
-        branches: [...(config.branchConfig.branches || []), response.data],
-      },
-    });
-    
-    setShowBranchModal(false);
-    // Réinitialiser le formulaire
-    setBranchFormData({
-      name: '',
-      code: '',
-      address: '',
-      city: '',
-      country: 'CD',
-      phone: '',
-      email: '',
-      manager_id: '',
-    });
-    setSuccess("Succursale créée avec succès !");
-    setTimeout(() => setSuccess(null), 3000);
-    
-  } catch (err: any) {
-    console.error('Erreur lors de la création de la succursale:', err);
-    // Afficher les détails de l'erreur pour le débogage
-    if (err.response?.data) {
-      console.error('Détails de l\'erreur:', err.response.data);
-      // Si c'est une erreur de validation Pydantic
-      if (err.response.data.detail) {
-        setError(`Erreur: ${JSON.stringify(err.response.data.detail)}`);
-      } else {
-        setError(`Erreur: ${err.response.data.message || 'Données invalides'}`);
-      }
-    } else {
-      setError(err.message || "Erreur lors de la création de la succursale");
+    if (!branchFormData.name) {
+      setError("Le nom de la succursale est requis");
+      return;
     }
-  }
-};
+
+    try {
+      const selectedManager = availableUsers.find(u => u.id === branchFormData.manager_id);
+      
+      const branchData = {
+        name: branchFormData.name.trim(),
+        code: branchFormData.code || `${pharmacyData?.name?.substring(0, 3).toUpperCase() || 'BR'}_${Date.now()}`,
+        address: branchFormData.address || '',
+        city: branchFormData.city || '',
+        country: branchFormData.country || 'CD',
+        phone: branchFormData.phone || '',
+        email: branchFormData.email || '',
+        manager_id: branchFormData.manager_id || null,
+        manager_name: selectedManager?.nom_complet || null,
+        latitude: null,
+        longitude: null,
+        opening_hours: null,
+        config: {
+          workingHours: config.workingHours,
+          marginConfig: config.marginConfig,
+          automaticPricing: config.automaticPricing,
+          rounding: config.rounding,
+          invoice: config.invoice,
+          report: config.report,
+          inheritedFromParent: true
+        },
+        subscription_config: {
+          plan: 'essential',
+          max_users: 5,
+          max_products: 500,
+          max_transactions_per_month: 1000,
+          features: {
+            inventory_management: true,
+            sales: true,
+            reports: true,
+            multi_currency: false,
+            pos_integration: false,
+            api_access: false
+          },
+          is_trial: true,
+          trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        },
+        is_active: true
+      };
+
+      const response = await api.post(`/pharmacies/${pharmacyId}/branches`, branchData);
+      
+      setConfig({
+        ...config,
+        branchConfig: {
+          ...config.branchConfig,
+          currentBranches: (config.branchConfig.currentBranches || 0) + 1,
+          branches: [...(config.branchConfig.branches || []), response.data],
+        },
+      });
+      
+      setShowBranchModal(false);
+      setBranchFormData({
+        name: '',
+        code: '',
+        address: '',
+        city: '',
+        country: 'CD',
+        phone: '',
+        email: '',
+        manager_id: '',
+      });
+      setSuccess("Succursale créée avec succès !");
+      setTimeout(() => setSuccess(null), 3000);
+      
+    } catch (err: any) {
+      console.error('Erreur lors de la création de la succursale:', err);
+      if (err.response?.data) {
+        if (err.response.data.detail) {
+          setError(`Erreur: ${JSON.stringify(err.response.data.detail)}`);
+        } else {
+          setError(`Erreur: ${err.response.data.message || 'Données invalides'}`);
+        }
+      } else {
+        setError(err.message || "Erreur lors de la création de la succursale");
+      }
+    }
+  };
 
   const handleUpdateBranch = async () => {
     if (!editingBranch || !branchFormData.name) return;
@@ -1195,6 +1356,362 @@ const loadAvailableUsers = async () => {
         </div>
       )}
 
+      {/* Modal de configuration avancée de la succursale */}
+      {showBranchConfigPanel && selectedBranch && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex justify-between items-center mb-4 sticky top-0 bg-white dark:bg-slate-800 pb-4 border-b border-slate-200 dark:border-slate-700">
+              <div>
+                <h3 className="text-xl font-bold text-slate-800 dark:text-slate-200">
+                  Configuration avancée - {selectedBranch.name}
+                </h3>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                    selectedBranch.subscription_status === 'active' ? 'bg-green-100 text-green-700' :
+                    selectedBranch.subscription_status === 'trial' ? 'bg-yellow-100 text-yellow-700' :
+                    selectedBranch.subscription_status === 'expired' ? 'bg-red-100 text-red-700' :
+                    'bg-slate-100 text-slate-700'
+                  }`}>
+                    {selectedBranch.subscription_status === 'active' ? 'Abonnement actif' :
+                     selectedBranch.subscription_status === 'trial' ? 'Période d\'essai' :
+                     selectedBranch.subscription_status === 'expired' ? 'Abonnement expiré' : 'Suspendu'}
+                  </span>
+                </div>
+              </div>
+              <button onClick={() => setShowBranchConfigPanel(false)} className="text-slate-500 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {loadingBranchConfig ? (
+              <div className="flex justify-center py-12">
+                <RefreshCcw className="w-8 h-8 text-blue-600 animate-spin" />
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Configuration résolue (en lecture seule) */}
+                <div className="bg-slate-50 dark:bg-slate-700/30 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Database className="w-4 h-4 text-blue-600" />
+                    <h4 className="font-semibold text-slate-700 dark:text-slate-300">Configuration résolue</h4>
+                    <span className="text-xs text-slate-500">(Pharmacie + Surcharges)</span>
+                  </div>
+                  {branchResolvedConfig && (
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-slate-500">Horaires</p>
+                        <p className="font-medium">{branchResolvedConfig.working_hours.startTime} - {branchResolvedConfig.working_hours.endTime}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Stock bas</p>
+                        <p className="font-medium">{branchResolvedConfig.low_stock_threshold} unités</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">TVA</p>
+                        <p className="font-medium">{branchResolvedConfig.tax_rate}%</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Type de vente</p>
+                        <p className="font-medium">{branchResolvedConfig.sales_type}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Configuration opérationnelle (modifiable) */}
+                <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="flex items-center gap-2">
+                      <Settings2 className="w-4 h-4 text-orange-600" />
+                      <h4 className="font-semibold text-slate-700 dark:text-slate-300">Surcharges de configuration</h4>
+                    </div>
+                    <button
+                      onClick={() => setEditingOperationalConfig(!editingOperationalConfig)}
+                      className="text-sm text-blue-600 hover:text-blue-800"
+                    >
+                      {editingOperationalConfig ? 'Annuler' : 'Modifier'}
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {/* Heures de travail */}
+                    <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="font-medium text-slate-700 dark:text-slate-300">Horaires de travail</label>
+                        {branchOperationalConfig.workingHours && (
+                          <button
+                            onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'workingHours')}
+                            className="text-xs text-red-500 hover:text-red-700"
+                            disabled={!editingOperationalConfig}
+                          >
+                            Réinitialiser
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="time"
+                          value={branchOperationalConfig.workingHours?.startTime || ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            workingHours: {
+                              ...branchOperationalConfig.workingHours,
+                              startTime: e.target.value,
+                              endTime: branchOperationalConfig.workingHours?.endTime || '20:00',
+                              enabled: true,
+                              daysOff: branchOperationalConfig.workingHours?.daysOff || {
+                                monday: true, tuesday: true, wednesday: true,
+                                thursday: true, friday: true, saturday: true, sunday: false
+                              }
+                            }
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                          placeholder="Début"
+                        />
+                        <input
+                          type="time"
+                          value={branchOperationalConfig.workingHours?.endTime || ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            workingHours: {
+                              ...branchOperationalConfig.workingHours,
+                              endTime: e.target.value,
+                              startTime: branchOperationalConfig.workingHours?.startTime || '08:00',
+                              enabled: true,
+                              daysOff: branchOperationalConfig.workingHours?.daysOff || {
+                                monday: true, tuesday: true, wednesday: true,
+                                thursday: true, friday: true, saturday: true, sunday: false
+                              }
+                            }
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                          placeholder="Fin"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Seuils */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="font-medium text-slate-700 dark:text-slate-300">Stock bas</label>
+                          {branchOperationalConfig.lowStockThreshold !== null && (
+                            <button
+                              onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'lowStockThreshold')}
+                              className="text-xs text-red-500 hover:text-red-700"
+                              disabled={!editingOperationalConfig}
+                            >
+                              Réinitialiser
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          value={branchOperationalConfig.lowStockThreshold ?? ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            lowStockThreshold: e.target.value ? Number(e.target.value) : null
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="w-full p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                          placeholder="Utiliser pharmacie"
+                        />
+                      </div>
+                      
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="font-medium text-slate-700 dark:text-slate-300">Alerte expiration (jours)</label>
+                          {branchOperationalConfig.expiryWarningDays !== null && (
+                            <button
+                              onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'expiryWarningDays')}
+                              className="text-xs text-red-500 hover:text-red-700"
+                              disabled={!editingOperationalConfig}
+                            >
+                              Réinitialiser
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          value={branchOperationalConfig.expiryWarningDays ?? ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            expiryWarningDays: e.target.value ? Number(e.target.value) : null
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="w-full p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                          placeholder="Utiliser pharmacie"
+                        />
+                      </div>
+                    </div>
+
+                    {/* TVA et Type de vente */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="font-medium text-slate-700 dark:text-slate-300">TVA (%)</label>
+                          {branchOperationalConfig.taxRate !== null && (
+                            <button
+                              onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'taxRate')}
+                              className="text-xs text-red-500 hover:text-red-700"
+                              disabled={!editingOperationalConfig}
+                            >
+                              Réinitialiser
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="number"
+                          value={branchOperationalConfig.taxRate ?? ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            taxRate: e.target.value ? Number(e.target.value) : null
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="w-full p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                          step="0.1"
+                          placeholder="Utiliser pharmacie"
+                        />
+                      </div>
+                      
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="font-medium text-slate-700 dark:text-slate-300">Type de vente</label>
+                          {branchOperationalConfig.salesType && (
+                            <button
+                              onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'salesType')}
+                              className="text-xs text-red-500 hover:text-red-700"
+                              disabled={!editingOperationalConfig}
+                            >
+                              Réinitialiser
+                            </button>
+                          )}
+                        </div>
+                        <select
+                          value={branchOperationalConfig.salesType || ''}
+                          onChange={(e) => setBranchOperationalConfig({
+                            ...branchOperationalConfig,
+                            salesType: e.target.value || null
+                          })}
+                          disabled={!editingOperationalConfig}
+                          className="w-full p-2 bg-white dark:bg-slate-600 border rounded-lg disabled:opacity-50"
+                        >
+                          <option value="">Utiliser pharmacie</option>
+                          <option value="wholesale">Gros uniquement</option>
+                          <option value="retail">Détail uniquement</option>
+                          <option value="both">Gros et détail</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Stock négatif */}
+                    <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <label className="font-medium text-slate-700 dark:text-slate-300">Vente stock négatif</label>
+                          <p className="text-xs text-slate-500">Autoriser la vente lorsque le stock est insuffisant</p>
+                        </div>
+                        {branchOperationalConfig.allowNegativeStock !== null && editingOperationalConfig && (
+                          <button
+                            onClick={() => resetBranchOperationalConfig(selectedBranch.id, 'allowNegativeStock')}
+                            className="text-xs text-red-500 hover:text-red-700"
+                          >
+                            Réinitialiser
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-2">
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={branchOperationalConfig.allowNegativeStock ?? false}
+                            onChange={(e) => setBranchOperationalConfig({
+                              ...branchOperationalConfig,
+                              allowNegativeStock: e.target.checked
+                            })}
+                            disabled={!editingOperationalConfig}
+                          />
+                          <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                          <span className="ml-3 text-sm text-slate-600 dark:text-slate-400">
+                            {branchOperationalConfig.allowNegativeStock ? 'Autorisé' : 'Non autorisé'}
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Informations d'abonnement */}
+                {branchFeatures && (
+                  <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                    <div className="flex items-center gap-2 mb-4">
+                      <CreditCard className="w-4 h-4 text-green-600" />
+                      <h4 className="font-semibold text-slate-700 dark:text-slate-300">Abonnement et limites</h4>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <p className="text-slate-500 text-sm">Plan</p>
+                        <p className="font-semibold capitalize">{branchFeatures.features.plan}</p>
+                      </div>
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <p className="text-slate-500 text-sm">Utilisateurs</p>
+                        <p className="font-semibold">
+                          {branchFeatures.usage.current_users} / {branchFeatures.usage.max_users === Infinity ? '∞' : branchFeatures.usage.max_users}
+                        </p>
+                        {!branchFeatures.can_add_user && (
+                          <p className="text-xs text-red-500">Limite atteinte</p>
+                        )}
+                      </div>
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <p className="text-slate-500 text-sm">Produits</p>
+                        <p className="font-semibold">
+                          {branchFeatures.usage.current_products} / {branchFeatures.usage.max_products === Infinity ? '∞' : branchFeatures.usage.max_products}
+                        </p>
+                        {!branchFeatures.can_add_product && (
+                          <p className="text-xs text-red-500">Limite atteinte</p>
+                        )}
+                      </div>
+                      <div className="p-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg">
+                        <p className="text-slate-500 text-sm">Transactions (mois)</p>
+                        <p className="font-semibold">
+                          {branchFeatures.usage.current_transactions_this_month} / {branchFeatures.usage.max_transactions_per_month === Infinity ? '∞' : branchFeatures.usage.max_transactions_per_month}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Boutons d'action */}
+                {editingOperationalConfig && (
+                  <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
+                    <button
+                      onClick={() => {
+                        updateBranchOperationalConfig(selectedBranch.id, branchOperationalConfig);
+                        setEditingOperationalConfig(false);
+                      }}
+                      className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+                    >
+                      <Save className="w-4 h-4 inline mr-2" />
+                      Sauvegarder les surcharges
+                    </button>
+                    <button
+                      onClick={() => setEditingOperationalConfig(false)}
+                      className="px-4 py-2 border border-slate-300 rounded-xl hover:bg-slate-50"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* En-tête */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-700 pb-6">
         <div>
@@ -1356,7 +1873,7 @@ const loadAvailableUsers = async () => {
           </div>
         </div>
 
-        {/* Mode de devise (Nouveau) */}
+        {/* Mode de devise */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
           <div className="flex items-center gap-2 mb-2">
             <DollarSign className="w-5 h-5 text-amber-600 dark:text-amber-400" />
@@ -1418,7 +1935,7 @@ const loadAvailableUsers = async () => {
           )}
         </div>
 
-        {/* Arrondissement des prix (Nouveau) */}
+        {/* Arrondissement des prix */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
           <div className="flex items-center gap-2 mb-2">
             <Settings2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
@@ -1464,9 +1981,6 @@ const loadAvailableUsers = async () => {
                     <option value={1000}>1000 (milliers)</option>
                   </select>
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Les prix seront arrondis à la {config.rounding.precision} {config.rounding.precision === 0 ? 'unité' : 'valeur'} la plus proche
-                </p>
               </div>
               
               <div>
@@ -1643,7 +2157,7 @@ const loadAvailableUsers = async () => {
         {/* Heures supplémentaires */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
           <div className="flex items-center gap-2 mb-2">
-            <ClockIcon className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+            <Clock className="w-5 h-5 text-orange-600 dark:text-orange-400" />
             <h2 className="font-bold text-slate-700 dark:text-slate-300">Heures supplémentaires</h2>
           </div>
           
@@ -2226,16 +2740,19 @@ const loadAvailableUsers = async () => {
                   className="flex-1 p-1 text-xs bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 rounded-lg text-slate-800 dark:text-slate-200"
                   disabled={showLocalTimes}
                 >
-                  {SUPPORTED_TIMEZONES.map(tz => (
-                    <option key={tz.value} value={tz.value}>{tz.label}</option>
-                  ))}
+                  <option value="Africa/Kinshasa">Africa/Kinshasa (UTC+1)</option>
+                  <option value="Africa/Lubumbashi">Africa/Lubumbashi (UTC+2)</option>
+                  <option value="Africa/Johannesburg">Africa/Johannesburg (UTC+2)</option>
+                  <option value="Africa/Lagos">Africa/Lagos (UTC+1)</option>
+                  <option value="Europe/Paris">Europe/Paris (UTC+1/UTC+2)</option>
+                  <option value="UTC">UTC</option>
                 </select>
               </div>
             </>
           )}
         </div>
 
-        {/* Configuration des branches/succursales - Version améliorée */}
+        {/* Configuration des branches/succursales */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -2282,6 +2799,16 @@ const loadAvailableUsers = async () => {
                         }`}>
                           {branch.is_active ? 'Actif' : 'Inactif'}
                         </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          branch.subscription_status === 'active' ? 'bg-green-100 text-green-700' :
+                          branch.subscription_status === 'trial' ? 'bg-yellow-100 text-yellow-700' :
+                          branch.subscription_status === 'expired' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>
+                          {branch.subscription_status === 'active' ? 'Abonné' :
+                           branch.subscription_status === 'trial' ? 'Essai' :
+                           branch.subscription_status === 'expired' ? 'Expiré' : 'Suspendu'}
+                        </span>
                       </div>
                       <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{branch.address}</p>
                       <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -2298,6 +2825,13 @@ const loadAvailableUsers = async () => {
                         title="Modifier"
                       >
                         <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => openBranchConfigPanel(branch)}
+                        className="p-1.5 text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-colors"
+                        title="Configuration avancée"
+                      >
+                        <Settings2 className="w-4 h-4" />
                       </button>
                       {!branch.is_main_branch && (
                         <button

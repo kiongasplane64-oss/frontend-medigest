@@ -184,7 +184,7 @@ const menuGroups: MenuGroup[] = [
         }
       },
       { icon: <Users size={20}/>, label: 'Utilisateurs', href: '/users', roles: ["admin"] },
-      { icon: <FileText size={20}/>, label: 'Rapports', href: '/reports', roles: ["admin", "comptable", "gestionnaire"] },
+      { icon: <FileText size={20}/>, label: 'Rapports', href: '/stock-report', roles: ["admin", "comptable", "gestionnaire"] },
       { icon: <Settings size={20}/>, label: 'Paramètres', href: '/settings', roles: ["admin"] }
     ]
   },
