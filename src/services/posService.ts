@@ -618,46 +618,45 @@ export class PosService {
     }
   }
 
-  async loadProducts() {
-    try {
-      const { user } = useAuthStore.getState();
-      const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
+  // Dans posService.ts - méthode loadProducts()
+async loadProducts() {
+  try {
+    const { user } = useAuthStore.getState();
+    const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
 
-      if (!pharmacy_id) {
-        console.warn('⚠️ Aucun ID de pharmacie disponible');
-        runInAction(() => {
-          this.products = [];
-          this.filteredProducts = [];
-          this.filterProducts();
-        });
-        return;
-      }
-
-      const response = await inventoryService.getProducts({
-        pharmacy_id: pharmacy_id,
-        limit: 1000,
-        skip: 0,
-        include_sales_stats: false,
-      });
-
-      const rawProducts: any[] = response?.products || [];
-      const normalizedProducts = rawProducts.map(p => this.normalizeProduct(p));
-      
+    if (!pharmacy_id) {
+      console.warn('⚠️ Aucun ID de pharmacie disponible');
       runInAction(() => {
-        this.products = normalizedProducts;
-        this.rebuildProductsMap(normalizedProducts);
+        this.products = [];
+        this.filteredProducts = [];
         this.filterProducts();
       });
-      
-      this.onProductsChange?.(this.products);
-      
-    } catch (error) {
-      console.error('❌ Erreur chargement produits:', error);
-      toast.error('Erreur de chargement des produits');
-      throw error;
+      return;
     }
-  }
 
+    console.log(`📦 Chargement de tous les produits pour la pharmacie: ${pharmacy_id}`);
+
+    // Utiliser la nouvelle méthode getAllProducts qui récupère TOUS les produits
+    const allProducts = await inventoryService.getAllProducts(pharmacy_id);
+    
+    const normalizedProducts = allProducts.map(p => this.normalizeProduct(p));
+    
+    runInAction(() => {
+      this.products = normalizedProducts;
+      this.rebuildProductsMap(normalizedProducts);
+      this.filterProducts();
+    });
+    
+    this.onProductsChange?.(this.products);
+    
+    console.log(`✅ ${normalizedProducts.length} produits chargés (tous les produits de la branche)`);
+    
+  } catch (error) {
+    console.error('❌ Erreur chargement produits:', error);
+    toast.error('Erreur de chargement des produits');
+    throw error;
+  }
+}
   normalizeProduct(p: any): Product {
     return {
       id: String(p.id),

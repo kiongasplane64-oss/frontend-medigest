@@ -1177,6 +1177,37 @@ async importProductsWithParams(
     return this.searchByCode(trimmed);
   }
 
+  // Dans inventoryService.ts
+async getAllProducts(pharmacy_id: string): Promise<Product[]> {
+  const allProducts: Product[] = [];
+  let skip = 0;
+  const limit = 500;
+  let hasMore = true;
+  
+  while (hasMore) {
+    try {
+      const response = await this.getProducts({
+        pharmacy_id,
+        limit,
+        skip,
+        include_sales_stats: false,
+      });
+      
+      const products = response?.products || [];
+      allProducts.push(...products);
+      
+      hasMore = products.length === limit;
+      skip += limit;
+      
+    } catch (error) {
+      console.error('Erreur lors de la récupération paginée:', error);
+      break;
+    }
+  }
+  
+  return allProducts;
+}
+
   // =========================================================
   // UTILITAIRES
   // =========================================================
