@@ -1,10 +1,11 @@
 // components/inventory/StockFilters.tsx
-import { X } from 'lucide-react';
-import type { PharmacyConfig, SalesType } from '@/types/inventory.types';
+import { useState } from 'react';
+import { Filter, ChevronDown, X } from 'lucide-react';
 
 interface StockFiltersProps {
   filters: {
     category_id: string;
+    category: string;
     stock_status: string;
     expiry_status: string;
     product_type: string;
@@ -14,14 +15,45 @@ interface StockFiltersProps {
     branch_id: string;
   };
   onFilterChange: (key: string, value: any) => void;
-  config?: PharmacyConfig | null;
-  salesType?: SalesType;
+  categoryOptions?: Array<{ value: string; label: string }>;
 }
 
-export default function StockFilters({ filters, onFilterChange, config, salesType }: StockFiltersProps) {
-  const hasActiveFilters = Object.values(filters).some(v => v && v !== '' && v !== null && v !== 0);
+export default function StockFilters({ 
+  filters, 
+  onFilterChange, 
+  categoryOptions = [] 
+}: StockFiltersProps) {
+  const [showFilters, setShowFilters] = useState(false);
+
+  const stockStatusOptions = [
+    { value: '', label: 'Tous' },
+    { value: 'in_stock', label: 'En stock' },
+    { value: 'low_stock', label: 'Stock faible' },
+    { value: 'out_of_stock', label: 'Rupture' },
+    { value: 'over_stock', label: 'Surstock' },
+  ];
+
+  const expiryStatusOptions = [
+    { value: '', label: 'Tous' },
+    { value: 'expired', label: 'Expirés' },
+    { value: 'critical', label: 'Expire < 7j' },
+    { value: 'warning', label: 'Expire < 30j' },
+    { value: 'valid', label: 'Valides' },
+  ];
+
+  const hasActiveFilters = () => {
+    return (
+      filters.category ||
+      filters.stock_status ||
+      filters.expiry_status ||
+      filters.product_type ||
+      filters.min_price !== null ||
+      filters.max_price !== null
+    );
+  };
 
   const clearFilters = () => {
+    onFilterChange('category', '');
     onFilterChange('category_id', '');
     onFilterChange('stock_status', '');
     onFilterChange('expiry_status', '');
@@ -31,98 +63,159 @@ export default function StockFilters({ filters, onFilterChange, config, salesTyp
   };
 
   return (
-    <div className="bg-white rounded-xl p-4 border border-slate-200">
-      <div className="flex flex-wrap gap-3 items-center">
-        <span className="text-sm font-medium text-slate-600">Filtres:</span>
-
-        {/* Catégorie */}
-        <select
-          value={filters.category_id}
-          onChange={(e) => onFilterChange('category_id', e.target.value)}
-          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-medical"
-        >
-          <option value="">Toutes les catégories</option>
-          {/* Les catégories seront chargées dynamiquement */}
-        </select>
-
-        {/* Statut stock */}
-        <select
-          value={filters.stock_status}
-          onChange={(e) => onFilterChange('stock_status', e.target.value)}
-          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
-        >
-          <option value="">Tous les stocks</option>
-          <option value="out_of_stock">Rupture de stock</option>
-          <option value="low_stock">Stock faible</option>
-          <option value="normal">Stock normal</option>
-          <option value="over_stock">Surstock</option>
-        </select>
-
-        {/* Statut expiration */}
-        <select
-          value={filters.expiry_status}
-          onChange={(e) => onFilterChange('expiry_status', e.target.value)}
-          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
-        >
-          <option value="">Toutes les expirations</option>
-          <option value="expired">Expirés</option>
-          <option value="critical">Expiration critique (7j)</option>
-          <option value="warning">Expiration proche (30j)</option>
-          <option value="valid">Valides</option>
-        </select>
-
-        {/* Type de produit */}
-        <select
-          value={filters.product_type}
-          onChange={(e) => onFilterChange('product_type', e.target.value)}
-          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm"
-        >
-          <option value="">Tous les types</option>
-          <option value="medicament">Médicament</option>
-          <option value="parapharmacie">Parapharmacie</option>
-          <option value="materiel">Matériel médical</option>
-          <option value="autre">Autre</option>
-        </select>
-
-        {/* Prix min/max */}
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
-            placeholder="Prix min"
-            value={filters.min_price || ''}
-            onChange={(e) => onFilterChange('min_price', e.target.value ? parseFloat(e.target.value) : null)}
-            className="w-24 px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
-          />
-          <span className="text-slate-400">-</span>
-          <input
-            type="number"
-            placeholder="Prix max"
-            value={filters.max_price || ''}
-            onChange={(e) => onFilterChange('max_price', e.target.value ? parseFloat(e.target.value) : null)}
-            className="w-24 px-2 py-1.5 border border-slate-200 rounded-lg text-sm"
-          />
+    <div className="bg-white rounded-xl border border-slate-200 p-3">
+      <button
+        onClick={() => setShowFilters(!showFilters)}
+        className="flex items-center justify-between w-full"
+      >
+        <div className="flex items-center gap-2">
+          <Filter size={16} className="text-slate-400" />
+          <span className="text-sm font-medium text-slate-700">Filtres</span>
+          {hasActiveFilters() && (
+            <span className="bg-medical/10 text-medical text-xs px-2 py-0.5 rounded-full">
+              Actifs
+            </span>
+          )}
         </div>
+        <ChevronDown
+          size={16}
+          className={`text-slate-400 transition-transform ${
+            showFilters ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
 
-        {/* Bouton effacer */}
-        {hasActiveFilters && (
-          <button
-            onClick={clearFilters}
-            className="flex items-center gap-1 px-2 py-1.5 text-sm text-slate-500 hover:text-slate-700"
-          >
-            <X size={14} />
-            Effacer
-          </button>
-        )}
-      </div>
+      {showFilters && (
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Filtre par catégorie - depuis la base de données */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Catégorie
+              </label>
+              <select
+                value={filters.category}
+                onChange={(e) => onFilterChange('category', e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              >
+                <option value="">Toutes les catégories</option>
+                {categoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-      {/* Indicateur de configuration */}
-      {config && (
-        <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-400 flex flex-wrap gap-3">
-          <span>💱 Devise: {config.primaryCurrency}</span>
-          {salesType === 'wholesale' && <span>� wholesale Vente en gros uniquement</span>}
-          {salesType === 'retail' && <span>🏪 Vente au détail uniquement</span>}
-          {salesType === 'both' && <span>🔄 Vente en gros et détail</span>}
-          {config.calcul_auto_prix && <span>⚡ Calcul automatique des prix activé</span>}
+            {/* Filtre par statut de stock */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Statut stock
+              </label>
+              <select
+                value={filters.stock_status}
+                onChange={(e) => onFilterChange('stock_status', e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              >
+                {stockStatusOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filtre par statut d'expiration */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Expiration
+              </label>
+              <select
+                value={filters.expiry_status}
+                onChange={(e) => onFilterChange('expiry_status', e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              >
+                {expiryStatusOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filtre par type de produit */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Type produit
+              </label>
+              <select
+                value={filters.product_type}
+                onChange={(e) => onFilterChange('product_type', e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+              >
+                <option value="">Tous</option>
+                <option value="medicament">Médicament</option>
+                <option value="parapharmacie">Parapharmacie</option>
+                <option value="materiel">Matériel médical</option>
+                <option value="other">Autre</option>
+              </select>
+            </div>
+
+            {/* Filtre prix min */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Prix min
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="100"
+                value={filters.min_price ?? ''}
+                onChange={(e) =>
+                  onFilterChange(
+                    'min_price',
+                    e.target.value ? Number(e.target.value) : null
+                  )
+                }
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+                placeholder="0 FC"
+              />
+            </div>
+
+            {/* Filtre prix max */}
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                Prix max
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="100"
+                value={filters.max_price ?? ''}
+                onChange={(e) =>
+                  onFilterChange(
+                    'max_price',
+                    e.target.value ? Number(e.target.value) : null
+                  )
+                }
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-medical"
+                placeholder="Illimité"
+              />
+            </div>
+          </div>
+
+          {/* Bouton effacer les filtres */}
+          {hasActiveFilters() && (
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 text-xs text-slate-500 hover:text-red-600 transition-colors"
+              >
+                <X size={12} />
+                Effacer les filtres
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

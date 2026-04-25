@@ -198,65 +198,82 @@ export default function Historique() {
     return price.toFixed(2) + ' FC';
   };
 
-  function normalizeApiSale(sale: SaleResponse): Sale {
-    // S'assurer que les items ont un nom correct
-    const items = (sale.items || []).map((item: SaleItemResponse) => ({
+  // Historique.tsx - Remplacer les fonctions normalizeApiSale et normalizeLocalSale
+
+function normalizeApiSale(sale: SaleResponse): Sale {
+  // S'assurer que les items ont un nom correct - VERSION CORRIGÉE
+  const items = (sale.items || []).map((item: SaleItemResponse) => {
+    // Log de débogage pour voir ce qui est reçu
+    console.log('Item reçu de l\'API:', {
+      product_name: item.product_name,
+      product_id: item.product_id,
+      name_from_item: (item as any).name
+    });
+    
+    return {
       id: item.product_id,
-      name: item.product_name || (item as any).name || 'Produit sans nom',
+      // PRIORITÉ: product_name (champ standard), puis name (fallback), puis ID
+      name: item.product_name || (item as any).name || `Produit ${item.product_id?.slice(-6) || 'inconnu'}`,
       price: item.unit_price || 0,
       quantity: item.quantity || 0,
       code: item.product_code,
-    }));
-
-    return {
-      id: sale.id,
-      items,
-      total: getTotalAmount(sale),
-      paymentMethod: sale.payment_method || 'cash',
-      timestamp: new Date(sale.created_at).getTime(),
-      cashierName: sale.seller_name,
-      cashierId: sale.created_by,
-      posName: sale.pharmacy_id,
-      branchId: sale.pharmacy_id,
-      branchName: sale.pharmacy_id ? `Branche ${sale.pharmacy_id.slice(-4)}` : 'Branche Principale',
-      sessionNumber: sale.reference?.slice(0, 8),
-      receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
-      customerName: sale.customer_name || 'Passager',
-      status: sale.status as 'completed' | 'pending' | 'cancelled',
-      synced: true,
-      isLocal: false,
+      productId: item.product_id,
     };
-  }
+  });
 
-  function normalizeLocalSale(sale: LocalSale): Sale {
-    // S'assurer que les items ont un nom correct
-    const items = sale.items.map(item => ({
+  return {
+    id: sale.id,
+    items,
+    total: getTotalAmount(sale),
+    paymentMethod: sale.payment_method || 'cash',
+    timestamp: new Date(sale.created_at).getTime(),
+    cashierName: sale.seller_name,
+    cashierId: sale.created_by,
+    posName: sale.pharmacy_id,
+    branchId: sale.pharmacy_id,
+    branchName: sale.pharmacy_id ? `Branche ${sale.pharmacy_id.slice(-4)}` : 'Branche Principale',
+    sessionNumber: sale.reference?.slice(0, 8),
+    receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
+    customerName: sale.customer_name || 'Passager',
+    status: sale.status as 'completed' | 'pending' | 'cancelled',
+    synced: true,
+    isLocal: false,
+  };
+}
+
+function normalizeLocalSale(sale: LocalSale): Sale {
+  // VERSION CORRIGÉE - S'assurer que chaque item a un nom
+  const items = sale.items.map(item => {
+    console.log('Item local:', item);
+    return {
       id: item.id,
-      name: item.name || 'Produit sans nom',
+      name: item.name || item.product_name || `Produit ${item.id?.slice(-6) || 'inconnu'}`,
       price: item.price || 0,
       quantity: item.quantity || 0,
-      code: item.code,
-    }));
-
-    return {
-      id: sale.id,
-      items,
-      total: getTotalAmount(sale),
-      paymentMethod: sale.paymentMethod,
-      timestamp: sale.timestamp,
-      cashierName: sale.cashierName,
-      cashierId: sale.cashierId || 'unknown',
-      posName: sale.posName,
-      branchId: sale.branchId || 'main',
-      branchName: sale.branchName || 'Branche Principale',
-      sessionNumber: sale.sessionNumber,
-      receiptNumber: sale.receiptNumber,
-      customerName: sale.customerName || 'Passager',
-      status: sale.status,
-      synced: sale.synced,
-      isLocal: true,
+      code: item.code || item.product_code,
+      productId: item.productId || item.id,
     };
-  }
+  });
+
+  return {
+    id: sale.id,
+    items,
+    total: getTotalAmount(sale),
+    paymentMethod: sale.paymentMethod,
+    timestamp: sale.timestamp,
+    cashierName: sale.cashierName,
+    cashierId: sale.cashierId || 'unknown',
+    posName: sale.posName,
+    branchId: sale.branchId || 'main',
+    branchName: sale.branchName || 'Branche Principale',
+    sessionNumber: sale.sessionNumber,
+    receiptNumber: sale.receiptNumber,
+    customerName: sale.customerName || 'Passager',
+    status: sale.status,
+    synced: sale.synced,
+    isLocal: true,
+  };
+}
 
   const allSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);

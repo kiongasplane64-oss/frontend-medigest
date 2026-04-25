@@ -188,8 +188,8 @@ export default function InventoryListView({
   // Configuration de la pharmacie
   const { config, salesType, formatPrice, defaultMargin, isAutomaticPricing, automaticPricingMethod, automaticPricingValue, taxRate, lowStockThreshold } = usePharmacyConfig(effectivePharmacyId);
   
-  // Utilisation de useAlerts avec les bonnes options
-  const { alerts: stockAlerts, totalCount: alertsCount } = useAlerts({
+  // Utilisation de useAlerts avec les bonnes options - ne récupérer que refresh
+  const { refresh: refreshAlerts } = useAlerts({
     autoRefresh: true,
     refreshInterval: 300000,
   });
@@ -213,6 +213,7 @@ export default function InventoryListView({
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState({
     category_id: '',
+    category: '',
     stock_status: '',
     expiry_status: '',
     product_type: '',
@@ -229,6 +230,58 @@ export default function InventoryListView({
   const [showProductSearch, setShowProductSearch] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'selling_price' | 'expiry_date'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Requête séparée pour les statistiques globales (tous les produits)
+  const {
+    data: globalStatsData,
+    isLoading: isLoadingGlobalStats,
+  } = useQuery({
+    queryKey: ['products-global-stats', searchQuery, filters, effectivePharmacyId, effectiveBranchId],
+    queryFn: async () => {
+      if (!effectivePharmacyId) return { total: 0, totalStockValue: 0, totalSellingValue: 0 };
+      
+      // Récupérer tous les produits sans pagination pour les statistiques globales
+      const response = await inventoryService.getProducts({
+        skip: 0,
+        limit: 10000, // Grand nombre pour récupérer tous les produits
+        search: searchQuery || undefined,
+        category: filters.category || undefined,
+        category_id: filters.category_id || undefined,
+        stock_status: filters.stock_status || undefined,
+        expiry_status: filters.expiry_status || undefined,
+        product_type: filters.product_type || undefined,
+        min_price: filters.min_price || undefined,
+        max_price: filters.max_price || undefined,
+        pharmacy_id: filters.pharmacy_id || undefined,
+        branch_id: filters.branch_id || undefined,
+        include_sales_stats: true,
+      });
+      
+      // Calculer la valeur totale du stock (prix d'achat * quantité)
+      const totalStockValue = response.products.reduce((sum, product) => {
+        return sum + (product.purchase_price || 0) * (product.quantity || 0);
+      }, 0);
+      
+      // Calculer la valeur totale de vente (prix de vente * quantité)
+      const totalSellingValue = response.products.reduce((sum, product) => {
+        let sellingPrice = product.selling_price || 0;
+        if (salesType === 'wholesale') {
+          sellingPrice = (product as any).selling_price_wholesale || product.selling_price || 0;
+        } else if (salesType === 'retail') {
+          sellingPrice = (product as any).selling_price_retail || product.selling_price || 0;
+        }
+        return sum + sellingPrice * (product.quantity || 0);
+      }, 0);
+      
+      return {
+        total: response.total,
+        totalStockValue,
+        totalSellingValue,
+      };
+    },
+    staleTime: 30000,
+    enabled: !!effectivePharmacyId,
+  });
 
   // Mettre à jour les filtres quand l'ID pharmacie change
   useEffect(() => {
@@ -264,7 +317,7 @@ export default function InventoryListView({
     is_active: true,
   });
 
-  // Query pour récupérer les produits (désactivée si pas de pharmacie)
+  // Query pour récupérer les produits (paginated)
   const {
     data: productsData,
     isLoading: isLoadingProducts,
@@ -280,6 +333,7 @@ export default function InventoryListView({
         skip: (page - 1) * limit,
         limit,
         search: searchQuery || undefined,
+        category: filters.category || undefined,
         category_id: filters.category_id || undefined,
         stock_status: filters.stock_status || undefined,
         expiry_status: filters.expiry_status || undefined,
@@ -428,33 +482,8 @@ export default function InventoryListView({
     return { retail, wholesale };
   }, [calculateSellingPrice, config, formData.purchase_price, formData.has_tva, formData.tva_rate]);
 
-  // Mettre à jour les prix automatiquement
-  //useEffect(() => {
-  // if (!calculAutoPrix || !isAutomaticPricing || toNumber(formData.purchase_price, 0) <= 0) {
-  //    return;
-  //  }
-
-  //  setFormData((prev) => {
-  //    const next = { ...prev };
-
-  //    if (salesType === 'wholesale') {
-   //     next.selling_price_wholesale = suggestedPrices.wholesale;
-   //     next.selling_price = suggestedPrices.wholesale;
-   //   } else if (salesType === 'retail') {
-   //     next.selling_price_retail = suggestedPrices.retail;
-   //     next.selling_price = suggestedPrices.retail;
-   //   } else {
-   //     next.selling_price_wholesale = suggestedPrices.wholesale;
-   //     next.selling_price_retail = suggestedPrices.retail;
-   //     next.selling_price = suggestedPrices.retail;
-  //    }
-
-  //    return next;
-  //  });
-  //}, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType, suggestedPrices.retail, suggestedPrices.wholesale]);
+  // Désactiver le calcul automatique des prix
   useEffect(() => {
-    // Le calcul automatique des prix est DÉSACTIVÉ
-    // Les prix saisis manuellement sont conservés tels quels
     return;
   }, [formData.purchase_price, calculAutoPrix, isAutomaticPricing, salesType]);
 
@@ -518,7 +547,7 @@ export default function InventoryListView({
   }, [checkBarcodeExists]);
 
   // Soumettre le formulaire
-    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError(null);
 
@@ -535,7 +564,6 @@ export default function InventoryListView({
     setIsSubmitting(true);
 
     try {
-      // Utiliser TOUJOURS les prix saisis manuellement, jamais de calcul automatique
       let sellingPriceValue = 0;
       let sellingPriceWholesaleValue: number | undefined = undefined;
       let sellingPriceRetailValue: number | undefined = undefined;
@@ -576,7 +604,6 @@ export default function InventoryListView({
         is_active: formData.is_active,
         pharmacy_id: effectivePharmacyId,
         branch_id: effectiveBranchId || undefined,
-        // Désactiver le calcul automatique
         calcul_auto_prix: false,
         marge_par_defaut: defaultMargin,
         sales_type: salesType,
@@ -608,12 +635,14 @@ export default function InventoryListView({
 
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['products'] }),
+        queryClient.invalidateQueries({ queryKey: ['products-global-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['stock-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['stock-alerts'] }),
       ]);
 
       handleCloseForm();
       refetch();
+      refreshAlerts();
     } catch (err) {
       console.error('Erreur sauvegarde produit:', err);
       setFormError(extractErrorMessage(err));
@@ -640,12 +669,14 @@ export default function InventoryListView({
 
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['products'] }),
+        queryClient.invalidateQueries({ queryKey: ['products-global-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['stock-stats'] }),
         queryClient.invalidateQueries({ queryKey: ['stock-alerts'] }),
       ]);
 
       handleCloseForm();
       refetch();
+      refreshAlerts();
     } catch (err) {
       console.error('Erreur suppression produit:', err);
       setFormError(extractErrorMessage(err));
@@ -716,7 +747,6 @@ export default function InventoryListView({
         setSelectedProduct(product);
         setShowProductDetail(true);
       } else {
-        // Produit non trouvé, ouvrir le formulaire avec le code-barres pré-rempli
         setFormMode('create');
         setSelectedProductId(null);
         setCalculAutoPrix(isAutomaticPricing);
@@ -751,13 +781,26 @@ export default function InventoryListView({
 
   const handleRefresh = () => {
     refetch();
+    refreshAlerts();
+    queryClient.invalidateQueries({ queryKey: ['products-global-stats'] });
   };
 
-  // Trier les produits
-  const sortedProducts = useMemo(() => {
+  // Filtrer les produits pour la recherche alphabétique (début du nom)
+  const filteredProducts = useMemo(() => {
     if (!productsData?.products) return [];
-
-    return [...productsData.products].sort((a, b) => {
+    
+    let filtered = [...productsData.products];
+    
+    // Recherche alphabétique - ne garde que les produits dont le nom commence par la recherche
+    if (searchQuery.trim()) {
+      const searchLower = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(product => 
+        product.name.toLowerCase().startsWith(searchLower)
+      );
+    }
+    
+    // Tri
+    filtered.sort((a, b) => {
       let aVal: any = a[sortBy];
       let bVal: any = b[sortBy];
 
@@ -772,19 +815,22 @@ export default function InventoryListView({
         return aVal < bVal ? 1 : -1;
       }
     });
-  }, [productsData?.products, sortBy, sortOrder]);
+    
+    return filtered;
+  }, [productsData?.products, searchQuery, sortBy, sortOrder]);
 
-  // Statistiques
+  // Statistiques (basées sur les produits filtrés globalement)
   const stats = useMemo(() => {
-    if (!productsData?.products) return { total: 0, outOfStock: 0, lowStock: 0, totalValue: 0 };
+    const total = globalStatsData?.total ?? 0;
+    const totalStockValue = globalStatsData?.totalStockValue ?? 0;
+    const totalSellingValue = globalStatsData?.totalSellingValue ?? 0;
+    
+    // Compter les produits en rupture et stock faible basé sur le statut réel des produits
+    const outOfStock = productsData?.products?.filter(p => p.stock_status === 'out_of_stock').length ?? 0;
+    const lowStock = productsData?.products?.filter(p => p.stock_status === 'low_stock').length ?? 0;
 
-    const total = productsData.products.length;
-    const outOfStock = productsData.products.filter(p => p.stock_status === 'out_of_stock').length;
-    const lowStock = productsData.products.filter(p => p.stock_status === 'low_stock').length;
-    const totalValue = productsData.products.reduce((sum, p) => sum + (p.selling_value || 0), 0);
-
-    return { total, outOfStock, lowStock, totalValue };
-  }, [productsData?.products]);
+    return { total, outOfStock, lowStock, totalStockValue, totalSellingValue };
+  }, [productsData?.products, globalStatsData]);
 
   // Type de vente label
   const salesTypeLabel = useMemo(() => {
@@ -793,11 +839,11 @@ export default function InventoryListView({
     return 'Gros & détail';
   }, [salesType]);
 
-  const isLoading = isLoadingPharmacy || isLoadingProducts;
+  const isLoading = isLoadingPharmacy || isLoadingProducts || isLoadingGlobalStats;
 
-  // Extraire les alertes de stock pour l'affichage
-  const outOfStockAlerts = stockAlerts?.filter(alert => alert.type === 'out_of_stock') || [];
-  const lowStockAlerts = stockAlerts?.filter(alert => alert.type === 'low_stock') || [];
+  // Compter les alertes de stock basées sur le statut réel des produits
+  const outOfStockCount = productsData?.products?.filter(p => p.stock_status === 'out_of_stock').length || 0;
+  const lowStockCount = productsData?.products?.filter(p => p.stock_status === 'low_stock').length || 0;
 
   // Rendu du formulaire modal
   const renderFormModal = () => {
@@ -1037,7 +1083,6 @@ export default function InventoryListView({
                 />
               </div>
 
-              {/* Bloc de contrôle du calcul automatique - DÉSACTIVÉ */}
               <div className="md:col-span-3">
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
                   <div>
@@ -1052,7 +1097,6 @@ export default function InventoryListView({
                 </div>
               </div>
 
-              {/* Prix vente détail */}
               {(salesType === 'retail' || salesType === 'both') && (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -1077,7 +1121,6 @@ export default function InventoryListView({
                 </div>
               )}
 
-              {/* Prix vente gros */}
               {(salesType === 'wholesale' || salesType === 'both') && (
                 <div>
                   <label className="mb-1 block text-sm font-medium text-slate-700">
@@ -1262,6 +1305,11 @@ export default function InventoryListView({
     );
   };
 
+  // Options de catégories pour le filtre
+  const categoryOptions = useMemo(() => {
+    return categories.map(cat => ({ value: cat.name, label: cat.name }));
+  }, [categories]);
+
   // Rendu des produits
   const renderProductsTab = () => (
     <div className="space-y-4">
@@ -1272,9 +1320,12 @@ export default function InventoryListView({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input
               type="text"
-              placeholder="Rechercher par nom, code ou code-barres..."
+              placeholder="Rechercher par nom (début du nom)..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(1);
+              }}
               className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-medical"
             />
           </div>
@@ -1319,43 +1370,50 @@ export default function InventoryListView({
       <StockFilters
         filters={filters}
         onFilterChange={handleFilterChange}
-        config={config}
-        salesType={salesType}
+        categoryOptions={categoryOptions}
       />
 
-      {/* Statistiques rapides */}
+      {/* Statistiques rapides avec valeurs globales */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl p-3 border border-slate-200">
           <p className="text-xs text-slate-500">Total produits</p>
           <p className="text-xl font-bold">{stats.total}</p>
+          <p className="text-xs text-slate-400 mt-1">(tous les produits)</p>
         </div>
         <div className="bg-white rounded-xl p-3 border border-slate-200">
-          <p className="text-xs text-slate-500">Valeur du stock</p>
-          <p className="text-xl font-bold">{formatPrice(stats.totalValue)}</p>
+          <p className="text-xs text-slate-500">Valeur du stock (achat)</p>
+          <p className="text-xl font-bold">{formatPrice(stats.totalStockValue)}</p>
+          <p className="text-xs text-slate-400 mt-1">(qté × prix achat)</p>
         </div>
-        <div className="bg-red-50 rounded-xl p-3 border border-red-200">
-          <p className="text-xs text-red-600">Rupture de stock</p>
-          <p className="text-xl font-bold text-red-600">{stats.outOfStock}</p>
+        <div className="bg-green-50 rounded-xl p-3 border border-green-200">
+          <p className="text-xs text-green-600">Valeur de vente</p>
+          <p className="text-xl font-bold text-green-600">{formatPrice(stats.totalSellingValue)}</p>
+          <p className="text-xs text-green-500 mt-1">(qté × prix vente)</p>
         </div>
         <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
-          <p className="text-xs text-amber-600">Stock faible</p>
-          <p className="text-xl font-bold text-amber-600">{stats.lowStock}</p>
+          <p className="text-xs text-amber-600">Marge estimée</p>
+          <p className="text-xl font-bold text-amber-600">
+            {stats.totalStockValue > 0 
+              ? Math.round(((stats.totalSellingValue - stats.totalStockValue) / stats.totalStockValue) * 100) 
+              : 0}%
+          </p>
+          <p className="text-xs text-amber-500 mt-1">(vente - achat) / achat</p>
         </div>
       </div>
 
-      {/* Alertes */}
-      {(outOfStockAlerts.length > 0 || lowStockAlerts.length > 0) && (
+      {/* Alertes - basées sur le statut réel des produits */}
+      {(outOfStockCount > 0 || lowStockCount > 0) && (
         <div className="bg-amber-50 rounded-xl p-3 border border-amber-200">
           <div className="flex items-center gap-2 text-amber-700 mb-2">
             <AlertTriangle size={16} />
             <span className="text-sm font-medium">Alertes stock</span>
           </div>
           <div className="text-xs text-amber-600">
-            {outOfStockAlerts.length > 0 && (
-              <span>{outOfStockAlerts.length} produit(s) en rupture de stock. </span>
+            {outOfStockCount > 0 && (
+              <span className="block">{outOfStockCount} produit(s) actuellement en rupture de stock.</span>
             )}
-            {lowStockAlerts.length > 0 && (
-              <span>{lowStockAlerts.length} produit(s) avec stock faible.</span>
+            {lowStockCount > 0 && (
+              <span className="block">{lowStockCount} produit(s) avec stock faible (inférieur au seuil).</span>
             )}
           </div>
         </div>
@@ -1380,7 +1438,7 @@ export default function InventoryListView({
         <>
           {viewMode === 'grid' && !isMobile ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {sortedProducts.map((product) => (
+              {filteredProducts.map((product) => (
                 <ProductCard
                   key={product.id}
                   product={product}
@@ -1422,7 +1480,7 @@ export default function InventoryListView({
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedProducts.map((product) => (
+                  {filteredProducts.map((product) => (
                     <ProductTableRow
                       key={product.id}
                       product={product}
@@ -1437,7 +1495,7 @@ export default function InventoryListView({
             </div>
           )}
 
-          {/* Pagination */}
+          {/* Pagination - basée sur le nombre total après filtres */}
           {productsData.total > limit && (
             <div className="flex justify-between items-center pt-4">
               <button
@@ -1459,6 +1517,12 @@ export default function InventoryListView({
                 Suivant
                 <ChevronRight size={16} />
               </button>
+            </div>
+          )}
+          
+          {filteredProducts.length === 0 && searchQuery && (
+            <div className="text-center py-8 text-slate-500">
+              Aucun produit ne commence par "{searchQuery}"
             </div>
           )}
         </>
@@ -1484,7 +1548,7 @@ export default function InventoryListView({
       case 'achat':
         return <AchatView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'barcodes':
-        return <BarcodeLabelView products={sortedProducts} formatPrice={formatPrice} />;
+        return <BarcodeLabelView products={filteredProducts} formatPrice={formatPrice} />;
       default:
         return null;
     }
@@ -1499,9 +1563,9 @@ export default function InventoryListView({
             <div className="flex items-center gap-3">
               <Package className="text-medical" size={24} />
               <h1 className="text-xl font-bold text-slate-900">Gestion de stock</h1>
-              {alertsCount > 0 && (
+              {(outOfStockCount > 0 || lowStockCount > 0) && (
                 <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full">
-                  {alertsCount} alertes
+                  {outOfStockCount + lowStockCount} alertes
                 </span>
               )}
             </div>

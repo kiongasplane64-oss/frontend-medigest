@@ -10,6 +10,16 @@ export interface User {
   nom_complet: string;
   tenant_id?: string | null;
   pharmacy_id?: string | null;
+  branch_id?: string; 
+  current_pharmacy?: {  
+    id: string;
+    name: string;
+    code: string;
+    address?: string;
+    phone?: string;
+    is_main?: boolean;
+    is_active?: boolean;
+  };
   telephone?: string;
   phone?: string;
   actif: boolean;

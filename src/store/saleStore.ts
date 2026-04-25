@@ -10,6 +10,13 @@ export interface LocalSaleItem {
   price: number;
   quantity: number;
   code?: string;
+  product_code?: string;      // 🔧 AJOUTÉ - Alias pour code (compatibilité)
+  product_name?: string;       // 🔧 AJOUTÉ - Nom du produit (compatibilité)
+  productId?: string;          // 🔧 AJOUTÉ - ID du produit (compatibilité)
+  discount?: number;
+  discount_percent?: number;
+  batch_number?: string;
+  expiry_date?: string;
 }
 
 export interface LocalSale {
@@ -86,8 +93,18 @@ export const useSaleStore = create<SaleStore>()(
 
       addLocalSale: (sale) => {
         const id = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Ajouter les propriétés de compatibilité à chaque item
+        const itemsWithCompat = sale.items.map(item => ({
+          ...item,
+          product_code: item.product_code || item.code,
+          product_name: item.product_name || item.name,
+          productId: item.productId || item.id,
+        }));
+        
         const newSale: LocalSale = {
           ...sale,
+          items: itemsWithCompat,
           id,
           synced: false,
           retryCount: 0,
@@ -160,13 +177,14 @@ export const useSaleStore = create<SaleStore>()(
           try {
             const saleData: SaleCreate = {
               items: pendingSale.items.map(item => ({
-                product_id: item.id,
+                product_id: item.productId || item.id,
                 quantity: item.quantity,
-                discount_percent: 0,
-                product_code: item.code,
+                discount_percent: item.discount_percent || 0,
+                product_code: item.product_code || item.code,
               })),
               payment_method: pendingSale.paymentMethod,
               customer_name: pendingSale.customerName || 'Passager',
+              pharmacy_id: pendingSale.pharmacy_id || pendingSale.branchId,
             };
             
             const response = await saleService.createSale(saleData);

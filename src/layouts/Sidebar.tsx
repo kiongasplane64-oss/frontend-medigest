@@ -101,7 +101,7 @@ const menuGroups: MenuGroup[] = [
         icon: <LayoutDashboard size={20}/>, 
         label: 'Tableau de bord', 
         href: '/dashboard', 
-        roles: ["admin", "gestionnaire", "pharmacien", "caissier", "vendeur", "comptable", "stockiste", "preparateur"] 
+        roles: ["admin", "gestionnaire", "pharmacien", "caissier", "comptable", "stockiste", "preparateur"] 
       }
     ]
   },

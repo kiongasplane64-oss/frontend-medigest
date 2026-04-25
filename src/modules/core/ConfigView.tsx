@@ -3,36 +3,16 @@ import {
   RefreshCcw,
   XCircle,
   AlertTriangle,
-  Clock,
-  Building2,
   X,
-  ToggleLeft,
-  ToggleRight,
   CreditCard,
-  Sun,
-  Moon,
-  Monitor,
   CheckCircle,
   Upload,
   Settings,
   Save,
   ShieldCheck,
-  DollarSign,
-  Percent,
-  Bell,
-  Palette,
-  Plus,
-  Printer,
-  FileText,
-  Package,
-  PackageOpen,
-  TrendingUp,
   Settings2,
-  Calendar,
-  Trash2,
-  Edit,
-  Check,
-  Database
+  Database,
+  Edit3
 } from 'lucide-react';
 import api from '@/api/client';
 import OutOfService from './endehors';
@@ -280,7 +260,7 @@ interface PharmacyConfig {
 }
 
 interface ConfigViewProps {
-  pharmacyId: string;
+  pharmacyId?: string;
 }
 
 interface ServiceStatus {
@@ -376,17 +356,17 @@ const DEFAULT_ROUNDING: RoundingConfig = { enabled: false, precision: 0, method:
 // COMPOSANT PRINCIPAL
 // ============================================
 
-const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
+const ConfigView = ({ pharmacyId: propPharmacyId }: ConfigViewProps) => {
   // États
+  const [currentPharmacyId, setCurrentPharmacyId] = useState<string>(propPharmacyId || '');
   const [loading, setLoading] = useState(true);
+  const [resolvingId, setResolvingId] = useState(!propPharmacyId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [outOfService, setOutOfService] = useState(false);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [pharmacyData, setPharmacyData] = useState<PharmacyResponse | null>(null);
-  const [showLocalTimes, setShowLocalTimes] = useState(false);
-  const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   
   // États pour les branches
@@ -400,6 +380,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   
   const [branchFormData, setBranchFormData] = useState<Partial<Branch>>({
     name: '',
+    code: '',
     address: '',
     city: '',
     country: 'CD',
@@ -417,7 +398,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   const { timezone: browserTimezone, offset: browserOffset } = useTimezone();
   
   const [config, setConfig] = useState<PharmacyConfig>({
-    pharmacyId: pharmacyId,
+    pharmacyId: '',
     pharmacyInfo: DEFAULT_PHARMACY_INFO,
     currencies: DEFAULT_CURRENCIES,
     primaryCurrency: 'CDF',
@@ -445,11 +426,19 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     rounding: DEFAULT_ROUNDING,
   });
 
-  const [newCurrency, setNewCurrency] = useState({
-    code: '',
-    symbol: '',
-    exchangeRate: 1,
-  });
+  // ============================================
+  // FONCTION POUR RÉCUPÉRER LA PHARMACIE ACTIVE
+  // ============================================
+  
+  const fetchActivePharmacy = async (): Promise<string | null> => {
+    try {
+      const response = await api.get('/pharmacies/me/active-pharmacy');
+      return response.data.pharmacy_id;
+    } catch (err) {
+      console.error('Erreur lors de la récupération de la pharmacie active:', err);
+      return null;
+    }
+  };
 
   // ============================================
   // EFFETS
@@ -488,29 +477,20 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   }, [config.theme]);
 
   useEffect(() => {
-    checkServiceStatus();
-    const interval = setInterval(checkServiceStatus, 60000);
-    return () => clearInterval(interval);
-  }, [pharmacyId]);
+    if (currentPharmacyId) {
+      checkServiceStatus();
+      const interval = setInterval(checkServiceStatus, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [currentPharmacyId]);
 
   // ============================================
   // FONCTIONS UTILITAIRES
   // ============================================
 
-  const displayLocalTime = (timeStr: string): string => {
-    if (!timeStr || !showLocalTimes) return timeStr;
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    const pharmacyOffset = 1;
-    const browserHour = hours - pharmacyOffset + browserOffset;
-    let adjustedHour = browserHour;
-    if (adjustedHour < 0) adjustedHour += 24;
-    if (adjustedHour >= 24) adjustedHour -= 24;
-    return `${adjustedHour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
-  };
-
   const mergeConfigWithDefaults = (loadedConfig: any): PharmacyConfig => {
     return {
-      pharmacyId: pharmacyId,
+      pharmacyId: currentPharmacyId,
       pharmacyInfo: {
         ...DEFAULT_PHARMACY_INFO,
         ...(loadedConfig?.pharmacyInfo || {})
@@ -584,7 +564,23 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   // ============================================
 
   const loadPharmacyData = async () => {
-    if (!pharmacyId) {
+    // Si pas d'ID, essayer de le récupérer
+    let id = currentPharmacyId;
+    if (!id && resolvingId) {
+      const fetchedId = await fetchActivePharmacy();
+      if (fetchedId) {
+        id = fetchedId;
+        setCurrentPharmacyId(fetchedId);
+        setResolvingId(false);
+      } else {
+        setError("Aucune pharmacie active trouvée");
+        setLoading(false);
+        setResolvingId(false);
+        return;
+      }
+    }
+
+    if (!id) {
       setError("ID de pharmacie non fourni");
       setLoading(false);
       return;
@@ -594,10 +590,10 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     setError(null);
     
     try {
-      const pharmacyResponse = await api.get<PharmacyResponse>(`/pharmacies/${pharmacyId}`);
+      const pharmacyResponse = await api.get<PharmacyResponse>(`/pharmacies/${id}`);
       setPharmacyData(pharmacyResponse.data);
       
-      const configResponse = await api.get<{ config: PharmacyConfig }>(`/pharmacies/${pharmacyId}/config`);
+      const configResponse = await api.get<{ config: PharmacyConfig }>(`/pharmacies/${id}/config`);
       
       const loadedConfig = configResponse.data.config || {};
       const mergedConfig = mergeConfigWithDefaults(loadedConfig);
@@ -613,10 +609,6 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
           licenseNumber: pharmacyResponse.data.license_number || '',
         },
       });
-      
-      if (mergedConfig.pharmacyInfo.logoUrl) {
-        setLogoPreview(mergedConfig.pharmacyInfo.logoUrl);
-      }
       
       await checkServiceStatus();
       await loadAvailableUsers();
@@ -648,8 +640,9 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   const checkServiceStatus = async () => {
+    if (!currentPharmacyId) return;
     try {
-      const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
+      const response = await api.get<ServiceStatus>(`/pharmacies/${currentPharmacyId}/service-status`);
       setServiceStatus(response.data);
       setOutOfService(!response.data.in_service);
     } catch (err) {
@@ -731,11 +724,11 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   const uploadLogo = async () => {
-    if (!logoFile) return;
+    if (!logoFile || !currentPharmacyId) return;
     try {
       const formData = new FormData();
       formData.append('logo', logoFile);
-      const response = await api.post(`/pharmacies/${pharmacyId}/logo`, formData);
+      const response = await api.post(`/pharmacies/${currentPharmacyId}/logo`, formData);
       setConfig({
         ...config,
         pharmacyInfo: { ...config.pharmacyInfo, logoUrl: response.data.logo_url }
@@ -749,6 +742,11 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   const handleSave = async () => {
+    if (!currentPharmacyId) {
+      setError("ID de pharmacie non disponible");
+      return;
+    }
+    
     setSaving(true);
     setError(null);
     setSuccess(null);
@@ -810,7 +808,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
       };
 
       const response = await api.patch(
-        `/pharmacies/${pharmacyId}/config`,
+        `/pharmacies/${currentPharmacyId}/config`,
         configToSave
       );
       
@@ -837,103 +835,17 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   // ============================================
-  // GESTION DES DEVISES
-  // ============================================
-
-  const addCurrency = async () => {
-    if (newCurrency.code && newCurrency.symbol) {
-      const updatedCurrencies = [...config.currencies, { ...newCurrency, isActive: true }];
-      setConfig({ ...config, currencies: updatedCurrencies });
-      
-      try {
-        await api.patch(`/pharmacies/${pharmacyId}/config/currencies`, updatedCurrencies);
-        setNewCurrency({ code: '', symbol: '', exchangeRate: 1 });
-      } catch (err) {
-        console.error('Erreur lors de l\'ajout de la devise:', err);
-        setConfig(prev => ({ ...prev, currencies: prev.currencies }));
-      }
-    }
-  };
-
-  const removeCurrency = async (index: number) => {
-    const updatedCurrencies = config.currencies.filter((_, i) => i !== index);
-    const previousCurrencies = config.currencies;
-    setConfig({ ...config, currencies: updatedCurrencies });
-    
-    try {
-      await api.patch(`/pharmacies/${pharmacyId}/config/currencies`, updatedCurrencies);
-    } catch (err) {
-      console.error('Erreur lors de la suppression de la devise:', err);
-      setConfig({ ...config, currencies: previousCurrencies });
-    }
-  };
-
-  const toggleCurrencyActive = async (index: number) => {
-    const updatedCurrencies = [...config.currencies];
-    updatedCurrencies[index].isActive = !updatedCurrencies[index].isActive;
-    const previousCurrencies = config.currencies;
-    setConfig({ ...config, currencies: updatedCurrencies });
-    
-    try {
-      await api.patch(`/pharmacies/${pharmacyId}/config/currencies`, updatedCurrencies);
-    } catch (err) {
-      console.error('Erreur lors de la mise à jour de la devise:', err);
-      setConfig({ ...config, currencies: previousCurrencies });
-    }
-  };
-
-  const updateExchangeRate = async (index: number, rate: number) => {
-    const updatedCurrencies = [...config.currencies];
-    updatedCurrencies[index].exchangeRate = rate;
-    const previousCurrencies = config.currencies;
-    setConfig({ ...config, currencies: updatedCurrencies });
-    
-    try {
-      await api.patch(`/pharmacies/${pharmacyId}/config/currencies`, updatedCurrencies);
-    } catch (err) {
-      console.error('Erreur lors de la mise à jour du taux:', err);
-      setConfig({ ...config, currencies: previousCurrencies });
-    }
-  };
-
-  // ============================================
   // GESTION DES SUCCURSALES
   // ============================================
 
-  const openBranchModal = (branch?: Branch) => {
-    if (branch) {
-      setEditingBranch(branch);
-      setBranchFormData({
-        name: branch.name,
-        address: branch.address,
-        city: branch.city,
-        country: branch.country,
-        phone: branch.phone,
-        email: branch.email,
-        manager_id: branch.manager_id,
-      });
-    } else {
-      setEditingBranch(null);
-      setBranchFormData({
-        name: '',
-        address: '',
-        city: '',
-        country: 'CD',
-        phone: '',
-        email: '',
-        manager_id: '',
-      });
-    }
-    setShowBranchModal(true);
-  };
-
-  const openBranchConfigPanel = async (branch: Branch) => {
+  const openBranchConfigPanelHandler = async (branch: Branch) => {
     setSelectedBranch(branch);
     setShowBranchConfigPanel(true);
     await loadBranchResolvedConfig(branch);
   };
 
   const handleCreateBranch = async () => {
+    if (!currentPharmacyId) return;
     if (!branchFormData.name) {
       setError("Le nom de la succursale est requis");
       return;
@@ -983,7 +895,7 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         is_active: true
       };
 
-      const response = await api.post(`/pharmacies/${pharmacyId}/branches`, branchData);
+      const response = await api.post(`/pharmacies/${currentPharmacyId}/branches`, branchData);
       
       setConfig({
         ...config,
@@ -1023,10 +935,10 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
   };
 
   const handleUpdateBranch = async () => {
-    if (!editingBranch || !branchFormData.name) return;
+    if (!currentPharmacyId || !editingBranch || !branchFormData.name) return;
 
     try {
-      const response = await api.put(`/pharmacies/${pharmacyId}/branches/${editingBranch.id}`, {
+      const response = await api.put(`/pharmacies/${currentPharmacyId}/branches/${editingBranch.id}`, {
         name: branchFormData.name,
         address: branchFormData.address,
         city: branchFormData.city,
@@ -1057,73 +969,6 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
     }
   };
 
-  const handleDeleteBranch = async (branchId: string) => {
-    if (!confirm("Êtes-vous sûr de vouloir désactiver cette succursale ?")) return;
-
-    try {
-      await api.delete(`/pharmacies/${pharmacyId}/branches/${branchId}`);
-      
-      setConfig({
-        ...config,
-        branchConfig: {
-          ...config.branchConfig,
-          currentBranches: (config.branchConfig.currentBranches || 0) - 1,
-          branches: config.branchConfig.branches.filter(b => b.id !== branchId),
-        },
-      });
-      
-      setSuccess("Succursale désactivée avec succès !");
-      setTimeout(() => setSuccess(null), 3000);
-      
-    } catch (err: any) {
-      console.error('Erreur lors de la suppression de la succursale:', err);
-      setError(err.response?.data?.detail || "Erreur lors de la suppression de la succursale");
-    }
-  };
-
-  const handleSetMainBranch = async (branchId: string) => {
-    try {
-      const response = await api.post(`/pharmacies/${pharmacyId}/branches/${branchId}/set-main`);
-      
-      setConfig({
-        ...config,
-        branchConfig: {
-          ...config.branchConfig,
-          branches: config.branchConfig.branches.map(b => ({
-            ...b,
-            is_main_branch: b.id === branchId
-          })),
-          main_branch_id: branchId,
-          main_branch_name: response.data.name,
-        },
-      });
-      
-      setSuccess("Succursale principale définie avec succès !");
-      setTimeout(() => setSuccess(null), 3000);
-      
-    } catch (err: any) {
-      console.error('Erreur lors de la définition de la succursale principale:', err);
-      setError(err.response?.data?.detail || "Erreur lors de la définition de la succursale principale");
-    }
-  };
-
-  // ============================================
-  // GESTION DES JOURS OUVRABLES
-  // ============================================
-
-  const toggleWorkingDay = (day: keyof typeof config.workingHours.daysOff) => {
-    setConfig({
-      ...config,
-      workingHours: {
-        ...config.workingHours,
-        daysOff: {
-          ...config.workingHours.daysOff,
-          [day]: !config.workingHours.daysOff[day]
-        }
-      }
-    });
-  };
-
   // ============================================
   // GESTION DU LOGO
   // ============================================
@@ -1135,7 +980,6 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        setLogoPreview(result);
         setConfig({
           ...config,
           pharmacyInfo: { ...config.pharmacyInfo, logoUrl: result }
@@ -1151,11 +995,17 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
 
   useEffect(() => {
     loadPharmacyData();
-  }, [pharmacyId]);
+  }, [propPharmacyId]);
 
-  useEffect(() => {
-    console.log('Fuseau navigateur:', browserTimezone, 'Offset:', browserOffset);
-  }, [browserTimezone, browserOffset]);
+  // Affichage du loader pendant la résolution de l'ID
+  if (resolvingId) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-white dark:bg-slate-900">
+        <RefreshCcw className="w-8 h-8 text-blue-600 animate-spin" />
+        <p className="text-slate-600 dark:text-slate-400">Récupération de votre pharmacie...</p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -1242,6 +1092,19 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
                   onChange={(e) => setBranchFormData({ ...branchFormData, name: e.target.value })}
                   className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500"
                   placeholder="Ex: Pharmacie du Centre"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Code
+                </label>
+                <input
+                  type="text"
+                  value={branchFormData.code}
+                  onChange={(e) => setBranchFormData({ ...branchFormData, code: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  placeholder="Code unique de la succursale"
                 />
               </div>
               
@@ -1719,9 +1582,9 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
             <Settings className="w-6 h-6 text-blue-600" />
             Paramètres - {pharmacyData?.name || config.pharmacyInfo.name}
           </h1>
-          <div className="flex items-center gap-4 mt-1">
+          <div className="flex flex-wrap items-center gap-4 mt-1">
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              ID: {pharmacyId} • Dernière mise à jour: {new Date(config.updatedAt).toLocaleString()}
+              ID: {currentPharmacyId} • Dernière mise à jour: {new Date(config.updatedAt).toLocaleString()}
             </p>
             {serviceStatus && (
               <div className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full ${
@@ -1738,26 +1601,14 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs text-slate-400 dark:text-slate-500">Fuseau pharmacie: {config.workingHours.timezone || 'Africa/Kinshasa'}</span>
-            <span className="text-xs text-slate-300 dark:text-slate-600">|</span>
-            <span className="text-xs text-slate-400 dark:text-slate-500">Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</span>
+          <div className="flex items-center gap-2 mt-2 text-xs text-slate-400 dark:text-slate-500">
+            <span>Fuseau pharmacie: {config.workingHours.timezone || 'Africa/Kinshasa'}</span>
+            <span>•</span>
+            <span>Votre fuseau: {browserTimezone} (UTC{browserOffset >= 0 ? '+' : ''}{browserOffset})</span>
           </div>
         </div>
         
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowLocalTimes(!showLocalTimes)}
-            className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
-              showLocalTimes 
-                ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-700' 
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-            }`}
-          >
-            <Clock className="w-4 h-4 inline mr-1" />
-            {showLocalTimes ? 'Heures locales' : 'Heures pharmacie'}
-          </button>
-          
           {success && (
             <div className="flex items-center gap-2 text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-4 py-2 rounded-xl animate-fadeIn">
               <CheckCircle className="w-4 h-4" />
@@ -1786,1140 +1637,194 @@ const ConfigView = ({ pharmacyId }: ConfigViewProps) => {
         </div>
       )}
 
-      {/* Grille des paramètres */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Informations de la pharmacie avec logo */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
-          <div className="flex items-center gap-2 mb-2">
-            <Building2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Informations de la Pharmacie</h2>
-          </div>
-          
-          <div className="flex gap-6 flex-wrap">
-            <div className="flex flex-col items-center">
-              <div className="w-32 h-32 bg-slate-100 dark:bg-slate-700 rounded-2xl flex items-center justify-center overflow-hidden border-2 border-slate-200 dark:border-slate-600">
-                {logoPreview ? (
-                  <img src={logoPreview} alt="Logo" className="w-full h-full object-cover" />
-                ) : (
-                  <Building2 className="w-12 h-12 text-slate-400 dark:text-slate-500" />
-                )}
-              </div>
-              <label className="mt-2 cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoChange}
-                  className="hidden"
-                />
-                <div className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800">
-                  <Upload className="w-3 h-3" />
-                  <span>Changer le logo</span>
-                </div>
-              </label>
-            </div>
-            
-            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <input
-                type="text"
-                value={config.pharmacyInfo.name}
-                onChange={(e) => setConfig({
-                  ...config,
-                  pharmacyInfo: { ...config.pharmacyInfo, name: e.target.value }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Nom de la pharmacie"
-              />
-              <input
-                type="text"
-                value={config.pharmacyInfo.phone}
-                onChange={(e) => setConfig({
-                  ...config,
-                  pharmacyInfo: { ...config.pharmacyInfo, phone: e.target.value }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Téléphone"
-              />
-              <input
-                type="email"
-                value={config.pharmacyInfo.email}
-                onChange={(e) => setConfig({
-                  ...config,
-                  pharmacyInfo: { ...config.pharmacyInfo, email: e.target.value }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Email"
-              />
-              <input
-                type="text"
-                value={config.pharmacyInfo.licenseNumber}
-                onChange={(e) => setConfig({
-                  ...config,
-                  pharmacyInfo: { ...config.pharmacyInfo, licenseNumber: e.target.value }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Numéro de licence"
-              />
-              <textarea
-                value={config.pharmacyInfo.address}
-                onChange={(e) => setConfig({
-                  ...config,
-                  pharmacyInfo: { ...config.pharmacyInfo, address: e.target.value }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl md:col-span-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Adresse"
-                rows={2}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Mode de devise */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
-          <div className="flex items-center gap-2 mb-2">
-            <DollarSign className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Mode de devise</h2>
-          </div>
-          
-          <div className="grid grid-cols-3 gap-4">
-            <button
-              onClick={() => setConfig({...config, currencyMode: 'cdf_only'})}
-              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.currencyMode === 'cdf_only'
-                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <span className="text-2xl font-bold">FC</span>
-              <span className="text-sm font-medium">Vente uniquement en Francs Congolais</span>
-              <span className="text-xs text-slate-500">(CDF / FC)</span>
-            </button>
-            
-            <button
-              onClick={() => setConfig({...config, currencyMode: 'usd_only'})}
-              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.currencyMode === 'usd_only'
-                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <span className="text-2xl font-bold">$</span>
-              <span className="text-sm font-medium">Vente uniquement en Dollars Américains</span>
-              <span className="text-xs text-slate-500">(USD / $)</span>
-            </button>
-            
-            <button
-              onClick={() => setConfig({...config, currencyMode: 'both'})}
-              className={`p-4 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.currencyMode === 'both'
-                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 ring-2 ring-amber-500'
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <div className="flex gap-1 text-2xl">
-                <span>FC</span>
-                <span className="text-lg">/</span>
-                <span>$</span>
-              </div>
-              <span className="text-sm font-medium">Vente en FC et en $</span>
-              <span className="text-xs text-slate-500">Deux prix affichés</span>
-            </button>
-          </div>
-          
-          {config.currencyMode === 'both' && (
-            <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-              <p className="text-sm text-blue-700 dark:text-blue-400">
-                ℹ️ Mode multi-devises activé : Les prix seront affichés dans les deux devises.
-                Le taux de change configuré sera utilisé pour la conversion automatique.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Arrondissement des prix */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Settings2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Arrondissement des prix</h2>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <span className="font-semibold text-slate-700 dark:text-slate-300">Activer l'arrondissement</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.rounding.enabled}
-                onChange={(e) => setConfig({
-                  ...config,
-                  rounding: { ...config.rounding, enabled: e.target.checked }
-                })}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-            </label>
-          </div>
-          
-          {config.rounding.enabled && (
-            <>
-              <div>
-                <label className="text-sm text-slate-600 dark:text-slate-400">
-                  Précision d'arrondissement
-                </label>
-                <div className="flex gap-2 mt-1">
-                  <select
-                    value={config.rounding.precision}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      rounding: { ...config.rounding, precision: Number(e.target.value) }
-                    })}
-                    className="flex-1 p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
-                  >
-                    <option value={0}>0 (unités)</option>
-                    <option value={10}>10 (dizaines)</option>
-                    <option value={50}>50 (cinquante)</option>
-                    <option value={100}>100 (centaines)</option>
-                    <option value={500}>500 (cinq cents)</option>
-                    <option value={1000}>1000 (milliers)</option>
-                  </select>
-                </div>
-              </div>
-              
-              <div>
-                <label className="text-sm text-slate-600 dark:text-slate-400">
-                  Méthode d'arrondissement
-                </label>
-                <div className="grid grid-cols-3 gap-2 mt-1">
-                  <button
-                    onClick={() => setConfig({
-                      ...config,
-                      rounding: { ...config.rounding, method: 'nearest' }
-                    })}
-                    className={`p-2 rounded-lg text-sm transition-all ${
-                      config.rounding.method === 'nearest'
-                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
-                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    Au plus proche
-                  </button>
-                  <button
-                    onClick={() => setConfig({
-                      ...config,
-                      rounding: { ...config.rounding, method: 'up' }
-                    })}
-                    className={`p-2 rounded-lg text-sm transition-all ${
-                      config.rounding.method === 'up'
-                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
-                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    Arrondi supérieur
-                  </button>
-                  <button
-                    onClick={() => setConfig({
-                      ...config,
-                      rounding: { ...config.rounding, method: 'down' }
-                    })}
-                    className={`p-2 rounded-lg text-sm transition-all ${
-                      config.rounding.method === 'down'
-                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-1 ring-purple-500'
-                        : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    Arrondi inférieur
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Jours ouvrables */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
-          <div className="flex items-center gap-2 mb-2">
-            <Calendar className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Jours ouvrables</h2>
-          </div>
-          
-          <div className="grid grid-cols-7 gap-2">
-            {Object.entries(config.workingHours.daysOff).map(([day, isWorking]) => {
-              const dayShort: Record<string, string> = {
-                monday: 'Lun',
-                tuesday: 'Mar',
-                wednesday: 'Mer',
-                thursday: 'Jeu',
-                friday: 'Ven',
-                saturday: 'Sam',
-                sunday: 'Dim'
-              };
-              
-              return (
-                <button
-                  key={day}
-                  onClick={() => toggleWorkingDay(day as keyof typeof config.workingHours.daysOff)}
-                  className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${
-                    isWorking
-                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 ring-2 ring-emerald-500 dark:ring-emerald-600'
-                      : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
-                  }`}
-                >
-                  <span className="text-sm font-medium">{dayShort[day]}</span>
-                  <span className="text-xs">{isWorking ? 'Ouvert' : 'Fermé'}</span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-            Cliquez sur un jour pour activer/désactiver l'ouverture
-          </p>
-        </div>
-
-        {/* Type de vente */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Package className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Type de vente</h2>
-          </div>
-          
-          <div className="grid grid-cols-3 gap-3">
-            <button
-              onClick={() => setConfig({...config, salesType: 'wholesale'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.salesType === 'wholesale' 
-                  ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-2 ring-purple-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <PackageOpen className="w-6 h-6" />
-              <span className="text-sm font-medium">Gros uniquement</span>
-            </button>
-            <button
-              onClick={() => setConfig({...config, salesType: 'retail'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.salesType === 'retail' 
-                  ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-2 ring-purple-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Package className="w-6 h-6" />
-              <span className="text-sm font-medium">Détail uniquement</span>
-            </button>
-            <button
-              onClick={() => setConfig({...config, salesType: 'both'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.salesType === 'both' 
-                  ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400 ring-2 ring-purple-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Package className="w-6 h-6" />
-              <PackageOpen className="w-6 h-6 -mt-3" />
-              <span className="text-sm font-medium">Gros et Détail</span>
-            </button>
-          </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-            {config.salesType === 'wholesale' && "Seule la vente en gros est autorisée"}
-            {config.salesType === 'retail' && "Seule la vente au détail est autorisée"}
-            {config.salesType === 'both' && "Les ventes en gros et au détail sont autorisées"}
-          </p>
-        </div>
-
-        {/* Produits périmés */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Produits périmés</h2>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <div>
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Autoriser la vente de produits périmés</span>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {config.expiredProducts.allowSale 
-                  ? "⚠️ Attention: Les produits périmés peuvent être vendus" 
-                  : "✓ Les produits périmés ne peuvent pas être vendus"}
-              </p>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.expiredProducts.allowSale}
-                onChange={(e) => setConfig({
-                  ...config,
-                  expiredProducts: { ...config.expiredProducts, allowSale: e.target.checked }
-                })}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-            </label>
-          </div>
-        </div>
-
-        {/* Heures supplémentaires */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Clock className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Heures supplémentaires</h2>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <span className="font-semibold text-slate-700 dark:text-slate-300">Activer les heures supplémentaires</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.overtime.enabled}
-                onChange={(e) => setConfig({
-                  ...config,
-                  overtime: { ...config.overtime, enabled: e.target.checked }
-                })}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
-            </label>
-          </div>
-          
-          {config.overtime.enabled && (
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">
-                Heure de fin des heures supplémentaires
-                {showLocalTimes && <span className="text-xs text-blue-600 ml-1">(locale)</span>}
-              </label>
-              <input
-                type="time"
-                value={showLocalTimes ? displayLocalTime(config.overtime.endTime) : config.overtime.endTime}
-                onChange={(e) => {
-                  if (showLocalTimes) return;
-                  setConfig({
-                    ...config,
-                    overtime: { ...config.overtime, endTime: e.target.value }
-                  });
-                }}
-                className={`w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200 ${
-                  showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
-                }`}
-                disabled={showLocalTimes}
-              />
-            </div>
-          )}
-        </div>
-
-        {/* Vente selon taux */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp className="w-5 h-5 text-green-600 dark:text-green-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Vente selon taux de change</h2>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <div>
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Activer la vente selon le taux de change</span>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {config.sellByExchangeRate 
-                  ? "Les prix seront convertis selon les taux définis" 
-                  : "Seule la devise principale sera utilisée"}
-              </p>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.sellByExchangeRate}
-                onChange={(e) => setConfig({...config, sellByExchangeRate: e.target.checked})}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
-            </label>
-          </div>
-        </div>
-
-        {/* Rentabilité / Calcul automatique */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Settings2 className="w-5 h-5 text-teal-600 dark:text-teal-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Calcul automatique du prix de vente</h2>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <span className="font-semibold text-slate-700 dark:text-slate-300">Activer le calcul automatique</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.profitability.enabled}
-                onChange={(e) => setConfig({
-                  ...config,
-                  profitability: { ...config.profitability, enabled: e.target.checked }
-                })}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-600"></div>
-            </label>
-          </div>
-          
-          {config.profitability.enabled && (
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">
-                Taux de rentabilité (%)
-                <span className="text-xs text-slate-400 dark:text-slate-500 ml-2">
-                  (ex: 30% = prix achat × 1.3)
-                </span>
-              </label>
-              <input
-                type="number"
-                value={config.profitability.rate}
-                onChange={(e) => setConfig({
-                  ...config,
-                  profitability: { ...config.profitability, rate: Number(e.target.value) }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                step="0.5"
-                min="0"
-                max="500"
-              />
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Prix de vente = Prix d'achat × (1 + {config.profitability.rate / 100})
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Facturation */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Printer className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Configuration de la facturation</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Impression automatique après vente</span>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  checked={config.invoice.autoPrint}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    invoice: { ...config.invoice, autoPrint: e.target.checked }
-                  })}
-                />
-                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            
-            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">Sauvegarde automatique des factures</span>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  checked={config.invoice.autoSave}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    invoice: { ...config.invoice, autoSave: e.target.checked }
-                  })}
-                />
-                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              </label>
-            </div>
-            
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">Taille de police pour la facture (px)</label>
-              <input
-                type="number"
-                value={config.invoice.fontSize}
-                onChange={(e) => setConfig({
-                  ...config,
-                  invoice: { ...config.invoice, fontSize: Number(e.target.value) }
-                })}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                min="8"
-                max="24"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Rapports */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <FileText className="w-5 h-5 text-slate-600 dark:text-slate-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Configuration des rapports</h2>
-          </div>
-          
-          <div>
-            <label className="text-sm text-slate-600 dark:text-slate-400">Taille de police par défaut pour les documents (px)</label>
-            <input
-              type="number"
-              value={config.report.defaultFontSize}
-              onChange={(e) => setConfig({
-                ...config,
-                report: { ...config.report, defaultFontSize: Number(e.target.value) }
-              })}
-              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-              min="8"
-              max="24"
-            />
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Cette taille s'appliquera à tous les rapports et documents
-            </p>
-          </div>
-        </div>
-
-        {/* Devises & Taux de change */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <DollarSign className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Devises & Taux de change</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <select
-              value={config.primaryCurrency}
-              onChange={(e) => setConfig({...config, primaryCurrency: e.target.value})}
-              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-            >
-              {config.currencies.filter(c => c.isActive).map(c => (
-                <option key={c.code} value={c.code}>{c.code}</option>
-              ))}
-            </select>
-
-            <div className="space-y-3 max-h-60 overflow-y-auto">
-              {config.currencies.map((currency, index) => (
-                <div key={currency.code} className="flex items-center gap-2 p-2 bg-slate-50 dark:bg-slate-700 rounded-xl">
-                  <button
-                    onClick={() => toggleCurrencyActive(index)}
-                    className="text-slate-500 dark:text-slate-400 hover:text-blue-600 transition-colors"
-                  >
-                    {currency.isActive ? <ToggleRight className="w-6 h-6 text-green-600" /> : <ToggleLeft className="w-6 h-6" />}
-                  </button>
-                  <span className="font-medium w-16 text-slate-700 dark:text-slate-300">{currency.code}</span>
-                  <input
-                    type="number"
-                    value={currency.exchangeRate}
-                    onChange={(e) => updateExchangeRate(index, Number(e.target.value))}
-                    className="flex-1 p-1.5 bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                    placeholder="Taux"
-                    disabled={currency.code === 'USD' || currency.code === 'CDF'}
-                    step="0.01"
-                  />
-                  {config.currencies.length > 2 && (
-                    <button
-                      onClick={() => removeCurrency(index)}
-                      className="text-red-500 hover:text-red-700 transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newCurrency.code}
-                onChange={(e) => setNewCurrency({...newCurrency, code: e.target.value.toUpperCase()})}
-                className="flex-1 p-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Code (ex: EUR)"
-                maxLength={3}
-              />
-              <input
-                type="text"
-                value={newCurrency.symbol}
-                onChange={(e) => setNewCurrency({...newCurrency, symbol: e.target.value})}
-                className="w-20 p-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Symb."
-              />
-              <input
-                type="number"
-                value={newCurrency.exchangeRate}
-                onChange={(e) => setNewCurrency({...newCurrency, exchangeRate: Number(e.target.value)})}
-                className="w-24 p-2 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="Taux"
-                step="0.01"
+      {/* Section Logo */}
+      <div className="bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+        <div className="flex items-center gap-4 flex-wrap">
+          {config.pharmacyInfo.logoUrl && (
+            <div className="relative">
+              <img 
+                src={config.pharmacyInfo.logoUrl} 
+                alt="Logo" 
+                className="w-20 h-20 object-contain rounded-lg border border-slate-200 dark:border-slate-700"
               />
               <button
-                onClick={addCurrency}
-                className="p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all"
-                disabled={!newCurrency.code || !newCurrency.symbol}
+                onClick={() => {
+                  setConfig({
+                    ...config,
+                    pharmacyInfo: { ...config.pharmacyInfo, logoUrl: undefined }
+                  });
+                  setLogoFile(null);
+                }}
+                className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600"
               >
-                <Plus className="w-5 h-5" />
+                <X className="w-3 h-3" />
               </button>
+              <Edit3 className="w-4 h-4 text-slate-400 absolute bottom-0 right-0" />
+            </div>
+          )}
+          <div className="flex-1">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <div className="px-4 py-2 bg-slate-100 dark:bg-slate-700 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                <Upload className="w-4 h-4 inline mr-2" />
+                {config.pharmacyInfo.logoUrl ? 'Changer le logo' : 'Télécharger un logo'}
+              </div>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleLogoChange}
+                className="hidden"
+              />
+            </label>
+            <p className="text-xs text-slate-500 mt-2">Format recommandé: PNG, JPEG (max 2MB)</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Section des paramètres simplifiée - à compléter selon vos besoins */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Section informations pharmacie */}
+        <div className="bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
+            <Database className="w-5 h-5 text-blue-600" />
+            Informations de la pharmacie
+          </h3>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm text-slate-500">Nom</label>
+              <p className="font-medium">{pharmacyData?.name || config.pharmacyInfo.name}</p>
+            </div>
+            <div>
+              <label className="text-sm text-slate-500">Adresse</label>
+              <p className="font-medium">{pharmacyData?.address || config.pharmacyInfo.address}</p>
+            </div>
+            <div>
+              <label className="text-sm text-slate-500">Téléphone</label>
+              <p className="font-medium">{pharmacyData?.phone || config.pharmacyInfo.phone}</p>
+            </div>
+            <div>
+              <label className="text-sm text-slate-500">Email</label>
+              <p className="font-medium">{pharmacyData?.email || config.pharmacyInfo.email}</p>
+            </div>
+            <div>
+              <label className="text-sm text-slate-500">N° Licence</label>
+              <p className="font-medium">{pharmacyData?.license_number || config.pharmacyInfo.licenseNumber}</p>
             </div>
           </div>
         </div>
 
-        {/* Fiscalité & Stock */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Percent className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Fiscalité & Stock</h2>
+        {/* Section TVA et taxes */}
+        <div className="bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-4">TVA et taxes</h3>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+              Taux de TVA (%)
+            </label>
+            <input
+              type="number"
+              value={config.taxRate}
+              onChange={(e) => setConfig({ ...config, taxRate: parseFloat(e.target.value) || 0 })}
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+              step="0.1"
+              min="0"
+              max="100"
+            />
           </div>
+        </div>
 
+        {/* Section stock et alertes */}
+        <div className="bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-4">Stock et alertes</h3>
           <div className="space-y-4">
             <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">Taux de TVA (%)</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                Seuil de stock bas
+              </label>
               <input
                 type="number"
-                value={config.taxRate}
-                onChange={(e) => setConfig({...config, taxRate: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                step="0.1"
+                value={config.lowStockThreshold}
+                onChange={(e) => setConfig({ ...config, lowStockThreshold: parseInt(e.target.value) || 0 })}
+                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
                 min="0"
-                max="100"
               />
             </div>
-
-            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Vente stock négatif</span>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                Jours d'alerte avant expiration
+              </label>
+              <input
+                type="number"
+                value={config.expiryWarningDays}
+                onChange={(e) => setConfig({ ...config, expiryWarningDays: parseInt(e.target.value) || 0 })}
+                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl"
+                min="0"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                Autoriser stock négatif
+              </label>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
                   className="sr-only peer"
                   checked={config.allowNegativeStock}
-                  onChange={(e) => setConfig({...config, allowNegativeStock: e.target.checked})}
+                  onChange={(e) => setConfig({ ...config, allowNegativeStock: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
-
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">Capital initial (USD)</label>
-              <input
-                type="number"
-                value={config.initialCapital}
-                onChange={(e) => setConfig({...config, initialCapital: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                placeholder="0.00"
-                step="0.01"
-                min="0"
-              />
-            </div>
           </div>
         </div>
 
-        {/* Configuration des prix */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <CreditCard className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Configuration des prix</h2>
-          </div>
-
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Calcul automatique</span>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  checked={config.automaticPricing.enabled}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    automaticPricing: { ...config.automaticPricing, enabled: e.target.checked }
-                  })}
-                />
-                <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-              </label>
-            </div>
-
-            {config.automaticPricing.enabled && (
-              <>
-                <select
-                  value={config.automaticPricing.method}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    automaticPricing: { ...config.automaticPricing, method: e.target.value as any }
-                  })}
-                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                >
-                  <option value="percentage">Pourcentage (%)</option>
-                  <option value="coefficient">Coefficient multiplicateur</option>
-                  <option value="margin">Marge bénéficiaire</option>
-                </select>
-
-                <input
-                  type="number"
-                  value={config.automaticPricing.value}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    automaticPricing: { ...config.automaticPricing, value: Number(e.target.value) }
-                  })}
-                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                  placeholder={
-                    config.automaticPricing.method === 'percentage' ? 'Pourcentage (%)' :
-                    config.automaticPricing.method === 'coefficient' ? 'Coefficient (ex: 1.3)' : 'Marge (%)'
-                  }
-                  step="0.01"
-                  min="0"
-                />
-              </>
-            )}
-
-            <div className="grid grid-cols-2 gap-4 pt-2">
-              <div>
-                <label className="text-sm text-slate-600 dark:text-slate-400">Marge par défaut (%)</label>
-                <input
-                  type="number"
-                  value={config.marginConfig.defaultMargin}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    marginConfig: { ...config.marginConfig, defaultMargin: Number(e.target.value) }
-                  })}
-                  className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                  step="0.1"
-                  min="0"
-                  max="100"
-                />
-              </div>
-              <div>
-                <label className="text-sm text-slate-600 dark:text-slate-400">Marge min/max (%)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    value={config.marginConfig.minMargin}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      marginConfig: { ...config.marginConfig, minMargin: Number(e.target.value) }
-                    })}
-                    className="w-1/2 p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                    placeholder="Min"
-                    step="0.1"
-                    min="0"
-                  />
-                  <input
-                    type="number"
-                    value={config.marginConfig.maxMargin}
-                    onChange={(e) => setConfig({
-                      ...config,
-                      marginConfig: { ...config.marginConfig, maxMargin: Number(e.target.value) }
-                    })}
-                    className="w-1/2 p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                    placeholder="Max"
-                    step="0.1"
-                    max="100"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Seuils d'alertes */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Bell className="w-5 h-5 text-red-600 dark:text-red-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Seuils d'alertes</h2>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">Stock bas (quantité)</label>
-              <input
-                type="number"
-                value={config.lowStockThreshold}
-                onChange={(e) => setConfig({...config, lowStockThreshold: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                min="0"
-              />
-            </div>
-            <div>
-              <label className="text-sm text-slate-600 dark:text-slate-400">Expiration (jours)</label>
-              <input
-                type="number"
-                value={config.expiryWarningDays}
-                onChange={(e) => setConfig({...config, expiryWarningDays: Number(e.target.value)})}
-                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-                min="0"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm text-slate-600 dark:text-slate-400">Délai de retour produit (jours)</label>
-            <input
-              type="number"
-              value={config.productReturnDays}
-              onChange={(e) => setConfig({...config, productReturnDays: Number(e.target.value)})}
-              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200"
-              min="0"
-              max="365"
-            />
-          </div>
-        </div>
-
-        {/* Heures de service */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Clock className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Heures de service</h2>
-          </div>
-
-          <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Activer les heures de service</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={config.workingHours.enabled}
-                onChange={(e) => setConfig({
-                  ...config,
-                  workingHours: { ...config.workingHours, enabled: e.target.checked }
-                })}
-              />
-              <div className="w-11 h-6 bg-slate-200 dark:bg-slate-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-            </label>
-          </div>
-
-          {config.workingHours.enabled && (
-            <>
-              <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded-lg">
-                <span className="text-xs text-blue-700 dark:text-blue-400">
-                  {showLocalTimes ? (
-                    <>Heures affichées dans votre fuseau ({browserTimezone})</>
-                  ) : (
-                    <>Heures stockées en {config.workingHours.timezone || 'Africa/Kinshasa'}</>
-                  )}
-                </span>
-                <button
-                  onClick={() => setShowLocalTimes(!showLocalTimes)}
-                  className="text-xs text-blue-600 dark:text-blue-400 underline ml-auto"
-                >
-                  {showLocalTimes ? 'Voir heures pharmacie' : 'Voir mes heures locales'}
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm text-slate-600 dark:text-slate-400">
-                    Heure début {showLocalTimes && <span className="text-xs text-blue-600">(locale)</span>}
-                  </label>
-                  <input
-                    type="time"
-                    value={showLocalTimes ? displayLocalTime(config.workingHours.startTime) : config.workingHours.startTime}
-                    onChange={(e) => {
-                      if (showLocalTimes) return;
-                      setConfig({
-                        ...config,
-                        workingHours: { ...config.workingHours, startTime: e.target.value }
-                      });
-                    }}
-                    className={`w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200 ${
-                      showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                    disabled={showLocalTimes}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm text-slate-600 dark:text-slate-400">
-                    Heure fin {showLocalTimes && <span className="text-xs text-blue-600">(locale)</span>}
-                  </label>
-                  <input
-                    type="time"
-                    value={showLocalTimes ? displayLocalTime(config.workingHours.endTime) : config.workingHours.endTime}
-                    onChange={(e) => {
-                      if (showLocalTimes) return;
-                      setConfig({
-                        ...config,
-                        workingHours: { ...config.workingHours, endTime: e.target.value }
-                      });
-                    }}
-                    className={`w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-slate-800 dark:text-slate-200 ${
-                      showLocalTimes ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                    disabled={showLocalTimes}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 p-2 bg-slate-100 dark:bg-slate-700 rounded-lg">
-                <span className="text-xs text-slate-600 dark:text-slate-400">Fuseau horaire:</span>
-                <select
-                  value={config.workingHours.timezone || 'Africa/Kinshasa'}
-                  onChange={(e) => setConfig({
-                    ...config,
-                    workingHours: { ...config.workingHours, timezone: e.target.value }
-                  })}
-                  className="flex-1 p-1 text-xs bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 rounded-lg text-slate-800 dark:text-slate-200"
-                  disabled={showLocalTimes}
-                >
-                  <option value="Africa/Kinshasa">Africa/Kinshasa (UTC+1)</option>
-                  <option value="Africa/Lubumbashi">Africa/Lubumbashi (UTC+2)</option>
-                  <option value="Africa/Johannesburg">Africa/Johannesburg (UTC+2)</option>
-                  <option value="Africa/Lagos">Africa/Lagos (UTC+1)</option>
-                  <option value="Europe/Paris">Europe/Paris (UTC+1/UTC+2)</option>
-                  <option value="UTC">UTC</option>
-                </select>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Configuration des branches/succursales */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4 lg:col-span-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Building2 className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-              <h2 className="font-bold text-slate-700 dark:text-slate-300">Succursales</h2>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-slate-500 dark:text-slate-400">
-                {config.branchConfig.currentBranches} / {config.branchConfig.maxBranches} succursales
-              </span>
-              <div className="w-24 h-2 bg-slate-200 dark:bg-slate-600 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-orange-600 rounded-full transition-all"
-                  style={{ width: `${(config.branchConfig.currentBranches / config.branchConfig.maxBranches) * 100}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {config.branchConfig.branches && config.branchConfig.branches.length > 0 ? (
-            <div className="space-y-3">
-              {config.branchConfig.branches.map((branch) => (
-                <div 
-                  key={branch.id} 
-                  className={`p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border transition-all ${
-                    branch.is_main_branch 
-                      ? 'border-orange-300 dark:border-orange-700 bg-orange-50/50 dark:bg-orange-900/10' 
-                      : 'border-slate-200 dark:border-slate-600 hover:shadow-md'
-                  }`}
-                >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200">{branch.name}</p>
-                        {branch.is_main_branch && (
-                          <span className="text-xs px-2 py-0.5 bg-orange-100 dark:bg-orange-900/50 text-orange-700 dark:text-orange-400 rounded-full">
-                            Principale
-                          </span>
-                        )}
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          branch.is_active 
-                            ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
-                            : 'bg-slate-100 dark:bg-slate-600 text-slate-500 dark:text-slate-400'
-                        }`}>
-                          {branch.is_active ? 'Actif' : 'Inactif'}
-                        </span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          branch.subscription_status === 'active' ? 'bg-green-100 text-green-700' :
-                          branch.subscription_status === 'trial' ? 'bg-yellow-100 text-yellow-700' :
-                          branch.subscription_status === 'expired' ? 'bg-red-100 text-red-700' :
-                          'bg-slate-100 text-slate-700'
-                        }`}>
-                          {branch.subscription_status === 'active' ? 'Abonné' :
-                           branch.subscription_status === 'trial' ? 'Essai' :
-                           branch.subscription_status === 'expired' ? 'Expiré' : 'Suspendu'}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">{branch.address}</p>
-                      <div className="flex flex-wrap gap-4 mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        {branch.phone && <span>📞 {branch.phone}</span>}
-                        {branch.email && <span>✉️ {branch.email}</span>}
-                        {branch.city && <span>📍 {branch.city}, {branch.country}</span>}
-                        {branch.manager_name && <span>👤 {branch.manager_name}</span>}
-                      </div>
-                    </div>
-                    <div className="flex gap-1 ml-4">
-                      <button
-                        onClick={() => openBranchModal(branch)}
-                        className="p-1.5 text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
-                        title="Modifier"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => openBranchConfigPanel(branch)}
-                        className="p-1.5 text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg transition-colors"
-                        title="Configuration avancée"
-                      >
-                        <Settings2 className="w-4 h-4" />
-                      </button>
-                      {!branch.is_main_branch && (
-                        <button
-                          onClick={() => handleSetMainBranch(branch.id)}
-                          className="p-1.5 text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors"
-                          title="Définir comme principale"
-                        >
-                          <Check className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleDeleteBranch(branch.id)}
-                        className="p-1.5 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                        title="Désactiver"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+        {/* Section succursales */}
+        <div className="bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700 p-6">
+          <h3 className="font-semibold text-slate-800 dark:text-slate-200 mb-4 flex items-center justify-between">
+            <span>Succursales</span>
+            <button
+              onClick={() => {
+                setEditingBranch(null);
+                setBranchFormData({
+                  name: '',
+                  code: '',
+                  address: '',
+                  city: '',
+                  country: 'CD',
+                  phone: '',
+                  email: '',
+                  manager_id: '',
+                });
+                setShowBranchModal(true);
+              }}
+              className="text-sm bg-blue-600 text-white px-3 py-1 rounded-lg hover:bg-blue-700"
+            >
+              + Ajouter
+            </button>
+          </h3>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {config.branchConfig.branches.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center py-4">Aucune succursale</p>
+            ) : (
+              config.branchConfig.branches.map(branch => (
+                <div key={branch.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{branch.name}</p>
+                    <p className="text-xs text-slate-500">{branch.address}</p>
+                    {branch.is_main_branch && (
+                      <span className="text-xs text-blue-600">Principale</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => openBranchConfigPanelHandler(branch)}
+                      className="text-blue-600 hover:text-blue-800"
+                      title="Configuration avancée"
+                    >
+                      <Settings2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-              <Building2 className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>Aucune succursale configurée</p>
-              <p className="text-sm">La pharmacie principale est considérée comme la succursale par défaut</p>
-            </div>
-          )}
-
-          {config.branchConfig.currentBranches < config.branchConfig.maxBranches && (
-            <button
-              onClick={() => openBranchModal()}
-              className="w-full p-3 border-2 border-dashed border-orange-200 dark:border-orange-800 rounded-xl text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-all flex items-center justify-center gap-2"
-            >
-              <Plus className="w-5 h-5" />
-              <span>Ajouter une succursale</span>
-            </button>
-          )}
-          
-          <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-            {config.branchConfig.currentBranches >= config.branchConfig.maxBranches 
-              ? `Limite de ${config.branchConfig.maxBranches} succursale(s) atteinte pour votre plan`
-              : `Vous pouvez ajouter jusqu'à ${config.branchConfig.maxBranches - config.branchConfig.currentBranches} succursale(s) supplémentaire(s)`}
-          </p>
-        </div>
-
-        {/* Thème */}
-        <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-700 shadow-sm space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Palette className="w-5 h-5 text-pink-600 dark:text-pink-400" />
-            <h2 className="font-bold text-slate-700 dark:text-slate-300">Thème</h2>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              onClick={() => setConfig({...config, theme: 'light'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.theme === 'light' 
-                  ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 ring-2 ring-blue-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Sun className="w-5 h-5" />
-              <span className="text-xs">Clair</span>
-            </button>
-            <button
-              onClick={() => setConfig({...config, theme: 'dark'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.theme === 'dark' 
-                  ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 ring-2 ring-blue-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Moon className="w-5 h-5" />
-              <span className="text-xs">Sombre</span>
-            </button>
-            <button
-              onClick={() => setConfig({...config, theme: 'system'})}
-              className={`p-3 rounded-xl flex flex-col items-center gap-2 transition-all ${
-                config.theme === 'system' 
-                  ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 ring-2 ring-blue-500' 
-                  : 'bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <Monitor className="w-5 h-5" />
-              <span className="text-xs">Système</span>
-            </button>
+              ))
+            )}
           </div>
         </div>
       </div>

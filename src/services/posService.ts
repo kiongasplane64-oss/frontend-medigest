@@ -958,6 +958,7 @@ export class PosService {
       items: cartSnapshot.map(item => ({
         id: item.id,
         name: item.name,
+        product_name: item.name,
         price: item.unitPrice,
         quantity: item.quantity,
         code: item.code,
