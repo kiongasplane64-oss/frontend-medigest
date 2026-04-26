@@ -30,7 +30,7 @@ import TransferList from '@/modules/inventory/views/TransferList';
 import ProfitAnalysis from '@/modules/benefice/views/benefice';
 import FinanceAnalysis from '@/modules/finance/views/FinanceDashboard';
 import ExpensesManager from '@/modules/finance/views/Expenses';
-import ReturnsManager from '@/modules/finance/views/ReturnManager';
+import ReturnPage from '@/modules/finance/views/returnPage';
 import SubscriptionPage from '@/pages/SubscriptionPage';
 import UsersPage from '@/pages/UsersPage';
 import Suppliers from '@/modules/inventory/views/Suppliers';
@@ -219,7 +219,7 @@ export default function AppRoutes() {
           <Route path="/stock" element={<InventoryListView />} />
           <Route path="/inventaire" element={<InventoryWrapper />} />
           <Route path="/transfers" element={<TransferList />} />
-          <Route path="/returns" element={<ReturnsManager />} />
+          <Route path="/returns" element={<ReturnPage />} />
           
           {/* Monitoring */}
           <Route path="/monitoring" element={<MonitoringWrapper />} />

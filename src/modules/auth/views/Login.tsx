@@ -89,6 +89,13 @@ export default function Login() {
   }, [isAuthenticated, user]);
 
   /**
+   * Vérifie si l'utilisateur est un vendeur
+   */
+  const isSeller = (role: string): boolean => {
+    return role === 'seller' || role === 'vendeur';
+  };
+
+  /**
    * Vérifie si la pharmacie est en service avant de rediriger
    */
   const checkServiceStatusAndRedirect = async (pharmacyId: string, userData: any, token: string) => {
@@ -237,8 +244,30 @@ export default function Login() {
       // Normaliser l'utilisateur
       const normalizedUser = normalizeUser(userData);
       
+      // 🔥 Vérifier si c'est un vendeur
+      if (isSeller(normalizedUser.role)) {
+        // Les vendeurs n'ont pas besoin de vérifier la pharmacie ou l'abonnement
+        console.log('✅ Vendeur - redirection vers /vendor-pos');
+        setAuth(normalizedUser, access_token);
+        toast.success('Connexion réussie !');
+        setTimeout(() => {
+          navigate('/vendor-pos', { replace: true });
+        }, 100);
+        return;
+      }
+      
+      // 🔥 Vérifier si c'est un super admin
+      if (normalizedUser.role === 'super_admin') {
+        console.log('✅ Super Admin - redirection vers /super-admin');
+        setAuth(normalizedUser, access_token);
+        toast.success('Connexion réussie !');
+        setTimeout(() => {
+          navigate('/super-admin', { replace: true });
+        }, 100);
+        return;
+      }
+      
       // Vérifier si l'utilisateur a une pharmacie associée
-      // Utiliser pharmacy_id ou tenant_id selon ce qui est disponible
       const pharmacyId = (normalizedUser as any).pharmacy_id || normalizedUser.tenant_id;
       
       if (!pharmacyId) {
@@ -252,7 +281,7 @@ export default function Login() {
         return;
       }
       
-      // ✅ Vérifier le statut de service AVANT de rediriger
+      // ✅ Pour les admins, vérifier le statut de service AVANT de rediriger
       await checkServiceStatusAndRedirect(
         pharmacyId,
         normalizedUser,

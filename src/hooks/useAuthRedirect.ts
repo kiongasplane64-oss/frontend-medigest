@@ -42,6 +42,36 @@ export const useAuthRedirect = () => {
   };
 
   /**
+   * Vérifie si l'utilisateur est un vendeur
+   */
+  const isSeller = (): boolean => {
+    if (!user) return false;
+    return user.role === 'seller' || user.role === 'vendeur';
+  };
+
+  /**
+   * Vérifie si l'utilisateur est un admin (propriétaire)
+   */
+  const isAdminUser = (): boolean => {
+    if (!user) return false;
+    return user.role === 'admin' || user.role === 'owner' || user.role === 'pharmacy_admin';
+  };
+
+  /**
+   * Vérifie si l'utilisateur a besoin d'un abonnement
+   * Seuls les propriétaires (admin) ont besoin d'un abonnement actif
+   */
+  const needsSubscription = (): boolean => {
+    if (!user) return false;
+    // Les vendeurs n'ont pas besoin d'abonnement
+    if (isSeller()) return false;
+    // Les super admins n'ont pas besoin d'abonnement
+    if (user.role === 'super_admin') return false;
+    // Les admins (propriétaires) ont besoin d'un abonnement
+    return true;
+  };
+
+  /**
    * Vérifie si la pharmacie est en service et stocke le résultat
    */
   const checkPharmacyService = async (pharmacyId: string): Promise<boolean> => {
@@ -63,12 +93,19 @@ export const useAuthRedirect = () => {
    * Détermine la destination logique selon le profil et le statut du service
    */
   const getTargetRoute = async (): Promise<string> => {
+    // 🔥 Les vendeurs ont leur propre route, pas de vérifications supplémentaires
+    if (isSeller()) {
+      return '/vendor-pos';
+    }
+    
     if (isSuperAdminUser()) {
       return '/super-admin';
     }
     
     const pharmacyId = user?.pharmacy_id || user?.tenant_id;
-    if (pharmacyId && !checkingService) {
+    
+    // Vérification du service uniquement pour les admins
+    if (pharmacyId && !checkingService && isAdminUser()) {
       setCheckingService(true);
       try {
         const inService = await checkPharmacyService(pharmacyId);
@@ -83,7 +120,8 @@ export const useAuthRedirect = () => {
       }
     }
     
-    if (!user?.has_subscription) {
+    // Vérification de l'abonnement uniquement pour les admins
+    if (needsSubscription() && !user?.has_subscription) {
       return '/subscription';
     }
     
@@ -95,6 +133,7 @@ export const useAuthRedirect = () => {
    */
   const hasAccessToRoute = (path: string): boolean => {
     const isSuper = isSuperAdminUser();
+    const isSellerUser = isSeller();
     const absolutePublic = ['/login', '/superadmin-welcome', '/verify-otp', '/out-of-service'];
     
     if (absolutePublic.includes(path)) return true;
@@ -107,11 +146,20 @@ export const useAuthRedirect = () => {
       return false;
     }
 
+    // 🔥 Les vendeurs ne peuvent accéder qu'à /vendor-pos et ses sous-routes
+    if (isSellerUser) {
+      return path.startsWith('/vendor-pos');
+    }
+
+    if (path === '/subscription' && !needsSubscription()) {
+      return false;
+    }
+
     if (path === '/subscription' || path === '/out-of-service') {
       return true;
     }
 
-    return user?.has_subscription === true;
+    return user?.has_subscription === true || !needsSubscription();
   };
 
   useEffect(() => {
@@ -126,10 +174,10 @@ export const useAuthRedirect = () => {
       // Cas spécifique : déjà sur la page hors-service
       if (currentPath === '/out-of-service') {
         const pharmacyId = user?.pharmacy_id || user?.tenant_id;
-        if (pharmacyId) {
+        if (pharmacyId && isAdminUser()) {
           const inService = await checkPharmacyService(pharmacyId);
           if (inService) {
-            const target = user?.has_subscription ? '/dashboard' : '/subscription';
+            const target = (needsSubscription() && !user?.has_subscription) ? '/subscription' : '/dashboard';
             navigate(target, { replace: true });
           }
         }
@@ -141,6 +189,7 @@ export const useAuthRedirect = () => {
       // Éviter redirection si déjà sur la bonne route
       if (currentPath === targetRoute) return;
       if (isSuperAdminUser() && currentPath.startsWith('/super-admin')) return;
+      if (isSeller() && currentPath.startsWith('/vendor-pos')) return;
 
       // Protection boucles
       const attempts = redirectCount.current.get(currentPath) || 0;
