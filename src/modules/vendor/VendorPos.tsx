@@ -27,11 +27,12 @@ import {
 import { observer } from 'mobx-react-lite';
 import { useOnline } from '@/hooks/useOnline';
 import { posService, CartItem, Product, PaymentMethod, CurrencyConfig } from '@/services/posService';
-import { useSaleStore } from '@/store/saleStore';
 import { useToast } from '@/hooks/useToast';
 import { Toaster } from '@/components/ui/Toaster';
 import FacturePrinter from '../sales/views/FacturePrinter';
+import { useSaleStore } from '@/store/saleStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import api from '@/api/client';
 
 // Types pour les statuts de produit
 type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
@@ -139,20 +140,17 @@ const SearchAutocomplete = memo(({
   const isSelectingRef = useRef(false);
   const searchAbortRef = useRef<number | null>(null);
 
-  // Filtrer les suggestions par ordre alphabétique
   const filteredSuggestions = useMemo(() => {
     if (!searchValue.trim()) return [];
     
     const term = searchValue.toLowerCase().trim();
     
-    // Filtrer les produits qui correspondent
     const matched = products.filter(p => 
       p.name.toLowerCase().includes(term) ||
       p.code?.toLowerCase().includes(term) ||
       p.barcode?.toLowerCase().includes(term)
     );
     
-    // Trier par ordre alphabétique sur le nom
     const sorted = [...matched].sort((a, b) => {
       const aStartsWith = a.name.toLowerCase().startsWith(term);
       const bStartsWith = b.name.toLowerCase().startsWith(term);
@@ -166,7 +164,6 @@ const SearchAutocomplete = memo(({
     return sorted.slice(0, 15);
   }, [products, searchValue]);
 
-  // Gérer l'affichage des suggestions avec debounce
   useEffect(() => {
     if (searchAbortRef.current) {
       clearTimeout(searchAbortRef.current);
@@ -184,7 +181,6 @@ const SearchAutocomplete = memo(({
     };
   }, [filteredSuggestions]);
 
-  // Gérer le clic en dehors
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (suggestionsRef.current && !suggestionsRef.current.contains(event.target as Node)) {
@@ -197,7 +193,6 @@ const SearchAutocomplete = memo(({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Gérer les touches clavier
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!showSuggestions || filteredSuggestions.length === 0) return;
 
@@ -583,7 +578,7 @@ CartModal.displayName = 'CartModal';
 const VendorPos = observer(() => {
   const isOnline = useOnline();
   const { toast } = useToast();
-  const { user } = useAuthStore(); // Récupérer l'utilisateur connecté
+  const { user } = useAuthStore();
   
   const { getPendingCount, syncPendingSales, resetFailedSales, localSales, syncInProgress: storeSyncInProgress } = useSaleStore();
 
@@ -598,6 +593,7 @@ const VendorPos = observer(() => {
   const [productsSearch, setProductsSearch] = useState('');
   const [currentSaleForInvoice, setCurrentSaleForInvoice] = useState<any>(null);
   const [showInvoice, setShowInvoice] = useState(false);
+  const [customerName, setCustomerName] = useState('Passager');
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -615,19 +611,14 @@ const VendorPos = observer(() => {
     [localSales]
   );
 
-  // Ajouter un effet pour logger les infos de l'utilisateur et de la branche
   useEffect(() => {
     console.log('=== VendorPos - Informations utilisateur ===');
     console.log('User from auth:', user);
     console.log('User pharmacy_id:', user?.pharmacy_id);
-    console.log('User branche_id:', user?.branch_id);
-    console.log('User current_pharmacy:', user?.current_pharmacy);
     console.log('CashierInfo:', cashierInfo);
-    console.log('CashierInfo pharmacy_id:', cashierInfo.pharmacy_id);
     console.log('===========================================');
   }, [user, cashierInfo]);
 
-  // Déterminer le mode de devise
   const currencyMode = useMemo(() => {
     const currencies = config.currencies;
     if (currencies.length === 0) return 'both';
@@ -645,7 +636,6 @@ const VendorPos = observer(() => {
     return currency || { code: 'CDF', symbol: 'FC', exchangeRate: 1, isActive: true };
   }, [config.currencies, config.primaryCurrency]);
 
-  // Calculs du panier
   const subtotalCDF = useMemo(() => {
     return cart.reduce((acc, item) => {
       const itemPrice = (item.unitPrice || 0) * (item.quantity || 0);
@@ -678,7 +668,6 @@ const VendorPos = observer(() => {
     return cart.reduce((acc, item) => acc + (item.quantity || 0), 0);
   }, [cart]);
 
-  // Produits filtrés pour la modal produits - TRI ALPHABÉTIQUE
   const filteredProductsForModal = useMemo(() => {
     let filtered = [...products];
     
@@ -691,7 +680,6 @@ const VendorPos = observer(() => {
       );
     }
     
-    // Tri alphabétique sur le nom
     return filtered.sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   }, [products, productsSearch]);
 
@@ -702,7 +690,6 @@ const VendorPos = observer(() => {
     productsPage * ITEMS_PER_PAGE
   );
 
-  // Chargement des seuils
   useEffect(() => {
     const loadThresholds = async () => {
       try {
@@ -719,25 +706,19 @@ const VendorPos = observer(() => {
     loadThresholds();
   }, [cashierInfo.pharmacy_id]);
 
-  // Chargement initial - C'EST ICI QUE LES PRODUITS SONT RÉCUPÉRÉS
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
         console.log('=== Chargement initial VendorPos ===');
-        console.log('Pharmacy ID avant chargement:', cashierInfo.pharmacy_id);
-        console.log('User pharmacy_id:', user?.pharmacy_id);
         
-        // Si le pharmacy_id n'est pas défini dans cashierInfo, le définir à partir du user
         if (!cashierInfo.pharmacy_id && user?.pharmacy_id) {
           console.log('Définition du pharmacy_id dans cashierInfo:', user.pharmacy_id);
           posService.setCashierInfo({ pharmacy_id: user.pharmacy_id });
         }
         
-        // posService.loadInitialData() appelle loadProducts() qui récupère les produits via inventoryService
         await posService.loadInitialData();
         console.log('Produits chargés:', posService.products.length);
-        console.log('Premier produit:', posService.products[0]);
         
         if (isOnline) {
           await syncPendingSales();
@@ -756,7 +737,6 @@ const VendorPos = observer(() => {
     loadData();
   }, [toast, isOnline, syncPendingSales, user]);
 
-  // Synchronisation périodique
   useEffect(() => {
     if (isOnline && pendingCount > 0 && !storeSyncInProgress) {
       syncPendingSales();
@@ -773,7 +753,6 @@ const VendorPos = observer(() => {
     return () => clearInterval(interval);
   }, [isOnline, pendingCount, syncPendingSales, storeSyncInProgress]);
 
-  // Raccourcis clavier
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === 'k') {
@@ -823,7 +802,7 @@ const VendorPos = observer(() => {
     posService.removeFromCart(index);
   }, []);
 
-  // Validation de la vente avec création de la facture
+  // VENTE DIRECTE AU SERVEUR - PAS DE STOCKAGE LOCAL
   const handleValidateSale = useCallback(async () => {
     if (cart.length === 0) {
       toast({
@@ -843,77 +822,117 @@ const VendorPos = observer(() => {
       return;
     }
 
+    if (!isOnline) {
+      toast({
+        title: "Pas de connexion",
+        description: "Vous devez être connecté à internet pour effectuer une vente",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
+    if (!pharmacyId) {
+      toast({
+        title: "Erreur",
+        description: "Pharmacie non identifiée",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsProcessingSale(true);
     setShowCartModal(false);
     
-    // Créer un objet sale pour la facture
-    const timestamp = Date.now();
-    const tempId = `local_${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    const saleForInvoice = {
-      id: tempId,
-      receiptNumber: `TEMP-${timestamp}`,
-      items: cart.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: item.unitPrice,
-        quantity: item.quantity,
-        code: item.code,
-        discount_percent: item.discount_percent || 0,
-        discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
-      })),
-      subtotal: subtotalCDF,
-      total: totalCDF,
-      discount_percent: globalDiscount,
-      discount_amount: discountAmountCDF,
-      paymentMethod: paymentMethod,
-      timestamp: timestamp,
-      cashierName: cashierInfo.name,
-      cashierId: cashierInfo.id,
-      posName: cashierInfo.posName,
-      branchId: cashierInfo.pharmacy_id,
-      sessionNumber: cashierInfo.sessionNumber,
-      customerName: posService.customerName,
-    };
-    
-    setCurrentSaleForInvoice(saleForInvoice);
-    
     try {
-      // Appliquer la remise globale si nécessaire
-      if (globalDiscount > 0) {
-        const newCart = cart.map(item => ({
-          ...item,
-          discount_percent: Math.min(100, (item.discount_percent || 0) + globalDiscount)
-        }));
-        posService.setCart(newCart);
-      }
+      // Préparer les données de la vente
+      const saleData = {
+        items: cart.map(item => ({
+          product_id: item.id,
+          quantity: item.quantity,
+          discount_percent: item.discount_percent || 0,
+        })),
+        payment_method: paymentMethod,
+        customer_name: customerName,
+        pharmacy_id: pharmacyId,
+        global_discount_percent: globalDiscount > 0 ? globalDiscount : undefined,
+      };
+
+      console.log('📤 Envoi de la vente au serveur:', saleData);
+
+      // Appel API direct - réponse rapide (1-3 secondes)
+      const response = await api.post('/sales', saleData);
       
-      // Créer la vente via posService (qui utilise saleStore)
-      await posService.validateSale();
+      console.log('✅ Vente enregistrée sur le serveur:', response.data);
+
+      const saleResponse = response.data.sale || response.data;
+      const receiptNumber = saleResponse?.receipt_number || `VENTE-${Date.now()}`;
+
+      // Créer l'objet facture pour l'affichage
+      const saleForInvoice = {
+        id: saleResponse?.id || `sale_${Date.now()}`,
+        receiptNumber: receiptNumber,
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.unitPrice,
+          quantity: item.quantity,
+          code: item.code,
+          discount_percent: item.discount_percent || 0,
+          discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
+        })),
+        subtotal: subtotalCDF,
+        total: totalCDF,
+        discount_percent: globalDiscount,
+        discount_amount: discountAmountCDF,
+        paymentMethod: paymentMethod,
+        timestamp: Date.now(),
+        cashierName: cashierInfo.name,
+        cashierId: cashierInfo.id,
+        posName: cashierInfo.posName,
+        branchId: pharmacyId,
+        sessionNumber: cashierInfo.sessionNumber,
+        customerName: customerName,
+      };
       
+      setCurrentSaleForInvoice(saleForInvoice);
+      
+      // Vider le panier
+      posService.setCart([]);
       setGlobalDiscount(0);
       
       toast({
         title: "Succès",
-        description: "Vente enregistrée avec succès",
+        description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`,
         variant: "success",
       });
       
       // Afficher la facture
       setShowInvoice(true);
       
-    } catch (error) {
-      console.error('Erreur validation:', error);
+    } catch (error: any) {
+      console.error('❌ Erreur lors de la validation de la vente:', error);
+      
+      let errorMessage = "La validation de la vente a échoué";
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Erreur",
-        description: "La validation de la vente a échoué",
+        description: errorMessage,
         variant: "destructive",
       });
+      
       setCurrentSaleForInvoice(null);
     } finally {
       setIsProcessingSale(false);
     }
-  }, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF]);
+  }, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, customerName, isOnline, user]);
 
   const handleResetFailedSales = useCallback(() => {
     resetFailedSales();
@@ -961,7 +980,6 @@ const VendorPos = observer(() => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <Toaster />
 
-      {/* Bannières de synchronisation */}
       {pendingCount > 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           {storeSyncInProgress ? (
@@ -992,11 +1010,10 @@ const VendorPos = observer(() => {
       {!isOnline && pendingCount === 0 && failedSales.length === 0 && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           <WifiOff size={16} />
-          Mode hors-ligne - Les ventes seront synchronisées plus tard
+          Mode hors-ligne - Connexion requise pour les ventes
         </div>
       )}
 
-      {/* Header */}
       <header className="border-b border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -1028,9 +1045,7 @@ const VendorPos = observer(() => {
         </div>
       </header>
 
-      {/* Contenu principal */}
       <main className="p-4">
-        {/* Barre de recherche principale */}
         <div className="relative mb-4">
           <Search className="absolute left-4 top-3.5 text-slate-400" size={20} />
           <input
@@ -1055,7 +1070,6 @@ const VendorPos = observer(() => {
           />
         </div>
 
-        {/* Indicateur de mode devise */}
         <div className="mb-4 flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-xs dark:bg-amber-900/20">
           <div className="flex items-center gap-2">
             <DollarSign size={14} className="text-amber-600" />
@@ -1072,12 +1086,19 @@ const VendorPos = observer(() => {
           )}
         </div>
 
-        {/* Raccourci clavier */}
-        <div className="mb-4 rounded-xl bg-slate-100 px-3 py-2 text-center text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-          ⌘/Ctrl + K pour rechercher
+        <div className="mb-4 flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+          <span>⌘/Ctrl + K pour rechercher</span>
+          <div className="flex-1" />
+          <span>Client:</span>
+          <input
+            type="text"
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value || 'Passager')}
+            className="rounded-lg border border-slate-200 px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-700"
+            placeholder="Nom client"
+          />
         </div>
 
-        {/* Boutons d'action */}
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setShowProductsModal(true)}
@@ -1101,7 +1122,6 @@ const VendorPos = observer(() => {
           </button>
         </div>
 
-        {/* Résumé rapide du panier si non vide */}
         {cart.length > 0 && (
           <div className="mt-4 rounded-2xl bg-white p-4 shadow-sm dark:bg-slate-800">
             <div className="flex items-center justify-between">
@@ -1131,7 +1151,6 @@ const VendorPos = observer(() => {
         )}
       </main>
 
-      {/* Modal Panier */}
       <CartModal
         isOpen={showCartModal}
         onClose={() => setShowCartModal(false)}
@@ -1157,7 +1176,6 @@ const VendorPos = observer(() => {
         totalItems={totalItems}
       />
 
-      {/* Modal Produits */}
       {showProductsModal && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center">
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-t-3xl bg-white shadow-2xl dark:bg-slate-800 sm:rounded-3xl">
@@ -1253,7 +1271,6 @@ const VendorPos = observer(() => {
                 </div>
               )}
 
-              {/* Pagination */}
               {totalPages > 1 && (
                 <div className="mt-4 flex items-center justify-center gap-2">
                   <button
@@ -1280,15 +1297,12 @@ const VendorPos = observer(() => {
         </div>
       )}
 
-      {/* Modal Facture avec FacturePrinter */}
       {showInvoice && currentSaleForInvoice && (
         <FacturePrinter
           sale={currentSaleForInvoice}
           pharmacyId={cashierInfo.pharmacy_id}
           onClose={handleCloseInvoice}
-          onPrint={() => {
-            // Optionnel: actions supplémentaires après impression
-          }}
+          onPrint={() => {}}
         />
       )}
     </div>
