@@ -153,6 +153,15 @@ export default function SuperAdminWelcome() {
       // Normaliser l'utilisateur avec la fonction existante
       const normalizedUser = normalizeUser(userForStore);
       
+      // 🔧 CORRECTION: Convertir normalizedUser pour qu'il corresponde à UserInput
+      // en transformant branch_id de null à undefined
+      const userForSetAuth = {
+        ...normalizedUser,
+        branch_id: normalizedUser.branch_id === null ? undefined : normalizedUser.branch_id,
+        pharmacy_id: normalizedUser.pharmacy_id === null ? undefined : normalizedUser.pharmacy_id,
+        tenant_id: normalizedUser.tenant_id === null ? undefined : normalizedUser.tenant_id,
+      };
+      
       console.log('💾 Sauvegarde du token (100 ans) et de l\'utilisateur...');
       
       // Sauvegarde explicite dans localStorage
@@ -172,8 +181,8 @@ export default function SuperAdminWelcome() {
         tokenValidYears: (data.expires_in / (365 * 24 * 60 * 60)).toFixed(0)
       });
       
-      // Mettre à jour le store
-      setAuth(normalizedUser, data.access_token, data.refresh_token || null);
+      // Mettre à jour le store avec l'utilisateur converti
+      setAuth(userForSetAuth, data.access_token, data.refresh_token || null);
       
       toast.success(`Bienvenue, Super Admin ! Token valable ${(data.expires_in / (365 * 24 * 60 * 60)).toFixed(0)} ans.`);
       
