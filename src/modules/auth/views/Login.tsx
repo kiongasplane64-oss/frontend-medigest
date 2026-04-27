@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAuthRedirect } from '@/hooks/useAuthRedirect';
-import api from '@/api/client';
+import api, { setAuthToken } from '@/api/client';
 import { normalizeUser, LoginResponse } from '@/types/auth';
 import {
   Lock,
@@ -75,7 +75,7 @@ export default function Login() {
   // État pour le modal d'alerte hors service
   const [showOutOfServiceModal, setShowOutOfServiceModal] = useState(false);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
-  const [pendingUserData, setPendingUserData] = useState<{ user: any; token: string } | null>(null);
+  const [pendingUserData, setPendingUserData] = useState<{ user: any; token: string; refreshToken?: string | null } | null>(null);
 
   // Vérifier si déjà authentifié au chargement
   useEffect(() => {
@@ -83,7 +83,6 @@ export default function Login() {
     const storedUser = localStorage.getItem('user');
     
     if (token && storedUser && isAuthenticated && user) {
-      // La redirection est gérée par useAuthRedirect
       console.log('✅ Utilisateur déjà authentifié');
     }
   }, [isAuthenticated, user]);
@@ -96,9 +95,28 @@ export default function Login() {
   };
 
   /**
+   * Stocke l'authentification et initialise le token
+   */
+  const handleSetAuth = (userData: any, token: string, refreshToken?: string | null) => {
+    // 1. Stocker dans le store Zustand
+    setAuth(userData, token, refreshToken);
+    
+    // 2. Forcer le token dans les headers axios
+    setAuthToken(token, refreshToken);
+    
+    // 3. Stocker dans localStorage (déjà fait par setAuth, mais on s'assure)
+    localStorage.setItem('access_token', token);
+    if (refreshToken) {
+      localStorage.setItem('refresh_token', refreshToken);
+    }
+    
+    console.log('🔐 Authentification stockée, token initialisé');
+  };
+
+  /**
    * Vérifie si la pharmacie est en service avant de rediriger
    */
-  const checkServiceStatusAndRedirect = async (pharmacyId: string, userData: any, token: string) => {
+  const checkServiceStatusAndRedirect = async (pharmacyId: string, userData: any, token: string, refreshToken?: string | null) => {
     try {
       console.log('🔍 Vérification du statut de service pour:', pharmacyId);
       
@@ -108,26 +126,35 @@ export default function Login() {
       setServiceStatus(status);
       
       if (status.in_service) {
-        // ✅ En service - redirection normale
         console.log('✅ Pharmacie en service, redirection vers /dashboard');
         toast.success('Connexion réussie !');
         
-        // Stocker l'authentification
-        setAuth(userData, token);
+        handleSetAuth(userData, token, refreshToken);
         
-        // Redirection avec un léger délai
         setTimeout(() => {
           navigate('/dashboard', { replace: true });
         }, 100);
       } else {
-        // ❌ Hors service - afficher le modal d'alerte
         console.log('❌ Pharmacie hors service');
-        setPendingUserData({ user: userData, token });
+        setPendingUserData({ user: userData, token, refreshToken });
         setShowOutOfServiceModal(true);
       }
       
     } catch (err: any) {
       console.error('Erreur lors de la vérification du service:', err);
+      
+      // Si la pharmacie n'existe pas (404) ou erreur, on redirige quand même
+      const isPharmacyNotFound = err.response?.status === 404;
+      
+      if (isPharmacyNotFound) {
+        console.warn('⚠️ Pharmacie non trouvée - redirection directe');
+        toast.success('Connexion réussie !');
+        handleSetAuth(userData, token, refreshToken);
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 100);
+        return;
+      }
       
       // En cas d'erreur réseau, on permet l'accès par sécurité
       const isNetworkError = err.code === 'ERR_NETWORK' || 
@@ -137,13 +164,13 @@ export default function Login() {
       if (isNetworkError) {
         console.warn('⚠️ Erreur réseau - accès autorisé par sécurité');
         toast.success('Connexion réussie !');
-        setAuth(userData, token);
+        handleSetAuth(userData, token, refreshToken);
         setTimeout(() => {
           navigate('/dashboard', { replace: true });
         }, 100);
       } else {
         toast.error('Impossible de vérifier le statut du service');
-        setAuth(userData, token);
+        handleSetAuth(userData, token, refreshToken);
         setTimeout(() => {
           navigate('/dashboard', { replace: true });
         }, 100);
@@ -219,6 +246,9 @@ export default function Login() {
     }
   };
 
+  /**
+   * FONCTION PRINCIPALE DE CONNEXION - CORRIGÉE
+   */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -233,7 +263,8 @@ export default function Login() {
         password,
       });
 
-      const { user: userData, access_token } = response.data;
+      const { user: userData, access_token, refresh_token } = response.data;
+      const refreshToken = refresh_token || null;
 
       if (!userData || !access_token) {
         throw new Error('Réponse invalide du serveur');
@@ -246,9 +277,8 @@ export default function Login() {
       
       // 🔥 Vérifier si c'est un vendeur
       if (isSeller(normalizedUser.role)) {
-        // Les vendeurs n'ont pas besoin de vérifier la pharmacie ou l'abonnement
         console.log('✅ Vendeur - redirection vers /vendor-pos');
-        setAuth(normalizedUser, access_token);
+        handleSetAuth(normalizedUser, access_token, refreshToken);
         toast.success('Connexion réussie !');
         setTimeout(() => {
           navigate('/vendor-pos', { replace: true });
@@ -259,7 +289,7 @@ export default function Login() {
       // 🔥 Vérifier si c'est un super admin
       if (normalizedUser.role === 'super_admin') {
         console.log('✅ Super Admin - redirection vers /super-admin');
-        setAuth(normalizedUser, access_token);
+        handleSetAuth(normalizedUser, access_token, refreshToken);
         toast.success('Connexion réussie !');
         setTimeout(() => {
           navigate('/super-admin', { replace: true });
@@ -271,9 +301,8 @@ export default function Login() {
       const pharmacyId = (normalizedUser as any).pharmacy_id || normalizedUser.tenant_id;
       
       if (!pharmacyId) {
-        // Si pas de pharmacie, redirection directe
         console.log('⚠️ Utilisateur sans pharmacie associée');
-        setAuth(normalizedUser, access_token);
+        handleSetAuth(normalizedUser, access_token, refreshToken);
         toast.success('Connexion réussie !');
         setTimeout(() => {
           navigate('/dashboard', { replace: true });
@@ -281,11 +310,12 @@ export default function Login() {
         return;
       }
       
-      // ✅ Pour les admins, vérifier le statut de service AVANT de rediriger
+      // ✅ Pour les admins, vérifier le statut de service
       await checkServiceStatusAndRedirect(
         pharmacyId,
         normalizedUser,
-        access_token
+        access_token,
+        refreshToken
       );
 
     } catch (err: any) {
@@ -394,8 +424,7 @@ export default function Login() {
    */
   const handleGoToOutOfService = () => {
     if (pendingUserData) {
-      // Stocker l'authentification quand même pour pouvoir afficher la page hors service
-      setAuth(pendingUserData.user, pendingUserData.token);
+      handleSetAuth(pendingUserData.user, pendingUserData.token, pendingUserData.refreshToken);
     }
     setShowOutOfServiceModal(false);
     navigate('/out-of-service', { replace: true, state: { serviceStatus } });
@@ -405,15 +434,16 @@ export default function Login() {
    * Gère la tentative de reconnexion
    */
   const handleRetryCheck = async () => {
-    if (!pendingUserData?.user?.pharmacy_id && !pendingUserData?.user?.tenant_id) {
-      // Pas de pharmacie, redirection normale
-      setAuth(pendingUserData!.user, pendingUserData!.token);
+    if (!pendingUserData) return;
+    
+    const pharmacyId = pendingUserData.user.pharmacy_id || pendingUserData.user.tenant_id;
+    
+    if (!pharmacyId) {
+      handleSetAuth(pendingUserData.user, pendingUserData.token, pendingUserData.refreshToken);
       setShowOutOfServiceModal(false);
       navigate('/dashboard', { replace: true });
       return;
     }
-    
-    const pharmacyId = pendingUserData!.user.pharmacy_id || pendingUserData!.user.tenant_id;
     
     try {
       const response = await api.get<ServiceStatus>(`/pharmacies/${pharmacyId}/service-status`);
@@ -422,13 +452,11 @@ export default function Login() {
       setServiceStatus(status);
       
       if (status.in_service) {
-        // Maintenant en service
-        setAuth(pendingUserData!.user, pendingUserData!.token);
+        handleSetAuth(pendingUserData.user, pendingUserData.token, pendingUserData.refreshToken);
         setShowOutOfServiceModal(false);
         toast.success('La pharmacie est maintenant en service !');
         navigate('/dashboard', { replace: true });
       } else {
-        // Toujours hors service
         toast.error('La pharmacie est toujours hors service');
       }
     } catch (err) {
@@ -452,7 +480,7 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4 relative">
-      {/* Bouton Super Admin */}
+      {/* Bouton Super Admin (contenu inchangé) */}
       <div className="fixed bottom-6 right-6 z-40">
         <button
           onClick={() => {
@@ -470,7 +498,7 @@ export default function Login() {
         </button>
       </div>
 
-      {/* Modal Super Admin */}
+      {/* Modal Super Admin - Contenu inchangé */}
       {showSuperAdminModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
@@ -583,7 +611,7 @@ export default function Login() {
         </div>
       )}
 
-      {/* Modal Hors Service */}
+      {/* Modal Hors Service - Contenu inchangé */}
       {showOutOfServiceModal && serviceStatus && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 duration-300">

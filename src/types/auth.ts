@@ -36,6 +36,8 @@ export interface UserResponse {
   role: string;
   nom_complet: string;
   tenant_id?: string | null;
+  pharmacy_id?: string | null;
+  branch_id?: string | null;  
   actif: boolean;
   activated?: boolean;
   phone?: string;
@@ -52,6 +54,8 @@ export interface NormalizedUser {
   role: string;
   nom_complet: string;
   tenant_id: string | null;
+  pharmacy_id: string | null;
+  branch_id: string | null; 
   actif: boolean;
   telephone: string;
   phone: string;
@@ -65,6 +69,7 @@ export interface LoginResponse {
   access_token: string;
   token_type: string;
   user: UserResponse;
+  refresh_token?: string;
 }
 
 export interface SetupResponse {
@@ -82,6 +87,8 @@ export const normalizeUser = (userData: UserResponse): NormalizedUser => ({
   role: userData.role,
   nom_complet: userData.nom_complet,
   tenant_id: userData.tenant_id ?? null,
+  pharmacy_id: userData.pharmacy_id ?? null,
+  branch_id: userData.branch_id ?? null, 
   actif: userData.actif ?? userData.activated ?? true,
   telephone: userData.telephone || userData.phone || '',
   phone: userData.phone || userData.telephone || '',

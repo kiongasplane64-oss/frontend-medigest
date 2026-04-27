@@ -37,6 +37,7 @@ type UserInput = Partial<User> & {
   nom_complet?: string;
   tenant_id?: string | null;
   pharmacy_id?: string | null;
+  branch_id?: string | null;  // ← AJOUTÉ : branch_id dans UserInput
   telephone?: string;
   phone?: string;
   actif?: boolean;
@@ -50,6 +51,7 @@ interface JwtPayload {
   role?: string;
   tenant_id?: string | null;
   pharmacy_id?: string | null;
+  branch_id?: string | null;  // ← AJOUTÉ : branch_id dans JwtPayload
   subscription_active?: boolean;
   exp?: number;
   type?: string;
@@ -73,6 +75,7 @@ interface AuthState {
   setPharmacy: (id: string | null) => void;
   setTenantId: (id: string | null) => void;
   updateUserActivation: (status: boolean) => void;
+  updateUser: (updates: Partial<User>) => void;
   setLoading: (loading: boolean) => void;
   hydrateAuth: () => void;
   syncFromStorage: () => boolean;
@@ -327,6 +330,7 @@ const normalizeUser = (user: UserInput): User => {
     nom_complet: String(user?.nom_complet ?? 'Utilisateur').trim(),
     tenant_id: user?.tenant_id ?? null,
     pharmacy_id: user?.pharmacy_id ?? null,
+    branch_id: user?.branch_id ?? undefined,
     telephone: user?.telephone ?? user?.phone ?? '',
     phone: user?.phone ?? user?.telephone ?? '',
     actif,
@@ -378,6 +382,7 @@ const mergeUserWithTokenPayload = (user: UserInput | null, token: string): User 
     nom_complet: user?.nom_complet ?? 'Utilisateur',
     tenant_id: user?.tenant_id ?? payload?.tenant_id ?? null,
     pharmacy_id: user?.pharmacy_id ?? (payload?.pharmacy_id as string | null) ?? null,
+    branch_id: user?.branch_id ?? (payload?.branch_id as string | null) ?? undefined,
     telephone: user?.telephone ?? user?.phone ?? '',
     phone: user?.phone ?? user?.telephone ?? '',
     actif: user?.actif ?? user?.activated ?? true,
@@ -532,6 +537,39 @@ export const useAuthStore = create<AuthState>()(
           syncUserToStorage(updatedUser);
           return { user: updatedUser };
         }),
+
+      // ==================== MÉTHODE updateUser ====================
+      updateUser: (updates: Partial<User>) => {
+        const currentUser = get().user;
+        if (!currentUser) return;
+        
+        const updatedUser: User = {
+          ...currentUser,
+          ...updates,
+        };
+        
+        // Mettre à jour le store
+        set({ user: updatedUser });
+        
+        // Synchroniser avec le localStorage
+        syncUserToStorage(updatedUser);
+        
+        // Si le branch_id a changé, mettre à jour également currentPharmacyId si nécessaire
+        if (updates.branch_id && get().currentPharmacyId !== updates.branch_id) {
+          set({ currentPharmacyId: updates.branch_id });
+        }
+        
+        // Si le pharmacy_id a changé, mettre à jour currentPharmacyId également
+        if (updates.pharmacy_id && get().currentPharmacyId !== updates.pharmacy_id) {
+          set({ currentPharmacyId: updates.pharmacy_id });
+        }
+        
+        console.log('👤 Utilisateur mis à jour:', { 
+          branch_id: updatedUser.branch_id,
+          pharmacy_id: updatedUser.pharmacy_id 
+        });
+      },
+      // ==================== FIN MÉTHODE ====================
 
       setLoading: (loading) => set({ isLoading: loading }),
 

@@ -1,14 +1,15 @@
+// Dashboard.tsx (version modifiée)
 /**
  * ===================================================================
- * DASHBOARD - Tableau de bord principal de l'application pharmaceutique
- * Utilisation de useActivePharmacy pour la gestion de la pharmacie active
+ * DASHBOARD - Tableau de bord principal de l'application
+ * Utilise useActiveBranch pour la gestion de la branche active
  * ===================================================================
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useNavigate, Link } from 'react-router-dom';
-import { useActivePharmacy } from '@/hooks/useActivePharmacy';
+import { useActiveBranch } from '@/hooks/useActiveBranch';
 import {
   ShoppingBag,
   TrendingUp,
@@ -64,10 +65,10 @@ interface DetailModalProps {
   type: DetailModalType;
   onExportPDF: () => void;
   userName?: string;
-  pharmacyName?: string;
-  pharmacyAddress?: string;
-  pharmacyPhone?: string;
-  pharmacyEmail?: string;
+  branchName?: string;
+  branchAddress?: string;
+  branchPhone?: string;
+  branchEmail?: string;
 }
 
 interface DashboardCard {
@@ -114,10 +115,6 @@ interface ExpiringProduct {
   name: string;
   expiry_date: string;
   quantity: number;
-}
-
-interface SalesHistoryItem {
-  count?: unknown;
 }
 
 interface ExtendedDashboardStats {
@@ -202,29 +199,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isRenderablePrimitive(value: unknown): boolean {
-  return (
-    typeof value === 'string' ||
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    value === null ||
-    value === undefined
-  );
-}
-
-function toDisplayText(value: unknown): string {
-  if (value === null || value === undefined) return '-';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
-  if (value instanceof Date) return value.toLocaleString();
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return '-';
-  }
-}
-
 function safeNumber(value: unknown, fallback = 0): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() !== '') {
@@ -238,21 +212,8 @@ function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
-function sumMonthlyTransactions(salesHistory: unknown): number {
-  if (!Array.isArray(salesHistory)) return 0;
-  return salesHistory.reduce((sum, item) => {
-    if (!isObject(item)) return sum;
-    return sum + safeNumber((item as SalesHistoryItem).count, 0);
-  }, 0);
-}
-
 function normalizeStats(raw: unknown): ExtendedDashboardStats {
   if (!isObject(raw)) return EMPTY_STATS;
-
-  const monthlyTransactions =
-    raw.monthly_transactions !== undefined
-      ? safeNumber(raw.monthly_transactions)
-      : sumMonthlyTransactions(raw.sales_history);
 
   return {
     daily_sales: safeNumber(raw.daily_sales),
@@ -273,7 +234,7 @@ function normalizeStats(raw: unknown): ExtendedDashboardStats {
     total_customers: safeNumber(raw.total_customers),
 
     daily_transactions: safeNumber(raw.daily_transactions ?? raw.daily_sales_count),
-    monthly_transactions: monthlyTransactions,
+    monthly_transactions: safeNumber(raw.monthly_transactions),
 
     monthly_expenses: safeNumber(raw.monthly_expenses ?? raw.monthly_costs),
     daily_expenses: safeNumber(raw.daily_expenses),
@@ -319,9 +280,6 @@ function getErrorMessage(error: unknown, fallback = 'Erreur lors du chargement d
       if (isObject(data)) {
         const detail = data.detail;
         if (typeof detail === 'string' && detail.trim()) return detail;
-        if (isObject(detail) && typeof detail.message === 'string' && detail.message.trim()) {
-          return detail.message;
-        }
         if (typeof data.message === 'string' && data.message.trim()) return data.message;
       }
     }
@@ -344,10 +302,10 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
   type,
   onExportPDF,
   userName,
-  pharmacyName,
-  pharmacyAddress,
-  pharmacyPhone,
-  pharmacyEmail,
+  branchName,
+  branchAddress,
+  branchPhone,
+  branchEmail,
 }) => {
   const renderContent = useCallback((): React.ReactNode => {
     if (!data) {
@@ -360,6 +318,43 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
     }
 
     const statsData = normalizeStats(data);
+
+    // Helper pour les cartes de détail
+    const DetailCard: React.FC<{
+      title: string;
+      value: string | number;
+      subtitle: string;
+      icon: React.ReactElement;
+      color: string;
+    }> = ({ title: cardTitle, value, subtitle, icon, color }) => {
+      const colorClasses: Record<string, string> = {
+        blue: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
+        indigo: 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400',
+        purple: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
+        emerald: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400',
+        amber: 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400',
+        red: 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400',
+        orange: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
+        cyan: 'bg-cyan-50 dark:bg-cyan-900/20 text-cyan-600 dark:text-cyan-400',
+        yellow: 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
+        slate: 'bg-slate-50 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400',
+      };
+
+      return (
+        <div className="rounded-xl border border-slate-100 p-4 dark:border-slate-700">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{cardTitle}</p>
+              <p className="mt-1 text-2xl font-black text-slate-800 dark:text-slate-200">{value}</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{subtitle}</p>
+            </div>
+            <div className={`rounded-xl p-2 ${colorClasses[color] || colorClasses.slate}`}>
+              {icon}
+            </div>
+          </div>
+        </div>
+      );
+    };
 
     switch (type) {
       case 'sales':
@@ -401,7 +396,23 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.recent_transactions.length > 0 && (
-              <RecentSalesList sales={statsData.recent_transactions.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières ventes</h4>
+                <div className="space-y-2">
+                  {statsData.recent_transactions.slice(0, 5).map((sale, idx) => (
+                    <div key={`${sale.reference}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{sale.reference || `Vente #${idx + 1}`}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{safeDateDisplay(sale.date)}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(sale.amount)}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{sale.payment_method || '-'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -441,7 +452,17 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.expense_categories.length > 0 && (
-              <ExpenseCategoriesList categories={statsData.expense_categories} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dépenses par catégorie</h4>
+                <div className="space-y-2">
+                  {statsData.expense_categories.map((cat, idx) => (
+                    <div key={`${cat.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <span className="text-sm font-medium dark:text-slate-200">{cat.name}</span>
+                      <span className="font-bold text-red-600 dark:text-red-400">{formatCurrency(cat.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -481,7 +502,22 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.debt_list.length > 0 && (
-              <DebtsList debts={statsData.debt_list.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières dettes</h4>
+                <div className="space-y-2">
+                  {statsData.debt_list.slice(0, 5).map((debt, idx) => (
+                    <div key={`${debt.customer_name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{debt.customer_name || 'Client'}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Échéance: {safeDateOnlyDisplay(debt.due_date)}
+                        </p>
+                      </div>
+                      <p className="font-bold text-amber-600 dark:text-amber-400">{formatCurrency(debt.amount)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -521,7 +557,20 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.recent_purchases.length > 0 && (
-              <RecentPurchasesList purchases={statsData.recent_purchases.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Derniers achats</h4>
+                <div className="space-y-2">
+                  {statsData.recent_purchases.slice(0, 5).map((purchase, idx) => (
+                    <div key={`${purchase.supplier_name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{purchase.supplier_name || 'Fournisseur'}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{safeDateOnlyDisplay(purchase.date)}</p>
+                      </div>
+                      <p className="font-bold text-blue-600 dark:text-blue-400">{formatCurrency(purchase.amount)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -534,20 +583,62 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             : [];
 
         if (!alertsList.length) {
-          return <EmptyState icon={<CheckCircle size={32} />} message="Aucune alerte en cours" />;
+          return (
+            <div className="py-12 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                <CheckCircle size={32} className="text-green-600 dark:text-green-400" />
+              </div>
+              <p className="font-medium text-slate-500 dark:text-slate-400">Aucune alerte en cours</p>
+            </div>
+          );
         }
 
         return (
           <div className="space-y-3">
             <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <StatBadge label="Stock critique" count={alertsList.filter((a) => a?.severity === 'high').length} color="red" />
-              <StatBadge label="Stock bas" count={alertsList.filter((a) => a?.severity === 'medium').length} color="amber" />
-              <StatBadge label="Attention" count={alertsList.filter((a) => a?.severity === 'low').length} color="yellow" />
+              <div className="rounded-xl bg-red-100 p-3 text-center dark:bg-red-900/30">
+                <p className="text-2xl font-black text-red-700 dark:text-red-300">
+                  {alertsList.filter((a) => a?.severity === 'high').length}
+                </p>
+                <p className="text-xs font-medium text-red-700 dark:text-red-300">Stock critique</p>
+              </div>
+              <div className="rounded-xl bg-amber-100 p-3 text-center dark:bg-amber-900/30">
+                <p className="text-2xl font-black text-amber-700 dark:text-amber-300">
+                  {alertsList.filter((a) => a?.severity === 'medium').length}
+                </p>
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Stock bas</p>
+              </div>
+              <div className="rounded-xl bg-yellow-100 p-3 text-center dark:bg-yellow-900/30">
+                <p className="text-2xl font-black text-yellow-700 dark:text-yellow-300">
+                  {alertsList.filter((a) => a?.severity === 'low').length}
+                </p>
+                <p className="text-xs font-medium text-yellow-700 dark:text-yellow-300">Attention</p>
+              </div>
             </div>
 
-            {alertsList.map((alert, index) => (
-              <AlertCard key={alert.id || index} alert={alert} />
-            ))}
+            {alertsList.map((alert, index) => {
+              const severityColors: Record<string, string> = {
+                high: 'bg-red-50 dark:bg-red-900/20 border-l-red-500',
+                medium: 'bg-amber-50 dark:bg-amber-900/20 border-l-amber-500',
+                low: 'bg-yellow-50 dark:bg-yellow-900/20 border-l-yellow-500',
+              };
+              const severityClass = severityColors[alert.severity] || severityColors.low;
+
+              return (
+                <div key={alert.id || index} className={`rounded-xl border border-slate-100 border-l-4 p-4 dark:border-slate-700 ${severityClass}`}>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-sm font-bold dark:text-slate-200">{alert.product_name}</p>
+                      <div className="mt-2 flex items-center gap-4 text-xs">
+                        <span className="text-slate-600 dark:text-slate-400">Stock: {alert.current_stock}</span>
+                        <span className="text-slate-600 dark:text-slate-400">Seuil: {alert.threshold}</span>
+                      </div>
+                    </div>
+                    <AlertTriangle size={20} className="text-red-500" />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         );
       }
@@ -573,7 +664,22 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.expiring_products.length > 0 && (
-              <ExpiringProductsList products={statsData.expiring_products.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Produits expirant bientôt</h4>
+                <div className="space-y-2">
+                  {statsData.expiring_products.slice(0, 5).map((product, idx) => (
+                    <div key={`${product.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{product.name}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                          Expire le: {safeDateOnlyDisplay(product.expiry_date)}
+                        </p>
+                      </div>
+                      <p className="font-bold text-orange-600 dark:text-orange-400">{product.quantity} unités</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -613,7 +719,20 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.low_stock_products.length > 0 && (
-              <LowStockList products={statsData.low_stock_products.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Produits en stock bas</h4>
+                <div className="space-y-2">
+                  {statsData.low_stock_products.slice(0, 5).map((product, idx) => (
+                    <div key={`${product.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{product.name}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">Seuil: {product.threshold}</p>
+                      </div>
+                      <p className="font-bold text-amber-600 dark:text-amber-400">Stock: {product.current_stock}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -646,7 +765,20 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
             </div>
 
             {statsData.recent_transactions.length > 0 && (
-              <RecentTransactionsList transactions={statsData.recent_transactions.slice(0, 5)} />
+              <div>
+                <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières transactions</h4>
+                <div className="space-y-2">
+                  {statsData.recent_transactions.slice(0, 5).map((tx, idx) => (
+                    <div key={`${tx.reference}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                      <div>
+                        <p className="text-sm font-medium dark:text-slate-200">{tx.reference || `Transaction #${idx + 1}`}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{tx.payment_method || '-'}</p>
+                      </div>
+                      <p className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(tx.amount)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         );
@@ -688,7 +820,31 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
         );
 
       default:
-        return <GenericDataDisplay data={data} />;
+        if (!isObject(data)) return null;
+        const entries = Object.entries(data).filter(([, val]) => {
+          const isPrimitive = typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean' || val === null || val === undefined;
+          return isPrimitive || val instanceof Date;
+        });
+
+        if (!entries.length) {
+          return <div className="py-8 text-center text-slate-500 dark:text-slate-400">Aucune donnée exploitable à afficher</div>;
+        }
+
+        return (
+          <div className="space-y-2">
+            {entries.map(([key, value]) => {
+              const displayValue = typeof value === 'number' ? formatCurrency(value) : 
+                value === null || value === undefined ? '-' : String(value);
+
+              return (
+                <div key={key} className="flex justify-between gap-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
+                  <span className="wrap-break-word text-sm font-medium dark:text-slate-300">{key}</span>
+                  <span className="wrap-break-word text-right font-bold dark:text-slate-200">{displayValue}</span>
+                </div>
+              );
+            })}
+          </div>
+        );
     }
   }, [data, type]);
 
@@ -724,10 +880,10 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
           {renderContent()}
           <div className="mt-6 space-y-1 rounded-xl bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-700/50 dark:text-slate-400">
             <p>Généré par : {userName || 'Utilisateur non spécifié'}</p>
-            <p>Pharmacie : {pharmacyName || 'Pharmacie non spécifiée'}</p>
-            {pharmacyAddress && <p>Adresse : {pharmacyAddress}</p>}
-            {pharmacyPhone && <p>Tél : {pharmacyPhone}</p>}
-            {pharmacyEmail && <p>Email : {pharmacyEmail}</p>}
+            <p>Branche : {branchName || 'Branche non spécifiée'}</p>
+            {branchAddress && <p>Adresse : {branchAddress}</p>}
+            {branchPhone && <p>Tél : {branchPhone}</p>}
+            {branchEmail && <p>Email : {branchEmail}</p>}
           </div>
         </div>
       </div>
@@ -738,245 +894,6 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({
 DetailModal.displayName = 'DetailModal';
 
 // ===================================================================
-// COMPOSANTS DE CARTES ET LISTES
-// ===================================================================
-
-const DetailCard: React.FC<{
-  title: string;
-  value: string | number;
-  subtitle: string;
-  icon: React.ReactElement;
-  color: string;
-}> = ({ title, value, subtitle, icon, color }) => {
-  const colorClasses: Record<string, string> = {
-    blue: 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400',
-    indigo: 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400',
-    purple: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400',
-    emerald: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400',
-    amber: 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400',
-    red: 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400',
-    orange: 'bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400',
-    cyan: 'bg-cyan-50 dark:bg-cyan-900/20 text-cyan-600 dark:text-cyan-400',
-    yellow: 'bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400',
-    slate: 'bg-slate-50 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400',
-  };
-
-  return (
-    <div className="rounded-xl border border-slate-100 p-4 dark:border-slate-700">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{title}</p>
-          <p className="mt-1 text-2xl font-black text-slate-800 dark:text-slate-200">{value}</p>
-          <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{subtitle}</p>
-        </div>
-        <div className={`rounded-xl p-2 ${colorClasses[color] || colorClasses.slate}`}>
-          {icon}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const StatBadge: React.FC<{ label: string; count: number; color: string }> = ({ label, count, color }) => {
-  const colors: Record<string, string> = {
-    red: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300',
-    amber: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
-    yellow: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
-  };
-
-  return (
-    <div className={`rounded-xl p-3 text-center ${colors[color] || colors.yellow}`}>
-      <p className="text-2xl font-black">{count}</p>
-      <p className="text-xs font-medium">{label}</p>
-    </div>
-  );
-};
-
-const AlertCard: React.FC<{ alert: DashboardAlert }> = ({ alert }) => {
-  const severityColors: Record<string, string> = {
-    high: 'bg-red-50 dark:bg-red-900/20 border-l-red-500',
-    medium: 'bg-amber-50 dark:bg-amber-900/20 border-l-amber-500',
-    low: 'bg-yellow-50 dark:bg-yellow-900/20 border-l-yellow-500',
-  };
-
-  const severityClass = severityColors[alert.severity] || severityColors.low;
-
-  return (
-    <div className={`rounded-xl border border-slate-100 border-l-4 p-4 dark:border-slate-700 ${severityClass}`}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-bold dark:text-slate-200">{alert.product_name}</p>
-          <div className="mt-2 flex items-center gap-4 text-xs">
-            <span className="text-slate-600 dark:text-slate-400">Stock: {alert.current_stock}</span>
-            <span className="text-slate-600 dark:text-slate-400">Seuil: {alert.threshold}</span>
-          </div>
-        </div>
-        <AlertTriangle size={20} className="text-red-500" />
-      </div>
-    </div>
-  );
-};
-
-const EmptyState: React.FC<{ icon?: React.ReactNode; message: string }> = ({ icon, message }) => (
-  <div className="py-12 text-center">
-    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-      {icon || <CheckCircle size={32} className="text-green-600 dark:text-green-400" />}
-    </div>
-    <p className="font-medium text-slate-500 dark:text-slate-400">{message}</p>
-  </div>
-);
-
-const RecentSalesList: React.FC<{ sales: RecentTransaction[] }> = ({ sales }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières ventes</h4>
-    <div className="space-y-2">
-      {sales.map((sale, idx) => (
-        <div key={`${sale.reference}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{sale.reference || `Vente #${idx + 1}`}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{safeDateDisplay(sale.date)}</p>
-          </div>
-          <div className="text-right">
-            <p className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(sale.amount)}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{sale.payment_method || '-'}</p>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const ExpenseCategoriesList: React.FC<{ categories: ExpenseCategory[] }> = ({ categories }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dépenses par catégorie</h4>
-    <div className="space-y-2">
-      {categories.map((cat, idx) => (
-        <div key={`${cat.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <span className="text-sm font-medium dark:text-slate-200">{cat.name}</span>
-          <span className="font-bold text-red-600 dark:text-red-400">{formatCurrency(cat.amount)}</span>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const DebtsList: React.FC<{ debts: DebtItem[] }> = ({ debts }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières dettes</h4>
-    <div className="space-y-2">
-      {debts.map((debt, idx) => (
-        <div key={`${debt.customer_name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{debt.customer_name || 'Client'}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Échéance: {safeDateOnlyDisplay(debt.due_date)}
-            </p>
-          </div>
-          <p className="font-bold text-amber-600 dark:text-amber-400">{formatCurrency(debt.amount)}</p>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const RecentPurchasesList: React.FC<{ purchases: RecentPurchase[] }> = ({ purchases }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Derniers achats</h4>
-    <div className="space-y-2">
-      {purchases.map((purchase, idx) => (
-        <div key={`${purchase.supplier_name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{purchase.supplier_name || 'Fournisseur'}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{safeDateOnlyDisplay(purchase.date)}</p>
-          </div>
-          <p className="font-bold text-blue-600 dark:text-blue-400">{formatCurrency(purchase.amount)}</p>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const ExpiringProductsList: React.FC<{ products: ExpiringProduct[] }> = ({ products }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Produits expirant bientôt</h4>
-    <div className="space-y-2">
-      {products.map((product, idx) => (
-        <div key={`${product.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{product.name}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Expire le: {safeDateOnlyDisplay(product.expiry_date)}
-            </p>
-          </div>
-          <p className="font-bold text-orange-600 dark:text-orange-400">{product.quantity} unités</p>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const LowStockList: React.FC<{ products: LowStockProduct[] }> = ({ products }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Produits en stock bas</h4>
-    <div className="space-y-2">
-      {products.map((product, idx) => (
-        <div key={`${product.name}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{product.name}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Seuil: {product.threshold}</p>
-          </div>
-          <p className="font-bold text-amber-600 dark:text-amber-400">Stock: {product.current_stock}</p>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const RecentTransactionsList: React.FC<{ transactions: RecentTransaction[] }> = ({ transactions }) => (
-  <div>
-    <h4 className="mb-3 text-sm font-bold dark:text-slate-300">Dernières transactions</h4>
-    <div className="space-y-2">
-      {transactions.map((tx, idx) => (
-        <div key={`${tx.reference}-${idx}`} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-          <div>
-            <p className="text-sm font-medium dark:text-slate-200">{tx.reference || `Transaction #${idx + 1}`}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">{tx.payment_method || '-'}</p>
-          </div>
-          <p className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(tx.amount)}</p>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const GenericDataDisplay: React.FC<{ data: unknown }> = ({ data }) => {
-  if (!isObject(data)) return null;
-
-  const entries = Object.entries(data).filter(([, value]) => {
-    return isRenderablePrimitive(value) || value instanceof Date;
-  });
-
-  if (!entries.length) {
-    return <div className="py-8 text-center text-slate-500 dark:text-slate-400">Aucune donnée exploitable à afficher</div>;
-  }
-
-  return (
-    <div className="space-y-2">
-      {entries.map(([key, value]) => {
-        const displayValue = typeof value === 'number' ? formatCurrency(value) : toDisplayText(value);
-
-        return (
-          <div key={key} className="flex justify-between gap-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-700/50">
-            <span className="wrap-break-word text-sm font-medium dark:text-slate-300">{key}</span>
-            <span className="wrap-break-word text-right font-bold dark:text-slate-200">{displayValue}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-// ===================================================================
 // COMPOSANT PRINCIPAL DU DASHBOARD
 // ===================================================================
 
@@ -984,17 +901,22 @@ const DashboardContent: React.FC = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, isSuperAdmin } = useAuthStore();
 
+  // Utilisation du hook useActiveBranch au lieu de useActivePharmacy
   const {
-    id: activePharmacyId,
-    name: pharmacyName,
-    address: pharmacyAddress,
-    phone: pharmacyPhone,
-    email: pharmacyEmail,
+    id: activeBranchId,
+    name: branchName,
+    address: branchAddress,
+    phone: branchPhone,
+    email: branchEmail,
+    isActive: branchIsActive,
+    isMainBranch,
+    parentPharmacyName,
     serviceStatus,
-    isLoading: isLoadingPharmacy,
-    error: pharmacyError,
-    refreshActivePharmacy,
-  } = useActivePharmacy();
+    isLoading: isLoadingBranch,
+    error: branchError,
+    refreshBranch,
+    refreshServiceStatus,
+  } = useActiveBranch();
 
   const [selectedModal, setSelectedModal] = useState<{
     type: DetailModalType;
@@ -1010,13 +932,6 @@ const DashboardContent: React.FC = () => {
 
   const timezoneHook = useTimezone();
   const browserTimezone = timezoneHook.timezone;
-
-  // 🔥 CORRECTION : Utiliser l'UUID directement, ne pas convertir en entier
-  const pharmacyId = useMemo(() => {
-    if (!activePharmacyId) return null;
-    // Retourner l'UUID tel quel - le backend accepte les UUID
-    return activePharmacyId;
-  }, [activePharmacyId]);
 
   const isAdmin = useMemo(() => {
     if (!isObject(user)) return false;
@@ -1037,15 +952,15 @@ const DashboardContent: React.FC = () => {
   const safeAlerts = useMemo(() => safeArray<DashboardAlert>(alerts), [alerts]);
 
   const fetchDashboardData = useCallback(async (showBackgroundLoading = false) => {
-    // 🔥 Vérification : pharmacyId peut être un UUID (string)
-    if (!pharmacyId) {
-      console.warn('fetchDashboardData: pharmacyId invalide (null)', pharmacyId);
+    // Utiliser branch_id au lieu de pharmacy_id
+    if (!activeBranchId) {
+      console.warn('fetchDashboardData: activeBranchId invalide');
       setIsLoading(false);
       setIsFetching(false);
       return;
     }
 
-    console.log('📊 fetchDashboardData: pharmacyId =', pharmacyId, 'type:', typeof pharmacyId);
+    console.log('📊 fetchDashboardData: branch_id =', activeBranchId);
 
     if (showBackgroundLoading) {
       setIsFetching(true);
@@ -1054,12 +969,12 @@ const DashboardContent: React.FC = () => {
     }
 
     try {
-      // 🔥 Les filtres acceptent maintenant des string (UUID)
+      // Utiliser branch_id dans les filtres
       const filters: DashboardFilters = {
-        pharmacy_id: pharmacyId as any, // Le backend accepte les UUID
+        branch_id: activeBranchId,
       };
 
-      console.log('📊 Appel API dashboard/stats avec pharmacy_id:', pharmacyId);
+      console.log('📊 Appel API dashboard/stats avec branch_id:', activeBranchId);
 
       const [statsData, alertsData] = await Promise.all([
         dashboardService.getDashboardStats(filters),
@@ -1077,7 +992,7 @@ const DashboardContent: React.FC = () => {
       setIsLoading(false);
       setIsFetching(false);
     }
-  }, [pharmacyId]);
+  }, [activeBranchId]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -1091,42 +1006,50 @@ const DashboardContent: React.FC = () => {
   }, [isAuthenticated, isSuperAdmin, navigate]);
 
   useEffect(() => {
-    // 🔥 Vérifier si pharmacyId est valide (string non vide)
-    if (!pharmacyId) {
-      console.log('Dashboard: En attente d\'un pharmacyId valide...');
+    if (!activeBranchId) {
+      console.log('Dashboard: En attente d\'un branchId valide...');
       setIsLoading(false);
       return;
     }
 
-    console.log('Dashboard: pharmacyId valide, chargement des données:', pharmacyId);
-    fetchDashboardData(false);
-  }, [pharmacyId, fetchDashboardData]);
+    if (!branchIsActive) {
+      console.log('Dashboard: La branche n\'est pas active');
+      setIsLoading(false);
+      return;
+    }
 
+    console.log('Dashboard: branchId valide, chargement des données:', activeBranchId);
+    fetchDashboardData(false);
+  }, [activeBranchId, branchIsActive, fetchDashboardData]);
+
+  // Rafraîchissement automatique toutes les 30 secondes
   useEffect(() => {
-    if (!pharmacyId) return;
+    if (!activeBranchId) return;
 
     const interval = window.setInterval(async () => {
       try {
         await fetchDashboardData(true);
+        await refreshServiceStatus();
       } catch (err) {
         console.error('Erreur actualisation silencieuse dashboard:', err);
       }
     }, 30000);
 
     return () => window.clearInterval(interval);
-  }, [pharmacyId, fetchDashboardData]);
+  }, [activeBranchId, fetchDashboardData, refreshServiceStatus]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await refreshActivePharmacy();
+      await refreshBranch();
+      await refreshServiceStatus();
       await fetchDashboardData(false);
     } catch (err) {
       console.error('Erreur actualisation dashboard:', err);
     } finally {
       window.setTimeout(() => setIsRefreshing(false), 400);
     }
-  }, [fetchDashboardData, refreshActivePharmacy]);
+  }, [fetchDashboardData, refreshBranch, refreshServiceStatus]);
 
   const handleExportPDF = useCallback((type: string, data: unknown): void => {
     if (!data) return;
@@ -1135,10 +1058,10 @@ const DashboardContent: React.FC = () => {
       type,
       data,
       userName: isObject(user) && typeof user.nom_complet === 'string' ? user.nom_complet : 'Non spécifié',
-      pharmacyName: pharmacyName || 'Pharmacie non spécifiée',
-      pharmacyAddress: pharmacyAddress || undefined,
-      pharmacyPhone: pharmacyPhone || undefined,
-      pharmacyEmail: pharmacyEmail || undefined,
+      pharmacyName: branchName || 'Branche non spécifiée',
+      pharmacyAddress: branchAddress || undefined,
+      pharmacyPhone: branchPhone || undefined,
+      pharmacyEmail: branchEmail || undefined,
     };
 
     try {
@@ -1147,7 +1070,7 @@ const DashboardContent: React.FC = () => {
       console.error('Erreur lors de l’export PDF:', err);
       alert('Une erreur est survenue lors de la génération du PDF');
     }
-  }, [user, pharmacyName, pharmacyAddress, pharmacyPhone, pharmacyEmail]);
+  }, [user, branchName, branchAddress, branchPhone, branchEmail]);
 
   const dashboardCards = useMemo((): DashboardCard[] => {
     const dailyProfit = extendedStats.daily_profit || extendedStats.daily_sales * 0.3;
@@ -1237,10 +1160,16 @@ const DashboardContent: React.FC = () => {
     ];
   }, [extendedStats, safeAlerts]);
 
-  const userFullName =
-    isObject(user) && typeof user.nom_complet === 'string'
-      ? user.nom_complet
-      : 'Utilisateur';
+  const userFullName = isObject(user) && typeof user.nom_complet === 'string'
+    ? user.nom_complet
+    : 'Utilisateur';
+
+  // Affichage du statut de service
+  const serviceStatusMessage = serviceStatus?.in_service 
+    ? '🟢 En service' 
+    : serviceStatus?.restrictions_enabled 
+      ? '🔴 Hors service' 
+      : '🟢 Service continu';
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 pb-10 transition-colors sm:px-6 lg:px-8">
@@ -1257,21 +1186,33 @@ const DashboardContent: React.FC = () => {
             <div className="flex items-center gap-2">
               <Building2 size={16} className="text-blue-500 dark:text-blue-400" />
               <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                {pharmacyName || 'Pharmacie non spécifiée'}
+                {branchName || 'Branche non spécifiée'}
               </p>
+              {isMainBranch && (
+                <span className="ml-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                  Principale
+                </span>
+              )}
             </div>
 
-            {pharmacyAddress && (
+            {parentPharmacyName && (
               <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                <MapPin size={12} />
-                <span className="max-w-48 truncate">{pharmacyAddress}</span>
+                <Building2 size={12} />
+                <span>{parentPharmacyName}</span>
               </div>
             )}
 
-            {pharmacyPhone && (
+            {branchAddress && (
+              <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                <MapPin size={12} />
+                <span className="max-w-48 truncate">{branchAddress}</span>
+              </div>
+            )}
+
+            {branchPhone && (
               <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                 <Phone size={12} />
-                <span>{pharmacyPhone}</span>
+                <span>{branchPhone}</span>
               </div>
             )}
           </div>
@@ -1286,10 +1227,21 @@ const DashboardContent: React.FC = () => {
               )}
             </p>
 
-            {serviceStatus?.in_service && (
-              <div className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-green-700 dark:bg-green-900 dark:text-green-300">
-                <CheckCircle size={12} />
-                <span className="text-[10px] font-bold">En service</span>
+            <div className={`flex items-center gap-1 rounded-full px-2 py-0.5 ${
+              serviceStatus?.in_service 
+                ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                : serviceStatus?.restrictions_enabled
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                  : 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+            }`}>
+              <CheckCircle size={12} />
+              <span className="text-[10px] font-bold">{serviceStatusMessage}</span>
+            </div>
+
+            {serviceStatus?.next_service_time && !serviceStatus.in_service && (
+              <div className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
+                <Clock size={10} />
+                <span className="text-[10px] font-bold">Prochain service: {serviceStatus.next_service_time}</span>
               </div>
             )}
 
@@ -1297,7 +1249,7 @@ const DashboardContent: React.FC = () => {
               <span className="text-[10px]">Fuseau: {browserTimezone}</span>
             </div>
 
-            {(isLoadingPharmacy || isLoading) && (
+            {(isLoadingBranch || isLoading) && (
               <div className="flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <RefreshCw size={10} className="animate-spin" />
                 <span className="text-[10px] font-bold">Chargement...</span>
@@ -1311,13 +1263,13 @@ const DashboardContent: React.FC = () => {
               </div>
             )}
 
-            {pharmacyError && (
+            {branchError && (
               <div className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900 dark:text-amber-300">
-                <span className="text-[10px] font-bold">{getErrorMessage(pharmacyError, 'Erreur pharmacie')}</span>
+                <span className="text-[10px] font-bold">{getErrorMessage(branchError, 'Erreur branche')}</span>
               </div>
             )}
 
-            {error && !pharmacyError && (
+            {error && !branchError && (
               <div className="flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-red-700 dark:bg-red-900 dark:text-red-300">
                 <span className="text-[10px] font-bold">
                   {getErrorMessage(error, 'Erreur de synchronisation')}
@@ -1444,10 +1396,10 @@ const DashboardContent: React.FC = () => {
           type={selectedModal.type}
           onExportPDF={() => handleExportPDF(selectedModal.title, selectedModal.data)}
           userName={userFullName}
-          pharmacyName={pharmacyName || undefined}
-          pharmacyAddress={pharmacyAddress || undefined}
-          pharmacyPhone={pharmacyPhone || undefined}
-          pharmacyEmail={pharmacyEmail || undefined}
+          branchName={branchName || undefined}
+          branchAddress={branchAddress || undefined}
+          branchPhone={branchPhone || undefined}
+          branchEmail={branchEmail || undefined}
         />
       )}
     </div>

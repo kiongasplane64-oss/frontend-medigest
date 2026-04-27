@@ -16,7 +16,8 @@ import {
   DollarSign,
   ChevronLeft,
   ChevronRight,
-  Filter
+  Filter,
+  Building2
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/hooks/useToast';
@@ -55,6 +56,8 @@ interface Sale {
   status: 'pending' | 'completed' | 'cancelled' | 'refunded';
   created_at: string;
   items?: SaleItem[];
+  branch_id?: string;
+  branch_name?: string;
 }
 
 interface SalesResponse {
@@ -68,6 +71,14 @@ interface SalesResponse {
 interface SaleDetailResponse {
   sale: Sale;
   items: SaleItem[];
+}
+
+interface BranchInfo {
+  id: string;
+  name: string;
+  code: string;
+  is_active: boolean;
+  parent_pharmacy_id?: string;
 }
 
 type PeriodType = 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'custom';
@@ -105,6 +116,10 @@ const FactureManager: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
   
+  // Branche de l'utilisateur connecté
+  const [userBranch, setUserBranch] = useState<BranchInfo | null>(null);
+  const [branchLoading, setBranchLoading] = useState(true);
+  
   const [filters, setFilters] = useState<FilterState>({
     period: 'today',
     startDate: new Date().toISOString().split('T')[0],
@@ -125,6 +140,57 @@ const FactureManager: React.FC = () => {
   const [sellers, setSellers] = useState<{ id: string; name: string }[]>([]);
   
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Récupérer la branche de l'utilisateur connecté
+  const loadUserBranch = useCallback(async () => {
+    setBranchLoading(true);
+    try {
+      const userId = user?.id;
+      if (!userId) {
+        console.error('Utilisateur non connecté');
+        setBranchLoading(false);
+        return;
+      }
+
+      // Récupérer les détails de l'utilisateur pour obtenir sa branche
+      const userResponse = await api.get(`/users/${userId}`);
+      const userData = userResponse.data;
+      
+      const branchId = userData.branch_id || userData.current_branch_id;
+      
+      if (!branchId) {
+        toast({ 
+          title: "Erreur", 
+          description: "Aucune branche associée à votre compte", 
+          variant: "destructive" 
+        });
+        setBranchLoading(false);
+        return;
+      }
+      
+      // Récupérer les détails de la branche
+      const branchResponse = await api.get(`/branches/${branchId}`);
+      const branchData = branchResponse.data;
+      
+      setUserBranch({
+        id: branchData.id,
+        name: branchData.name,
+        code: branchData.code,
+        is_active: branchData.is_active,
+        parent_pharmacy_id: branchData.parent_pharmacy_id
+      });
+      
+    } catch (error) {
+      console.error('Erreur chargement branche:', error);
+      toast({ 
+        title: "Erreur", 
+        description: "Impossible de charger les informations de votre branche", 
+        variant: "destructive" 
+      });
+    } finally {
+      setBranchLoading(false);
+    }
+  }, [user, toast]);
 
   // Calculer la plage de dates en fonction de la période
   const getDateRange = useCallback((): { startDate: string; endDate: string } => {
@@ -147,7 +213,6 @@ const FactureManager: React.FC = () => {
         };
       
       case 'week': {
-        // Du lundi au dimanche
         const dayOfWeek = today.getDay();
         const monday = new Date(today);
         const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
@@ -197,20 +262,20 @@ const FactureManager: React.FC = () => {
     }
   }, [filters]);
 
-  // Charger les ventes
+  // Charger les ventes de la branche
   const loadSales = useCallback(async () => {
+    if (!userBranch?.id) {
+      console.warn('Aucune branche disponible');
+      return;
+    }
+    
     setLoading(true);
     try {
       const { startDate, endDate } = getDateRange();
-      const pharmacyId = user?.pharmacy_id;
-      
-      if (!pharmacyId) {
-        toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
-        return;
-      }
+      const branchId = userBranch.id;
       
       const params: any = {
-        pharmacy_id: pharmacyId,
+        branch_id: branchId,
         page: currentPage,
         limit: pageSize,
         start_date: startDate,
@@ -224,7 +289,13 @@ const FactureManager: React.FC = () => {
       
       const response = await api.get<SalesResponse>('/sales', { params });
       
-      setSales(response.data.items || []);
+      // Ajouter le nom de la branche aux ventes si nécessaire
+      const salesWithBranch = (response.data.items || []).map(sale => ({
+        ...sale,
+        branch_name: userBranch.name
+      }));
+      
+      setSales(salesWithBranch);
       setTotalSales(response.data.total || 0);
       
     } catch (error) {
@@ -233,20 +304,22 @@ const FactureManager: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, pageSize, filters, searchTerm, user, toast, getDateRange]);
+  }, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
 
-  // Charger la liste des vendeurs
+  // Charger la liste des vendeurs de la branche
   const loadSellers = useCallback(async () => {
+    if (!userBranch?.id) return;
+    
     try {
-      const pharmacyId = user?.pharmacy_id;
-      if (!pharmacyId) return;
-      
-      const response = await api.get('/users/sellers', { params: { pharmacy_id: pharmacyId } });
+      const branchId = userBranch.id;
+      const response = await api.get('/users/sellers', { 
+        params: { branch_id: branchId } 
+      });
       setSellers(response.data.users || response.data || []);
     } catch (error) {
       console.error('Erreur chargement vendeurs:', error);
     }
-  }, [user]);
+  }, [userBranch]);
 
   // Charger les détails d'une vente
   const loadSaleDetails = useCallback(async (saleId: string) => {
@@ -255,11 +328,16 @@ const FactureManager: React.FC = () => {
       const data = response.data;
       
       if (data.sale) {
-        setSelectedSale(data.sale);
+        setSelectedSale({
+          ...data.sale,
+          branch_name: userBranch?.name
+        });
         setSaleDetails(data.items || []);
       } else if (data.items) {
-        // Format alternatif
-        setSelectedSale(sales.find(s => s.id === saleId) || null);
+        setSelectedSale({
+          ...(sales.find(s => s.id === saleId) || {}),
+          branch_name: userBranch?.name
+        } as Sale);
         setSaleDetails(data.items);
       }
       
@@ -268,19 +346,17 @@ const FactureManager: React.FC = () => {
       console.error('Erreur chargement détails:', error);
       toast({ title: "Erreur", description: "Impossible de charger les détails de la vente", variant: "destructive" });
     }
-  }, [sales, toast]);
+  }, [sales, toast, userBranch]);
 
   // Annuler/Rembourser une vente
   const handleRefund = useCallback(async () => {
-    if (!refundData || !selectedSale) return;
+    if (!refundData || !selectedSale || !userBranch?.id) return;
     
     setRefundProcessing(true);
     try {
-      const pharmacyId = user?.pharmacy_id;
-      
       await api.post('/sales/refund', {
         ...refundData,
-        pharmacy_id: pharmacyId,
+        branch_id: userBranch.id,
         sale_id: selectedSale.id
       });
       
@@ -294,7 +370,6 @@ const FactureManager: React.FC = () => {
       setRefundData(null);
       setSelectedSale(null);
       
-      // Recharger les ventes
       loadSales();
       
     } catch (error: any) {
@@ -307,7 +382,7 @@ const FactureManager: React.FC = () => {
     } finally {
       setRefundProcessing(false);
     }
-  }, [refundData, selectedSale, user, toast, loadSales]);
+  }, [refundData, selectedSale, userBranch, toast, loadSales]);
 
   // Ouvrir le modal de remboursement
   const openRefundModal = (sale: Sale) => {
@@ -324,7 +399,6 @@ const FactureManager: React.FC = () => {
   // Exporter en PDF
   const exportToPDF = async (sale: Sale) => {
     try {
-      // Charger les détails si nécessaire
       let items = sale.items;
       if (!items) {
         const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${sale.id}`);
@@ -338,7 +412,8 @@ const FactureManager: React.FC = () => {
       
       element.innerHTML = `
         <div style="text-align: center; margin-bottom: 20px;">
-          <h2 style="font-weight: bold;">Pharmacie</h2>
+          <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
+          <p>Branche: ${userBranch?.code || ''}</p>
           <p>N° ${sale.receipt_number}</p>
           <p>${formatDateTime(sale.created_at)}</p>
         </div>
@@ -408,7 +483,8 @@ const FactureManager: React.FC = () => {
         </head>
         <body>
           <div class="text-center">
-            <h2>Pharmacie</h2>
+            <h2>${userBranch?.name || 'Pharmacie'}</h2>
+            <p>Branche: ${userBranch?.code || ''}</p>
             <p>N° ${sale.receipt_number}</p>
             <p>${formatDateTime(sale.created_at)}</p>
           </div>
@@ -471,14 +547,25 @@ const FactureManager: React.FC = () => {
     return { total, average, completed, cancelled, count: sales.length };
   }, [sales]);
 
+  // Charger la branche au montage
   useEffect(() => {
-    loadSales();
-    loadSellers();
-  }, [loadSales, loadSellers]);
+    loadUserBranch();
+  }, [loadUserBranch]);
 
+  // Charger les ventes et vendeurs quand la branche est disponible
   useEffect(() => {
-    loadSales();
-  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, filters.sellerId, filters.paymentMethod, filters.status]);
+    if (userBranch?.id) {
+      loadSales();
+      loadSellers();
+    }
+  }, [loadSales, loadSellers, userBranch]);
+
+  // Recharger quand les filtres changent
+  useEffect(() => {
+    if (userBranch?.id) {
+      loadSales();
+    }
+  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, filters.sellerId, filters.paymentMethod, filters.status, userBranch]);
 
   const totalPages = Math.ceil(totalSales / pageSize);
 
@@ -495,6 +582,33 @@ const FactureManager: React.FC = () => {
     }
   };
 
+  // Affichage du chargement de la branche
+  if (branchLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center dark:bg-slate-900">
+        <div className="text-center">
+          <Loader2 className="mx-auto animate-spin text-blue-600" size={40} />
+          <p className="mt-4 text-slate-600 dark:text-slate-400">Chargement de votre branche...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Affichage si aucune branche
+  if (!userBranch) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center dark:bg-slate-900">
+        <div className="text-center max-w-md p-6 bg-white rounded-2xl shadow-sm dark:bg-slate-800">
+          <Building2 size={48} className="mx-auto text-red-500 mb-4" />
+          <h2 className="text-xl font-bold text-slate-800 dark:text-slate-200 mb-2">Aucune branche associée</h2>
+          <p className="text-slate-600 dark:text-slate-400">
+            Votre compte n'est associé à aucune branche. Veuillez contacter l'administrateur.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <Toaster />
@@ -508,7 +622,10 @@ const FactureManager: React.FC = () => {
             </div>
             <div>
               <h1 className="text-xl font-black text-slate-800 dark:text-slate-200">Gestion des Factures</h1>
-              <p className="text-sm text-slate-400">Historique des ventes et détails</p>
+              <div className="flex items-center gap-2 text-sm text-slate-500">
+                <Building2 size={14} />
+                <span>Branche: {userBranch.name} ({userBranch.code})</span>
+              </div>
             </div>
           </div>
           <button
@@ -857,7 +974,13 @@ const FactureManager: React.FC = () => {
             </div>
             
             <div className="p-4 space-y-4">
-              {/* Infos générales */}
+              <div className="bg-slate-50 rounded-xl p-3 dark:bg-slate-700/50">
+                <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                  <Building2 size={14} />
+                  <span>Branche: {selectedSale.branch_name || userBranch.name}</span>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-xs text-slate-400">Date</p>
@@ -882,7 +1005,6 @@ const FactureManager: React.FC = () => {
               
               <div className="border-t border-slate-100 dark:border-slate-700" />
               
-              {/* Produits */}
               <div>
                 <h4 className="mb-3 text-sm font-bold text-slate-700 dark:text-slate-300">Produits vendus</h4>
                 <div className="space-y-2">
@@ -906,7 +1028,6 @@ const FactureManager: React.FC = () => {
               
               <div className="border-t border-slate-100 dark:border-slate-700" />
               
-              {/* Totaux */}
               <div className="space-y-1 text-right">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Sous-total:</span>

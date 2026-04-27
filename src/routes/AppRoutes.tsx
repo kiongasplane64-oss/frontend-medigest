@@ -29,7 +29,7 @@ import VendorPos from '@/modules/vendor/VendorPos';
 import TransferList from '@/modules/inventory/views/TransferList';
 import ProfitAnalysis from '@/modules/benefice/views/benefice';
 import FinanceAnalysis from '@/modules/finance/views/FinanceDashboard';
-import ExpensesManager from '@/modules/finance/views/Expenses';
+import Expense from '@/modules/finance/depense/Expense';
 import ReturnPage from '@/modules/finance/views/returnPage';
 import SubscriptionPage from '@/pages/SubscriptionPage';
 import UsersPage from '@/pages/UsersPage';
@@ -228,7 +228,7 @@ export default function AppRoutes() {
           <Route path="/finance" element={<FinanceAnalysis />} />
           <Route path="/capital" element={<CapitalPage />} />
           <Route path="/pharmacie/:pharmacyId/capital" element={<CapitalPage />} />
-          <Route path="/expenses" element={<ExpensesManager />} />
+          <Route path="/expenses" element={<Expense />} />
           <Route path="/profits" element={<ProfitAnalysis />} />
           
           {/* Partenaires */}

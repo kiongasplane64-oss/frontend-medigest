@@ -1,3 +1,4 @@
+// api/client.ts
 import axios, {
   AxiosError,
   type AxiosInstance,
@@ -16,12 +17,6 @@ type RetryableRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean;
 };
 
-interface RefreshResponse {
-  access_token?: string;
-  token?: string;
-  refresh_token?: string;
-}
-
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 60000,
@@ -31,319 +26,274 @@ const api: AxiosInstance = axios.create({
   },
 });
 
-// Fonctions de logging
-const logInfo = (message: string, extra?: unknown) => 
-  console.log(`ℹ️ ${message}`, extra ?? '');
-const logSuccess = (message: string, extra?: unknown) => 
-  console.log(`✅ ${message}`, extra ?? '');
-const logWarning = (message: string, extra?: unknown) => 
-  console.warn(`⚠️ ${message}`, extra ?? '');
-const logError = (message: string, extra?: unknown) => 
-  console.error(`❌ ${message}`, extra ?? '');
+// ============================================================
+// FONCTIONS SIMPLIFIÉES
+// ============================================================
 
-// Gestion sécurisée du localStorage
-const safeLocalStorage = {
-  get: (key: string): string | null => {
-    try {
-      return localStorage.getItem(key);
-    } catch (error) {
-      logError(`Impossible de lire localStorage[${key}]`, error);
-      return null;
-    }
-  },
-  set: (key: string, value: string): void => {
-    try {
-      localStorage.setItem(key, value);
-    } catch (error) {
-      logError(`Impossible d'écrire localStorage[${key}]`, error);
-    }
-  },
-  remove: (key: string): void => {
-    try {
-      localStorage.removeItem(key);
-    } catch (error) {
-      logError(`Impossible de supprimer localStorage[${key}]`, error);
-    }
+// Récupération du token - UNE SEULE SOURCE DE VÉRITÉ
+const getToken = (): string | null => {
+  // Essayer d'abord localStorage
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  if (token) return token;
+  
+  // Sinon essayer le store (et synchroniser)
+  const state = useAuthStore.getState();
+  if (state.token) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, state.token);
+    return state.token;
   }
+  
+  return null;
 };
 
-// Récupération des tokens - Priorité au localStorage
-const getStoredAccessToken = (): string | null => {
-  try {
-    // 🔥 D'abord essayer localStorage
-    const localToken = safeLocalStorage.get(ACCESS_TOKEN_KEY);
-    if (localToken) {
-      return localToken;
-    }
-    
-    // Ensuite essayer le store
-    const state = useAuthStore.getState();
-    if (state.token) {
-      // Synchroniser avec localStorage si besoin
-      safeLocalStorage.set(ACCESS_TOKEN_KEY, state.token);
-      return state.token;
-    }
-    
-    return null;
-  } catch (error) {
-    logError("Erreur lecture token", error);
-    return safeLocalStorage.get(ACCESS_TOKEN_KEY);
-  }
-};
-
-const getStoredRefreshToken = (): string | null => {
-  try {
-    // 🔥 D'abord essayer localStorage
-    const localToken = safeLocalStorage.get(REFRESH_TOKEN_KEY);
-    if (localToken) {
-      return localToken;
-    }
-    
-    // Ensuite essayer le store
-    const state = useAuthStore.getState();
-    if (state.refreshToken) {
-      safeLocalStorage.set(REFRESH_TOKEN_KEY, state.refreshToken);
-      return state.refreshToken;
-    }
-    
-    return null;
-  } catch (error) {
-    logError("Erreur lecture refresh token", error);
-    return safeLocalStorage.get(REFRESH_TOKEN_KEY);
-  }
-};
-
-// Récupération des IDs de contexte
-const getCurrentPharmacyId = (): string | null => {
-  try {
-    const state = useAuthStore.getState();
-    return state.user?.pharmacy_id || null;
-  } catch (error) {
-    logError("Erreur lecture pharmacie", error);
-    return null;
-  }
-};
-
-const getCurrentTenantId = (): string | null => {
-  try {
-    const state = useAuthStore.getState();
-    return state.user?.tenant_id || null;
-  } catch (error) {
-    logError("Erreur lecture tenant", error);
-    return null;
-  }
-};
-
-// Gestion des tokens
-const clearStoredTokens = (): void => {
-  safeLocalStorage.remove(ACCESS_TOKEN_KEY);
-  safeLocalStorage.remove(REFRESH_TOKEN_KEY);
-};
-
-const setStoredTokens = (accessToken?: string, refreshToken?: string): void => {
-  if (accessToken) {
-    safeLocalStorage.set(ACCESS_TOKEN_KEY, accessToken);
-  }
+// 🔥 CORRECTION: Utiliser setTokens au lieu de setToken
+const setTokens = (token: string, refreshToken?: string | null): void => {
+  localStorage.setItem(ACCESS_TOKEN_KEY, token);
   if (refreshToken) {
-    safeLocalStorage.set(REFRESH_TOKEN_KEY, refreshToken);
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
   }
-
-  // Mise à jour du store
-  try {
-    const state = useAuthStore.getState() as any;
-    if (accessToken && state.setToken) {
-      state.setToken(accessToken);
-    }
-    if (refreshToken && state.setRefreshToken) {
-      state.setRefreshToken(refreshToken);
-    }
-  } catch (error) {
-    logError("Erreur synchronisation store", error);
-  }
+  
+  // Utiliser la méthode setTokens du store
+  const state = useAuthStore.getState();
+  state.setTokens(token, refreshToken);
 };
 
-// Déconnexion forcée
-const forceLogout = (): void => {
-  try {
-    const state = useAuthStore.getState() as any;
-    if (state.logout) {
-      state.logout();
-    } else if (state.clearAuth) {
-      state.clearAuth();
-    }
-  } catch (error) {
-    logError('Erreur déconnexion', error);
-  } finally {
-    clearStoredTokens();
-    if (!window.location.pathname.includes('/login')) {
-      window.location.replace('/login');
-    }
-  }
+// Suppression du token - Utiliser clearAuth ou logout
+const clearAuth = (): void => {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  
+  const state = useAuthStore.getState();
+  state.clearAuth(); // ou state.logout()
 };
 
-// Vérification des routes
-const isAuthRoute = (url?: string): boolean => {
-  if (!url) return false;
-  const authPaths = [
-    '/auth/login', '/auth/register', '/auth/refresh',
-    '/auth/password/reset/request', '/auth/password/reset/confirm',
-    '/auth/verify-sms', '/auth/resend-sms', '/auth/login-with-code'
-  ];
-  return authPaths.some(path => url.includes(path));
-};
-
+// Vérification si route publique
 const isPublicRoute = (url?: string): boolean => {
   if (!url) return false;
-  const publicPaths = ['/health', '/subscriptions/plans', '/openapi.json'];
+  const publicPaths = [
+    '/health', 
+    '/subscriptions/plans', 
+    '/openapi.json', 
+    '/auth/login', 
+    '/auth/refresh',
+    '/auth/register',
+    '/auth/password/reset'
+  ];
   return publicPaths.some(path => url.includes(path));
 };
 
-// Gestion du refresh token
-let refreshPromise: Promise<string | null> | null = null;
-
-const refreshAccessToken = async (): Promise<string | null> => {
-  if (refreshPromise) {
-    return refreshPromise;
-  }
-
-  refreshPromise = (async () => {
-    const refreshToken = getStoredRefreshToken();
-
-    if (!refreshToken) {
-      logWarning('Aucun refresh token disponible');
-      return null;
-    }
-
-    try {
-      const response = await axios.post<RefreshResponse>(
-        `${API_BASE_URL}/auth/refresh`,
-        { refresh_token: refreshToken },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          timeout: 20000,
-        }
-      );
-
-      const accessToken = response.data?.access_token || response.data?.token || null;
-      const newRefreshToken = response.data?.refresh_token || refreshToken;
-
-      if (!accessToken) {
-        logWarning("Pas de nouveau token dans la réponse");
-        return null;
-      }
-
-      setStoredTokens(accessToken, newRefreshToken);
-      logSuccess("Token rafraîchi avec succès");
-
-      return accessToken;
-    } catch (error) {
-      logError('Échec du refresh token', error);
-      forceLogout();
-      return null;
-    } finally {
-      refreshPromise = null;
-    }
-  })();
-
-  return refreshPromise;
-};
-
-// 🔥 INTERCEPTEUR REQUÊTE - Version simple et fiable
+// ============================================================
+// 🔥 INTERCEPTEUR REQUÊTE - CORRIGÉ
+// ============================================================
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const token = getStoredAccessToken();
-    const pharmacyId = getCurrentPharmacyId();
-    const tenantId = getCurrentTenantId();
-
-    // 🔥 LOG DÉTAILLÉ
-    console.log(`🔍 [${config.method?.toUpperCase()}] ${config.url}`);
-    console.log(`   Token présent: ${!!token}`);
-    if (token) {
-      console.log(`   Token: ${token.substring(0, 30)}...`);
-    }
-
-    // Ajout du token pour toutes les routes sauf auth et public
-    const shouldAddToken = !isPublicRoute(config.url) && !isAuthRoute(config.url);
+    // 🔥 CRITIQUE: Récupérer le token À CHAQUE REQUÊTE
+    const token = getToken();
     
-    if (shouldAddToken && token) {
-      // 🔥 CORRECTION: Utilisation simple des headers comme dans ton code original
+    // Log pour débogage (uniquement en développement)
+    if (import.meta.env.DEV) {
+      console.log(`📤 [${config.method?.toUpperCase()}] ${config.url}`);
+      console.log(`   Token présent: ${!!token}`);
+    }
+    
+    // 🔥 CORRECTION: Ne JAMAIS sauter l'ajout du token
+    // Sauf pour les routes publiques explicites
+    const isPublic = isPublicRoute(config.url);
+    
+    if (!isPublic && token) {
+      // Format exact attendu par le backend
       config.headers.Authorization = `Bearer ${token}`;
-      console.log(`   ✅ Token AJOUTÉ à ${config.url}`);
-    } else if (shouldAddToken && !token) {
-      console.warn(`   ⚠️ PAS de token pour ${config.url}`);
-    } else {
-      console.log(`   ℹ️ Route publique/auth - pas de token`);
+      if (import.meta.env.DEV) {
+        console.log(`   ✅ Token AJOUTÉ`);
+      }
+    } else if (!isPublic && !token) {
+      if (import.meta.env.DEV) {
+        console.warn(`   ⚠️ PAS DE TOKEN - La requête va probablement échouer`);
+      }
+    } else if (import.meta.env.DEV) {
+      console.log(`   ℹ️ Route publique - pas de token requis`);
     }
-
-    // Headers contextuels
-    if (pharmacyId) {
-      config.headers['X-Pharmacy-ID'] = pharmacyId;
+    
+    // Headers additionnels
+    try {
+      const state = useAuthStore.getState();
+      const pharmacyId = state.getCurrentPharmacyId();
+      if (pharmacyId) {
+        config.headers['X-Pharmacy-ID'] = pharmacyId;
+      }
+      if (state.tenantId) {
+        config.headers['X-Tenant-ID'] = state.tenantId;
+      }
+    } catch (e) {
+      // Ignorer les erreurs de lecture du store
     }
-    if (tenantId) {
-      config.headers['X-Tenant-ID'] = tenantId;
-    }
-
+    
     return config;
   },
   (error) => {
-    logError("Erreur intercepteur requête", error);
+    console.error('❌ Erreur intercepteur requête:', error);
     return Promise.reject(error);
   }
 );
 
-// 🔥 INTERCEPTEUR RÉPONSE - Version simple et fiable
+// ============================================================
+// 🔥 INTERCEPTEUR RÉPONSE - GESTION DES ERREURS
+// ============================================================
 api.interceptors.response.use(
   (response: AxiosResponse) => {
-    logSuccess(`⬅️ ${response.status} ${response.config.url}`);
+    if (import.meta.env.DEV) {
+      console.log(`✅ ${response.status} ${response.config.url}`);
+    }
     return response;
   },
   async (error: AxiosError) => {
     const status = error.response?.status;
     const url = error.config?.url || '';
     const originalRequest = error.config as RetryableRequestConfig;
-
-    // Log de l'erreur
-    if (error.response) {
-      logError(`Erreur ${status} ${url}`, error.response.data);
-    } else if (error.request) {
-      logError("Pas de réponse serveur", url);
-    } else {
-      logError("Erreur configuration", error.message);
+    
+    if (import.meta.env.DEV) {
+      console.error(`❌ Erreur ${status} ${url}`);
     }
-
-    // Gestion des 401
-    if (status === 401 && originalRequest && !originalRequest._retry && !isAuthRoute(url)) {
+    
+    // 🔥 Gestion des 401 (token expiré)
+    if (status === 401 && originalRequest && !originalRequest._retry && !isPublicRoute(url)) {
       originalRequest._retry = true;
-
-      logInfo(`🔄 Tentative de refresh pour ${url}`);
-      const newToken = await refreshAccessToken();
       
-      if (newToken) {
-        // 🔥 CORRECTION: Mise à jour simple du header
-        originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        
-        logInfo(`🔄 Nouvelle tentative avec nouveau token`);
-        logInfo(`🔄 Nouvelle tentative ${url}`);
-        
-        // Retenter la requête
-        return api(originalRequest);
+      if (import.meta.env.DEV) {
+        console.log(`🔄 Tentative de refresh token pour ${url}`);
       }
       
-      logWarning(`Refresh échoué pour ${url}, déconnexion`);
-      forceLogout();
-      return Promise.reject(error);
+      try {
+        const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+        
+        if (refreshToken) {
+          const response = await axios.post(
+            `${API_BASE_URL}/auth/refresh`,
+            { refresh_token: refreshToken },
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+          
+          const newToken = response.data?.access_token || response.data?.token;
+          const newRefreshToken = response.data?.refresh_token || refreshToken;
+          
+          if (newToken) {
+            // 🔥 CORRECTION: Utiliser setTokens
+            setTokens(newToken, newRefreshToken);
+            
+            // Mettre à jour le header de la requête originale
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            
+            if (import.meta.env.DEV) {
+              console.log(`✅ Token rafraîchi, nouvelle tentative`);
+            }
+            return api(originalRequest);
+          }
+        }
+      } catch (refreshError) {
+        if (import.meta.env.DEV) {
+          console.error('❌ Échec du refresh token:', refreshError);
+        }
+      }
+      
+      // Refresh échoué - déconnexion
+      if (import.meta.env.DEV) {
+        console.log('🔒 Déconnexion suite à token invalide');
+      }
+      clearAuth();
+      
+      // Rediriger vers login si pas déjà dessus
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login';
+      }
     }
-
+    
+    // 🔥 IMPORTANT: Transformer le HTML en erreur JSON pour éviter les erreurs de parsing
+    if (error.response?.data && typeof error.response.data === 'string') {
+      const data = error.response.data as string;
+      if (data.includes('<!doctype html') || data.includes('<html')) {
+        // Créer une erreur formatée
+        const jsonError = {
+          ...error,
+          response: {
+            ...error.response,
+            data: {
+              detail: `Erreur ${status}: Le serveur a retourné une page HTML`,
+              status_code: status,
+              path: url,
+              original_response_type: 'html'
+            }
+          }
+        };
+        return Promise.reject(jsonError);
+      }
+    }
+    
     // Gestion des 403
-    if (status === 403) {
-      logWarning(`Accès interdit ${url}`);
+    if (status === 403 && import.meta.env.DEV) {
+      console.warn(`🚫 Accès interdit ${url}`);
     }
-
+    
     return Promise.reject(error);
   }
 );
 
+// ============================================================
+// UTILITAIRES POUR FORCER L'AJOUT DU TOKEN MANUELLEMENT
+// ============================================================
+
+/**
+ * Force la mise à jour du token dans les headers par défaut
+ * À appeler après une connexion réussie
+ */
+export const setAuthToken = (token: string | null, refreshToken?: string | null): void => {
+  if (token) {
+    setTokens(token, refreshToken);
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    if (import.meta.env.DEV) {
+      console.log('🔐 Token configuré globalement');
+    }
+  } else {
+    delete api.defaults.headers.common['Authorization'];
+    if (import.meta.env.DEV) {
+      console.log('🔓 Token supprimé');
+    }
+  }
+};
+
+/**
+ * Rafraîchit manuellement le token
+ */
+export const refreshTokenManually = async (): Promise<string | null> => {
+  const state = useAuthStore.getState();
+  return state.refreshSession();
+};
+
+/**
+ * Vérifie si l'utilisateur est authentifié
+ */
+export const isAuthenticated = (): boolean => {
+  const token = getToken();
+  if (!token) return false;
+  
+  const state = useAuthStore.getState();
+  return !state.isTokenExpired();
+};
+
+// ============================================================
+// INITIALISATION - FORCER LE TOKEN DANS LES HEADERS PAR DÉFAUT
+// ============================================================
+const initToken = (): void => {
+  const token = getToken();
+  if (token) {
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    if (import.meta.env.DEV) {
+      console.log('🔐 Token initialisé dans les headers par défaut');
+    }
+  }
+};
+initToken();
+
+// ============================================================
+// EXPORT
+// ============================================================
 export default api;

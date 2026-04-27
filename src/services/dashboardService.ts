@@ -2,7 +2,8 @@
 /**
  * Service de tableau de bord
  * Communication 100% avec les endpoints dashboard.py
- * Version unifiée - mars 2026
+ * Version unifiée - Basée sur la BRANCHE de l'utilisateur
+ * Mars 2026
  */
 
 import api from '@/api/client';
@@ -13,7 +14,34 @@ import axiosRetry from 'axios-retry';
 // TYPES ET INTERFACES
 // ===================================================================
 
+export interface DashboardFilters {
+  /** ID de la branche (utilisé uniquement, plus de pharmacy_id) */
+  branch_id?: string;
+  start_date?: string;
+  end_date?: string;
+  period?: 'day' | 'week' | 'month';
+  limit?: number;
+  severity?: 'low' | 'medium' | 'high';
+  type?: 'low_stock' | 'expired' | 'expiring';
+  include_resolved?: boolean;
+}
+
+export interface DashboardBranchInfo {
+  id: string;
+  name: string;
+  address: string;
+  phone: string;
+  email: string;
+  city: string;
+  parent_pharmacy_id: string;
+  parent_pharmacy_name: string;
+  manager_name?: string;
+}
+
 export interface DashboardStats {
+  // Informations de la branche active
+  branch_info?: DashboardBranchInfo;
+  
   // Ventes
   daily_sales: number;
   daily_sales_count: number;
@@ -35,7 +63,7 @@ export interface DashboardStats {
   total_stock_value: number;
   total_purchase_value: number;
   potential_profit: number;
-  monthly_costs: number;
+  monthly_expenses: number;
   daily_expenses: number;
   net_profit: number;
   daily_profit: number;
@@ -62,7 +90,8 @@ export interface DashboardStats {
   active_users: number;
 
   // Transferts
-  pending_transfers_count: number;
+  pending_transfers: number;
+  in_transit_transfers: number;
 
   // Tenant
   tenant?: {
@@ -74,7 +103,6 @@ export interface DashboardStats {
   };
 
   // Alertes
-  alerts: DashboardAlert[];
   has_critical_alerts: boolean;
 
   // Données supplémentaires
@@ -84,6 +112,10 @@ export interface DashboardStats {
   expense_categories: ExpenseCategory[];
   low_stock_products: LowStockProduct[];
   expiring_products: ExpiringProduct[];
+  
+  // Période
+  period_start?: string;
+  period_end?: string;
 }
 
 export interface SalesHistoryItem {
@@ -91,13 +123,16 @@ export interface SalesHistoryItem {
   count: number;
   amount: number;
   transaction_count?: number;
+  total_revenue?: number;
+  average_basket?: number;
 }
 
 export interface DashboardAlert {
   id: string;
-  type: 'low_stock' | 'expired' | 'expiring';
+  type: 'low_stock' | 'out_of_stock' | 'expired' | 'expiring';
   severity: 'low' | 'medium' | 'high';
   severity_priority?: number;
+  title: string;
   message: string;
   product_id: string | null;
   product_name: string;
@@ -105,8 +140,16 @@ export interface DashboardAlert {
   current_stock: number;
   threshold: number;
   expiry_date?: string | null;
+  days_remaining?: number | null;
   created_at: string;
   is_resolved: boolean;
+}
+
+export interface DashboardAlertsResponse {
+  alerts: DashboardAlert[];
+  total: number;
+  critical_count: number;
+  warning_count: number;
 }
 
 export interface RecentTransaction {
@@ -143,12 +186,6 @@ export interface ExpiringProduct {
   name: string;
   expiry_date: string;
   quantity: number;
-}
-
-export interface DashboardAlertsResponse {
-  alerts: DashboardAlert[];
-  total: number;
-  has_critical: boolean;
 }
 
 export interface SalesTrend {
@@ -320,15 +357,38 @@ export interface UserSessionsResponse {
   total_count: number;
 }
 
-export interface DashboardFilters {
-  pharmacy_id?: number;
-  start_date?: string;
-  end_date?: string;
-  limit?: number;
-  severity?: 'low' | 'medium' | 'high';
-  type?: 'low_stock' | 'expired' | 'expiring';
-  include_resolved?: boolean;
-  period?: 'day' | 'week' | 'month' | 'year';
+export interface StockValueHistoryResponse {
+  history: StockValueHistoryItem[];
+  total_stock_value: number;
+  start_date: string;
+  end_date: string;
+}
+
+export interface StockValueHistoryItem {
+  date: string;
+  value: number;
+}
+
+export interface SalesHistoryResponse {
+  history: SalesHistoryItem[];
+  total_revenue: number;
+  total_sales: number;
+  average_daily_revenue: number;
+  start_date: string;
+  end_date: string;
+}
+
+export interface ProfitHistoryResponse {
+  history: ProfitHistoryItem[];
+  total_profit: number;
+  average_profit: number;
+  start_date: string;
+  end_date: string;
+}
+
+export interface ProfitHistoryItem {
+  date: string;
+  profit: number;
 }
 
 // ===================================================================
@@ -379,23 +439,53 @@ class DashboardService {
     }
   }
 
+  private buildParams(filters?: DashboardFilters): Record<string, any> {
+    const params: Record<string, any> = {
+      t: Date.now()
+    };
+    
+    // Utiliser branch_id au lieu de pharmacy_id
+    if (filters?.branch_id) {
+      params.branch_id = filters.branch_id;
+    }
+    if (filters?.start_date) {
+      params.start_date = filters.start_date;
+    }
+    if (filters?.end_date) {
+      params.end_date = filters.end_date;
+    }
+    if (filters?.period) {
+      params.period = filters.period;
+    }
+    if (filters?.limit) {
+      params.limit = filters.limit;
+    }
+    if (filters?.severity) {
+      params.severity = filters.severity;
+    }
+    if (filters?.type) {
+      params.type = filters.type;
+    }
+    if (filters?.include_resolved !== undefined) {
+      params.include_resolved = filters.include_resolved;
+    }
+    
+    return params;
+  }
+
   // ===================================================================
-  // ENDPOINTS PRINCIPAUX
+  // ENDPOINTS PRINCIPAUX (Basés sur BRANCH)
   // ===================================================================
 
   /**
    * Récupère toutes les statistiques du dashboard
    * GET /dashboard/stats
+   * @param filters Filtres (branch_id obligatoire)
    */
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
       const response = await api.get('/dashboard/stats', {
-        params: {
-          pharmacy_id: filters?.pharmacy_id,
-          start_date: filters?.start_date,
-          end_date: filters?.end_date,
-          t: Date.now()
-        }
+        params: this.buildParams(filters)
       });
       
       return response.data;
@@ -407,18 +497,12 @@ class DashboardService {
   /**
    * Récupère les alertes d'inventaire
    * GET /dashboard/alerts
+   * @param filters Filtres (branch_id obligatoire)
    */
   async getAlerts(filters?: DashboardFilters): Promise<DashboardAlertsResponse> {
     try {
       const response = await api.get('/dashboard/alerts', {
-        params: {
-          pharmacy_id: filters?.pharmacy_id,
-          limit: filters?.limit || 10,
-          severity: filters?.severity,
-          type: filters?.type,
-          include_resolved: filters?.include_resolved || false,
-          t: Date.now()
-        }
+        params: this.buildParams(filters)
       });
       
       return response.data;
@@ -428,31 +512,39 @@ class DashboardService {
   }
 
   /**
-   * Marque une alerte comme résolue
-   * POST /dashboard/alerts/{alert_id}/resolve
+   * Récupère l'historique de la valeur du stock
+   * GET /dashboard/stock-value-history
+   * @param branchId ID de la branche
+   * @param days Nombre de jours
    */
-  async resolveAlert(alertId: string): Promise<{ success: boolean; message: string; alert_id: string }> {
+  async getStockValueHistory(branchId: string, days: number = 30): Promise<StockValueHistoryResponse> {
     try {
-      const response = await api.post(`/dashboard/alerts/${alertId}/resolve`, {});
+      const response = await api.get('/dashboard/stock-value-history', {
+        params: {
+          branch_id: branchId,
+          days,
+          t: Date.now()
+        }
+      });
+      
       return response.data;
     } catch (error) {
-      return this.handleError(error, 'resolveAlert');
+      return this.handleError(error, 'getStockValueHistory');
     }
   }
 
   /**
    * Récupère l'historique des ventes
    * GET /dashboard/sales-history
+   * @param branchId ID de la branche
+   * @param days Nombre de jours
    */
-  async getSalesHistory(filters?: DashboardFilters): Promise<{ history: SalesHistoryItem[] }> {
+  async getSalesHistory(branchId: string, days: number = 30): Promise<SalesHistoryResponse> {
     try {
       const response = await api.get('/dashboard/sales-history', {
         params: {
-          pharmacy_id: filters?.pharmacy_id,
-          period: filters?.period || 'day',
-          start_date: filters?.start_date,
-          end_date: filters?.end_date,
-          limit: filters?.limit || 30,
+          branch_id: branchId,
+          days,
           t: Date.now()
         }
       });
@@ -464,14 +556,54 @@ class DashboardService {
   }
 
   /**
+   * Récupère l'historique des bénéfices
+   * GET /dashboard/profit-history
+   * @param branchId ID de la branche
+   * @param days Nombre de jours
+   */
+  async getProfitHistory(branchId: string, days: number = 30): Promise<ProfitHistoryResponse> {
+    try {
+      const response = await api.get('/dashboard/profit-history', {
+        params: {
+          branch_id: branchId,
+          days,
+          t: Date.now()
+        }
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getProfitHistory');
+    }
+  }
+
+  /**
+   * Récupère l'historique des ventes (alias pour compatibilité)
+   * GET /dashboard/sales-history
+   */
+  async getSalesHistoryLegacy(filters?: DashboardFilters): Promise<{ history: SalesHistoryItem[] }> {
+    try {
+      const response = await api.get('/dashboard/sales-history', {
+        params: this.buildParams(filters)
+      });
+      
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'getSalesHistory');
+    }
+  }
+
+  /**
    * Récupère les tendances des ventes
    * GET /dashboard/sales/trends
+   * @param branchId ID de la branche
+   * @param period Période
    */
-  async getSalesTrends(period: 'day' | 'week' | 'month' | 'year' = 'week', pharmacyId?: number): Promise<SalesTrend[]> {
+  async getSalesTrends(branchId: string, period: 'day' | 'week' | 'month' | 'year' = 'week'): Promise<SalesTrend[]> {
     try {
       const response = await api.get('/dashboard/sales/trends', {
         params: {
-          pharmacy_id: pharmacyId,
+          branch_id: branchId,
           period,
           t: Date.now()
         }
@@ -486,11 +618,15 @@ class DashboardService {
   /**
    * Récupère la distribution des produits par catégorie
    * GET /dashboard/products/categories
+   * @param branchId ID de la branche
    */
-  async getProductsByCategory(pharmacyId?: number): Promise<ProductCategory[]> {
+  async getProductsByCategory(branchId?: string): Promise<ProductCategory[]> {
     try {
       const response = await api.get('/dashboard/products/categories', {
-        params: { pharmacy_id: pharmacyId, t: Date.now() }
+        params: {
+          branch_id: branchId,
+          t: Date.now()
+        }
       });
       
       return response.data;
@@ -502,11 +638,17 @@ class DashboardService {
   /**
    * Récupère les produits expirés et ceux qui expirent bientôt
    * GET /dashboard/expired-products
+   * @param branchId ID de la branche
+   * @param days Nombre de jours pour l'expiration
    */
-  async getExpiryReport(pharmacyId?: number, days: number = 30): Promise<ExpiryProductsResponse> {
+  async getExpiryReport(branchId?: string, days: number = 30): Promise<ExpiryProductsResponse> {
     try {
       const response = await api.get('/dashboard/expired-products', {
-        params: { pharmacy_id: pharmacyId, days, t: Date.now() }
+        params: {
+          branch_id: branchId,
+          days,
+          t: Date.now()
+        }
       });
       
       return response.data;
@@ -518,11 +660,17 @@ class DashboardService {
   /**
    * Récupère les produits qui n'ont jamais été vendus
    * GET /dashboard/products/never-sold
+   * @param branchId ID de la branche
+   * @param limit Nombre de résultats
    */
-  async getNeverSoldProducts(pharmacyId?: number, limit: number = 50): Promise<NeverSoldProductsResponse> {
+  async getNeverSoldProducts(branchId?: string, limit: number = 50): Promise<NeverSoldProductsResponse> {
     try {
       const response = await api.get('/dashboard/products/never-sold', {
-        params: { pharmacy_id: pharmacyId, limit, t: Date.now() }
+        params: {
+          branch_id: branchId,
+          limit,
+          t: Date.now()
+        }
       });
       
       return response.data;
@@ -534,16 +682,19 @@ class DashboardService {
   /**
    * Récupère les ventes par utilisateur
    * GET /dashboard/sales/by-user
+   * @param branchId ID de la branche
+   * @param startDate Date de début
+   * @param endDate Date de fin
    */
   async getSalesByUser(
+    branchId?: string,
     startDate?: string,
-    endDate?: string,
-    pharmacyId?: number
+    endDate?: string
   ): Promise<SalesByUserResponse> {
     try {
       const response = await api.get('/dashboard/sales/by-user', {
         params: {
-          pharmacy_id: pharmacyId,
+          branch_id: branchId,
           start_date: startDate,
           end_date: endDate,
           t: Date.now()
@@ -559,12 +710,14 @@ class DashboardService {
   /**
    * Récupère le bénéfice journalier détaillé
    * GET /dashboard/daily-profit
+   * @param branchId ID de la branche
+   * @param targetDate Date cible
    */
-  async getDailyProfit(targetDate?: string, pharmacyId?: number): Promise<DailyProfitResponse> {
+  async getDailyProfit(branchId?: string, targetDate?: string): Promise<DailyProfitResponse> {
     try {
       const response = await api.get('/dashboard/daily-profit', {
         params: {
-          pharmacy_id: pharmacyId,
+          branch_id: branchId,
           target_date: targetDate,
           t: Date.now()
         }
@@ -579,11 +732,20 @@ class DashboardService {
   /**
    * Récupère les indicateurs de performance
    * GET /dashboard/performance
+   * @param branchId ID de la branche
+   * @param period Période
    */
-  async getPerformanceIndicators(period: 'day' | 'week' | 'month' | 'year' = 'month', pharmacyId?: number): Promise<PerformanceIndicators> {
+  async getPerformanceIndicators(
+    branchId?: string,
+    period: 'day' | 'week' | 'month' | 'year' = 'month'
+  ): Promise<PerformanceIndicators> {
     try {
       const response = await api.get('/dashboard/performance', {
-        params: { pharmacy_id: pharmacyId, period, t: Date.now() }
+        params: {
+          branch_id: branchId,
+          period,
+          t: Date.now()
+        }
       });
       
       return response.data;
@@ -595,10 +757,11 @@ class DashboardService {
   /**
    * Rafraîchit le cache du dashboard
    * POST /dashboard/refresh-cache
+   * @param branchId ID de la branche
    */
-  async refreshDashboardCache(pharmacyId?: number): Promise<{ success: boolean; message: string }> {
+  async refreshDashboardCache(branchId?: string): Promise<{ success: boolean; message: string }> {
     try {
-      const response = await api.post('/dashboard/refresh-cache', { pharmacy_id: pharmacyId });
+      const response = await api.post('/dashboard/refresh-cache', { branch_id: branchId });
       return response.data;
     } catch (error) {
       console.warn('Erreur lors du rafraîchissement du cache:', error);
@@ -609,12 +772,14 @@ class DashboardService {
   /**
    * Récupère le rapport des produits en stock bas
    * GET /dashboard/low-stock-report
+   * @param branchId ID de la branche
+   * @param thresholdMultiplier Multiplicateur de seuil
    */
-  async getLowStockReport(pharmacyId?: number, thresholdMultiplier: number = 1.0): Promise<LowStockReportResponse> {
+  async getLowStockReport(branchId?: string, thresholdMultiplier: number = 1.0): Promise<LowStockReportResponse> {
     try {
       const response = await api.get('/dashboard/low-stock-report', {
         params: {
-          pharmacy_id: pharmacyId,
+          branch_id: branchId,
           threshold_multiplier: thresholdMultiplier,
           t: Date.now()
         }
@@ -623,6 +788,20 @@ class DashboardService {
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getLowStockReport');
+    }
+  }
+
+  /**
+   * Marque une alerte comme résolue
+   * POST /dashboard/alerts/{alert_id}/resolve
+   * @param alertId ID de l'alerte
+   */
+  async resolveAlert(alertId: string): Promise<{ success: boolean; message: string; alert_id: string }> {
+    try {
+      const response = await api.post(`/dashboard/alerts/${alertId}/resolve`, {});
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'resolveAlert');
     }
   }
 
@@ -720,6 +899,28 @@ class DashboardService {
       return response.data;
     } catch (error) {
       return this.handleError(error, 'updateSessionActivity');
+    }
+  }
+
+  // ===================================================================
+  // ENDPOINTS DE TEST
+  // ===================================================================
+
+  /**
+   * Teste la connexion au module dashboard
+   * GET /dashboard/test
+   */
+  async testDashboard(): Promise<{
+    message: string;
+    version: string;
+    user: { id: string; email: string; role: string };
+    features: string[];
+  }> {
+    try {
+      const response = await api.get('/dashboard/test');
+      return response.data;
+    } catch (error) {
+      return this.handleError(error, 'testDashboard');
     }
   }
 }
