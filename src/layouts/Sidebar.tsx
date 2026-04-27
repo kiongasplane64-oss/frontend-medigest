@@ -114,7 +114,7 @@ const menuGroups: MenuGroup[] = [
         icon: <Package size={20}/>, 
         label: 'Stock', 
         href: '/stock', 
-        roles: ["admin", "gestionnaire","vendeur", "pharmacien", "stockiste", "preparateur"],
+        roles: ["admin", "gestionnaire", "pharmacien", "stockiste", "preparateur"],
         badge: (alerts: any) => {
           if (alerts?.stock?.out_of_stock?.length || alerts?.stock?.low_stock?.length) {
             return (alerts.stock.out_of_stock?.length || 0) + (alerts.stock.low_stock?.length || 0);

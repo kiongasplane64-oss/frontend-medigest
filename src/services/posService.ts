@@ -1,4 +1,4 @@
-// services/posService.ts
+// services/posService.ts - Version sans synchronisation, vente directe au serveur
 import { 
   observable, 
   action, 
@@ -11,7 +11,6 @@ import api from '@/api/client';
 import { useAuthStore } from '@/store/useAuthStore';
 import { saleService } from './saleService';
 import { inventoryService } from './inventoryService';
-import { useSaleStore, type LocalSale } from '@/store/saleStore';
 
 // ============================================
 // TYPES - ALIGNÉS AVEC LE BACKEND
@@ -89,6 +88,7 @@ export interface PharmacyInfo {
   licenseNumber: string;
   logoUrl?: string;
 }
+
 export type SalesType = 'wholesale' | 'retail' | 'both';
 export type CurrencyMode = 'cdf_only' | 'usd_only' | 'both';
 
@@ -116,7 +116,11 @@ export type PaymentMethod = 'cash' | 'mobile_money' | 'account';
 export type ScanMode = 'auto' | 'manual';
 
 export interface SaleData {
-  items: Omit<CartItem, 'unitPrice' | 'stock' | 'selling_price'>[];
+  items: Array<{
+    product_id: string;
+    quantity: number;
+    discount_percent?: number;
+  }>;
   total: number;
   paymentMethod: PaymentMethod;
   timestamp: string;
@@ -167,10 +171,9 @@ export interface AutomaticPricingConfig {
 
 const SCAN_COOLDOWN = 1500;
 const VIBRATION_DURATION = 80;
-const SYNC_INTERVAL_MS = 30000; // 30 secondes
 
 // ============================================
-// SERVICE PRINCIPAL
+// SERVICE PRINCIPAL - SANS SYNCHRONISATION
 // ============================================
 
 export class PosService {
@@ -227,9 +230,6 @@ export class PosService {
   isOnline = true;
   
   customerName = 'Passager';
-  
-  // Timer pour synchronisation périodique
-  private syncIntervalId: NodeJS.Timeout | null = null;
 
   // Callbacks
   private onCartChange?: (cart: CartItem[]) => void;
@@ -240,7 +240,6 @@ export class PosService {
   private onCategoriesChange?: (categories: Category[]) => void;
   private onConfigChange?: (config: PharmacyConfig) => void;
   private onStatsChange?: (stats: DailyStats) => void;
-  private onSyncStatusChange?: (isSyncing: boolean) => void;
 
   constructor() {
     makeObservable(this, {
@@ -293,8 +292,6 @@ export class PosService {
       loadInitialData: action,
       filterProducts: action,
       setCustomerName: action,
-      startPeriodicSync: action,
-      stopPeriodicSync: action,
     });
   }
 
@@ -332,7 +329,6 @@ export class PosService {
     onCategoriesChange?: (categories: Category[]) => void;
     onConfigChange?: (config: PharmacyConfig) => void;
     onStatsChange?: (stats: DailyStats) => void;
-    onSyncStatusChange?: (isSyncing: boolean) => void;
   }) {
     this.onCartChange = callbacks.onCartChange;
     this.onProcessingChange = callbacks.onProcessingChange;
@@ -342,7 +338,6 @@ export class PosService {
     this.onCategoriesChange = callbacks.onCategoriesChange;
     this.onConfigChange = callbacks.onConfigChange;
     this.onStatsChange = callbacks.onStatsChange;
-    this.onSyncStatusChange = callbacks.onSyncStatusChange;
   }
 
   setLoading(loading: boolean) {
@@ -414,90 +409,9 @@ export class PosService {
   }
 
   setOnlineStatus(isOnline: boolean) {
-    const wasOffline = !this.isOnline;
     this.isOnline = isOnline;
-    
-    // Synchronisation au retour en ligne
-    if (wasOffline && isOnline) {
-      console.log('🔄 Connexion rétablie, synchronisation des ventes...');
-      this.syncOnReconnect();
-    }
-    
-    // Gestion de la synchronisation périodique
-    if (isOnline) {
-      this.startPeriodicSync();
-    } else {
-      this.stopPeriodicSync();
-    }
-  }
-  
-  /**
-   * Démarre la synchronisation périodique (toutes les 30 secondes)
-   */
-  startPeriodicSync() {
-    if (this.syncIntervalId) {
-      return; // Déjà démarré
-    }
-    
-    console.log('🔄 Démarrage synchronisation périodique (toutes les 30s)');
-    
-    this.syncIntervalId = setInterval(() => {
-      const pendingCount = useSaleStore.getState().getPendingCount();
-      const syncInProgress = useSaleStore.getState().syncInProgress;
-      
-      if (this.isOnline && pendingCount > 0 && !syncInProgress) {
-        console.log(`🔄 Synchronisation périodique: ${pendingCount} vente(s) en attente`);
-        this.triggerSync();
-      }
-    }, SYNC_INTERVAL_MS);
-  }
-  
-  /**
-   * Arrête la synchronisation périodique
-   */
-  stopPeriodicSync() {
-    if (this.syncIntervalId) {
-      clearInterval(this.syncIntervalId);
-      this.syncIntervalId = null;
-      console.log('⏹️ Synchronisation périodique arrêtée');
-    }
-  }
-  
-  /**
-   * Synchronisation au retour en ligne
-   */
-  async syncOnReconnect() {
-    const pendingCount = useSaleStore.getState().getPendingCount();
-    const syncInProgress = useSaleStore.getState().syncInProgress;
-    
-    if (pendingCount > 0 && !syncInProgress) {
-      console.log(`🔄 Synchronisation au retour en ligne: ${pendingCount} vente(s)`);
-      await this.triggerSync();
-    }
-  }
-  
-  /**
-   * Déclenche la synchronisation via le store
-   */
-  async triggerSync() {
-    this.onSyncStatusChange?.(true);
-    try {
-      await useSaleStore.getState().syncPendingSales();
-    } finally {
-      this.onSyncStatusChange?.(false);
-    }
-  }
-  
-  /**
-   * Vérifie et déclenche une synchronisation si nécessaire
-   */
-  checkAndSync() {
-    const pendingCount = useSaleStore.getState().getPendingCount();
-    const syncInProgress = useSaleStore.getState().syncInProgress;
-    
-    if (this.isOnline && pendingCount > 0 && !syncInProgress) {
-      this.triggerSync();
-    }
+    // Plus de synchronisation automatique
+    console.log(`📡 Statut de connexion: ${isOnline ? 'En ligne' : 'Hors ligne'}`);
   }
 
   setCustomerName(name: string) {
@@ -528,16 +442,6 @@ export class PosService {
       await this.loadDailyStats();
       
       localStorage.setItem('pharmacy_config', JSON.stringify(this.config));
-      
-      // Démarrer la synchronisation périodique si en ligne
-      if (this.isOnline) {
-        this.startPeriodicSync();
-      }
-      
-      // Vérifier les ventes en attente au chargement
-      setTimeout(() => {
-        this.checkAndSync();
-      }, 1000);
       
       console.log('✅ Données chargées depuis le serveur');
       
@@ -618,45 +522,43 @@ export class PosService {
     }
   }
 
-  // Dans posService.ts - méthode loadProducts()
-async loadProducts() {
-  try {
-    const { user } = useAuthStore.getState();
-    const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
+  async loadProducts() {
+    try {
+      const { user } = useAuthStore.getState();
+      const pharmacy_id = this.cashierInfo.pharmacy_id || user?.pharmacy_id;
 
-    if (!pharmacy_id) {
-      console.warn('⚠️ Aucun ID de pharmacie disponible');
+      if (!pharmacy_id) {
+        console.warn('⚠️ Aucun ID de pharmacie disponible');
+        runInAction(() => {
+          this.products = [];
+          this.filteredProducts = [];
+          this.filterProducts();
+        });
+        return;
+      }
+
+      console.log(`📦 Chargement de tous les produits pour la pharmacie: ${pharmacy_id}`);
+
+      const allProducts = await inventoryService.getAllProducts(pharmacy_id);
+      const normalizedProducts = allProducts.map(p => this.normalizeProduct(p));
+      
       runInAction(() => {
-        this.products = [];
-        this.filteredProducts = [];
+        this.products = normalizedProducts;
+        this.rebuildProductsMap(normalizedProducts);
         this.filterProducts();
       });
-      return;
+      
+      this.onProductsChange?.(this.products);
+      
+      console.log(`✅ ${normalizedProducts.length} produits chargés (tous les produits de la branche)`);
+      
+    } catch (error) {
+      console.error('❌ Erreur chargement produits:', error);
+      toast.error('Erreur de chargement des produits');
+      throw error;
     }
-
-    console.log(`📦 Chargement de tous les produits pour la pharmacie: ${pharmacy_id}`);
-
-    // Utiliser la nouvelle méthode getAllProducts qui récupère TOUS les produits
-    const allProducts = await inventoryService.getAllProducts(pharmacy_id);
-    
-    const normalizedProducts = allProducts.map(p => this.normalizeProduct(p));
-    
-    runInAction(() => {
-      this.products = normalizedProducts;
-      this.rebuildProductsMap(normalizedProducts);
-      this.filterProducts();
-    });
-    
-    this.onProductsChange?.(this.products);
-    
-    console.log(`✅ ${normalizedProducts.length} produits chargés (tous les produits de la branche)`);
-    
-  } catch (error) {
-    console.error('❌ Erreur chargement produits:', error);
-    toast.error('Erreur de chargement des produits');
-    throw error;
   }
-}
+
   normalizeProduct(p: any): Product {
     return {
       id: String(p.id),
@@ -923,86 +825,125 @@ async loadProducts() {
   }
 
   // ============================================
-  // VALIDATION DE LA VENTE - AVEC SALE STORE
+  // VALIDATION DE LA VENTE - DIRECTE AU SERVEUR
   // ============================================
 
-  async validateSale() {
+  async validateSale(): Promise<{ success: boolean; data?: any; error?: string }> {
     if (this.cart.length === 0) {
       toast.error('Panier vide');
-      return;
+      return { success: false, error: 'Panier vide' };
     }
     
     if (this.isProcessing) {
       toast.error('Une vente est déjà en cours');
-      return;
+      return { success: false, error: 'Vente déjà en cours' };
+    }
+
+    if (!this.isOnline) {
+      toast.error('Connexion internet requise pour effectuer une vente');
+      return { success: false, error: 'Hors ligne' };
     }
 
     this.setProcessing(true);
 
-    const cartSnapshot = this.cart.map(item => ({ ...item }));
-    const customerNameSnapshot = this.customerName;
-    const paymentMethodSnapshot = this.paymentMethod;
-    const timestamp = Date.now();
-    const tempId = `temp-${timestamp}`;
+    try {
+      const cartSnapshot = this.cart.map(item => ({ ...item }));
+      const customerNameSnapshot = this.customerName;
+      const paymentMethodSnapshot = this.paymentMethod;
+      const globalDiscount = 0; // À passer en paramètre si besoin
 
-    const rawTotal = cartSnapshot.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
-    const totalAmount = this.config.sellByExchangeRate
-      ? rawTotal / this.activeCurrency.exchangeRate
-      : rawTotal;
+      // Calcul des totaux
+      const subtotal = cartSnapshot.reduce((acc, item) => {
+        const itemTotal = item.unitPrice * item.quantity;
+        const itemDiscount = itemTotal * ((item.discount_percent || 0) / 100);
+        return acc + (itemTotal - itemDiscount);
+      }, 0);
+      
+      const total = subtotal * (1 - (globalDiscount / 100));
 
-    const localSale: LocalSale = {
-      id: tempId,
-      tempId: tempId,
-      receiptNumber: `TEMP-${timestamp}`,
-      items: cartSnapshot.map(item => ({
-        id: item.id,
-        name: item.name,
-        product_name: item.name,
-        price: item.unitPrice,
-        quantity: item.quantity,
-        code: item.code,
-        product_code: item.code,
-      })),
-      total: totalAmount,
-      paymentMethod: paymentMethodSnapshot,
-      timestamp: timestamp,
-      cashierName: this.cashierInfo.name,
-      posName: this.cashierInfo.posName,
-      sessionNumber: this.cashierInfo.sessionNumber,
-      customerName: customerNameSnapshot,
-      status: 'pending',
-      synced: false,
-    };
+      // Préparer les données pour l'API
+      const saleData = {
+        items: cartSnapshot.map(item => ({
+          product_id: item.id,
+          quantity: item.quantity,
+          discount_percent: item.discount_percent || 0,
+        })),
+        payment_method: paymentMethodSnapshot,
+        customer_name: customerNameSnapshot,
+        pharmacy_id: this.cashierInfo.pharmacy_id,
+        global_discount_percent: globalDiscount > 0 ? globalDiscount : undefined,
+      };
 
-    // Ajouter au store (cela déclenchera une synchronisation)
-    useSaleStore.getState().addLocalSale(localSale);
+      console.log('📤 Envoi de la vente au serveur:', saleData);
+      
+      const response = await api.post('/sales', saleData);
+      const saleResponse = response.data.sale || response.data;
+      
+      console.log('✅ Vente enregistrée sur le serveur:', saleResponse);
 
-    // Vider le panier
-    this.setCart([]);
-    
-    // Afficher la facture
-    this.setCurrentSale(localSale);
-    this.setShowInvoice(true);
-    
-    // Mettre à jour les stats
-    this.updateStats({
-      total: this.stats.total + totalAmount,
-      salesCount: this.stats.salesCount + 1,
-      currentClient: customerNameSnapshot,
-    });
+      // Créer l'objet facture
+      const invoiceData = {
+        id: saleResponse?.id || `sale_${Date.now()}`,
+        receiptNumber: saleResponse?.receipt_number || `VENTE-${Date.now()}`,
+        items: cartSnapshot.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.unitPrice,
+          quantity: item.quantity,
+          code: item.code,
+          discount_percent: item.discount_percent || 0,
+          discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
+        })),
+        subtotal: subtotal,
+        total: total,
+        discount_percent: globalDiscount,
+        discount_amount: subtotal * (globalDiscount / 100),
+        paymentMethod: paymentMethodSnapshot,
+        timestamp: Date.now(),
+        cashierName: this.cashierInfo.name,
+        cashierId: this.cashierInfo.id,
+        posName: this.cashierInfo.posName,
+        branchId: this.cashierInfo.pharmacy_id,
+        sessionNumber: this.cashierInfo.sessionNumber,
+        customerName: customerNameSnapshot,
+      };
 
-    if (this.config.invoice.autoPrint) {
-      setTimeout(() => window.print(), 100);
+      // Vider le panier
+      this.setCart([]);
+      
+      // Afficher la facture
+      this.setCurrentSale(invoiceData);
+      this.setShowInvoice(true);
+      
+      // Mettre à jour les stats
+      this.updateStats({
+        total: this.stats.total + total,
+        salesCount: this.stats.salesCount + 1,
+        currentClient: customerNameSnapshot,
+      });
+
+      if (this.config.invoice.autoPrint) {
+        setTimeout(() => window.print(), 100);
+      }
+
+      toast.success(`Vente enregistrée ! Réf: ${invoiceData.receiptNumber}`);
+      
+      // Recharger les produits pour mettre à jour les stocks
+      await this.loadProducts();
+      
+      this.setProcessing(false);
+      
+      return { success: true, data: invoiceData };
+      
+    } catch (error: any) {
+      console.error('❌ Erreur validation:', error);
+      const errorMessage = error.response?.data?.message || error.message || 'Erreur lors de la validation';
+      toast.error(errorMessage);
+      
+      this.setProcessing(false);
+      
+      return { success: false, error: errorMessage };
     }
-
-    toast.success('Vente enregistrée !');
-    
-    this.setProcessing(false);
-    
-    // Vérifier la synchronisation après la vente
-    setTimeout(() => {
-      this.checkAndSync();
-    }, 500);
   }
 
   // ============================================
@@ -1051,7 +992,6 @@ async loadProducts() {
     this.categories = [];
     this.filteredProducts = [];
     this.customerName = 'Passager';
-    this.stopPeriodicSync();
   }
 }
 

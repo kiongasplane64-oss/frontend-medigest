@@ -15,8 +15,6 @@ import {
   Phone,
   Users,
   WifiOff,
-  RefreshCw,
-  AlertCircle,
   ChevronLeft,
   ChevronRight,
   DollarSign,
@@ -30,14 +28,11 @@ import { posService, CartItem, Product, PaymentMethod, CurrencyConfig } from '@/
 import { useToast } from '@/hooks/useToast';
 import { Toaster } from '@/components/ui/Toaster';
 import FacturePrinter from '../sales/views/FacturePrinter';
-import { useSaleStore } from '@/store/saleStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import api from '@/api/client';
 
-// Types pour les statuts de produit
 type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
 
-// Fonction pour déterminer le statut d'un produit
 const getProductStatus = (
   product: Product, 
   lowStockThreshold: number = 10, 
@@ -62,40 +57,19 @@ const getProductStatus = (
   return 'in_stock';
 };
 
-// Composant pour afficher le statut du produit
 const ProductStatusBadge = memo(({ status, stock }: { status: ProductStatus; stock: number }) => {
   const getStatusConfig = () => {
     switch (status) {
       case 'out_of_stock':
-        return {
-          icon: PackageX,
-          text: 'Rupture',
-          className: 'bg-red-100 text-red-700'
-        };
+        return { icon: PackageX, text: 'Rupture', className: 'bg-red-100 text-red-700' };
       case 'low_stock':
-        return {
-          icon: AlertTriangle,
-          text: `Stock bas (${stock})`,
-          className: 'bg-amber-100 text-amber-700'
-        };
+        return { icon: AlertTriangle, text: `Stock bas (${stock})`, className: 'bg-amber-100 text-amber-700' };
       case 'expired':
-        return {
-          icon: PackageX,
-          text: 'Expiré',
-          className: 'bg-red-100 text-red-700'
-        };
+        return { icon: PackageX, text: 'Expiré', className: 'bg-red-100 text-red-700' };
       case 'expiring_soon':
-        return {
-          icon: Clock,
-          text: 'Expire bientôt',
-          className: 'bg-orange-100 text-orange-700'
-        };
+        return { icon: Clock, text: 'Expire bientôt', className: 'bg-orange-100 text-orange-700' };
       default:
-        return {
-          icon: CheckCircle,
-          text: 'En stock',
-          className: 'bg-green-100 text-green-700'
-        };
+        return { icon: CheckCircle, text: 'En stock', className: 'bg-green-100 text-green-700' };
     }
   };
 
@@ -112,7 +86,6 @@ const ProductStatusBadge = memo(({ status, stock }: { status: ProductStatus; sto
 
 ProductStatusBadge.displayName = 'ProductStatusBadge';
 
-// Composant d'auto-complétion pour la recherche
 const SearchAutocomplete = memo(({ 
   searchValue, 
   products, 
@@ -165,9 +138,7 @@ const SearchAutocomplete = memo(({
   }, [products, searchValue]);
 
   useEffect(() => {
-    if (searchAbortRef.current) {
-      clearTimeout(searchAbortRef.current);
-    }
+    if (searchAbortRef.current) clearTimeout(searchAbortRef.current);
     
     searchAbortRef.current = window.setTimeout(() => {
       setShowSuggestions(filteredSuggestions.length > 0);
@@ -175,18 +146,14 @@ const SearchAutocomplete = memo(({
     }, 100);
     
     return () => {
-      if (searchAbortRef.current) {
-        clearTimeout(searchAbortRef.current);
-      }
+      if (searchAbortRef.current) clearTimeout(searchAbortRef.current);
     };
   }, [filteredSuggestions]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (suggestionsRef.current && !suggestionsRef.current.contains(event.target as Node)) {
-        if (!isSelectingRef.current) {
-          setShowSuggestions(false);
-        }
+        if (!isSelectingRef.current) setShowSuggestions(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -212,9 +179,7 @@ const SearchAutocomplete = memo(({
           onSelectSuggestion(filteredSuggestions[selectedIndex]);
           setShowSuggestions(false);
           setSelectedIndex(-1);
-          setTimeout(() => {
-            isSelectingRef.current = false;
-          }, 200);
+          setTimeout(() => { isSelectingRef.current = false; }, 200);
         }
         break;
       case 'Escape':
@@ -227,11 +192,8 @@ const SearchAutocomplete = memo(({
   useEffect(() => {
     const inputElement = inputRef.current;
     if (!inputElement) return;
-
     inputElement.addEventListener('keydown', handleKeyDown);
-    return () => {
-      inputElement.removeEventListener('keydown', handleKeyDown);
-    };
+    return () => inputElement.removeEventListener('keydown', handleKeyDown);
   }, [inputRef, handleKeyDown]);
 
   const getPriceDisplay = (price: number) => {
@@ -267,9 +229,7 @@ const SearchAutocomplete = memo(({
                 onSelectSuggestion(product);
                 setShowSuggestions(false);
                 setSelectedIndex(-1);
-                setTimeout(() => {
-                  isSelectingRef.current = false;
-                }, 200);
+                setTimeout(() => { isSelectingRef.current = false; }, 200);
               }}
               onMouseEnter={() => setSelectedIndex(index)}
               disabled={!isAvailable}
@@ -292,20 +252,10 @@ const SearchAutocomplete = memo(({
                   <p className="text-xs text-slate-400">
                     Code: {product.code} {product.barcode && `· Barre: ${product.barcode}`}
                   </p>
-                  {status !== 'in_stock' && status !== 'expiring_soon' && (
-                    <p className="text-xs text-red-500 mt-1">
-                      {status === 'out_of_stock' && 'Rupture de stock'}
-                      {status === 'expired' && 'Produit expiré'}
-                    </p>
-                  )}
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-bold text-blue-600">
-                    {getPriceDisplay(product.selling_price)}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    Stock: {product.quantity}
-                  </p>
+                  <p className="text-sm font-bold text-blue-600">{getPriceDisplay(product.selling_price)}</p>
+                  <p className="text-xs text-slate-400">Stock: {product.quantity}</p>
                 </div>
               </div>
             </button>
@@ -318,7 +268,6 @@ const SearchAutocomplete = memo(({
 
 SearchAutocomplete.displayName = 'SearchAutocomplete';
 
-// Composant pour le panier (modal)
 const CartModal = memo(({ 
   isOpen, 
   onClose, 
@@ -377,18 +326,10 @@ const CartModal = memo(({
   const usdCurrency = getCurrency('USD');
 
   const formatPrice = (priceCDF: number, priceUSD: number) => {
-    if (currencyMode === 'cdf_only') {
-      return `${cdfCurrency?.symbol || 'FC'} ${priceCDF.toFixed(2)}`;
-    }
-    if (currencyMode === 'usd_only') {
-      return `${usdCurrency?.symbol || '$'} ${priceUSD.toFixed(2)}`;
-    }
+    if (currencyMode === 'cdf_only') return `${cdfCurrency?.symbol || 'FC'} ${priceCDF.toFixed(2)}`;
+    if (currencyMode === 'usd_only') return `${usdCurrency?.symbol || '$'} ${priceUSD.toFixed(2)}`;
     return `${cdfCurrency?.symbol || 'FC'} ${priceCDF.toFixed(2)} / ${usdCurrency?.symbol || '$'} ${priceUSD.toFixed(2)}`;
   };
-
-  const formatTotal = formatPrice(totalCDF, totalUSD);
-  const formatSubtotal = formatPrice(subtotalCDF, subtotalUSD);
-  const formatDiscount = formatPrice(discountAmountCDF, discountAmountUSD);
 
   if (!isOpen) return null;
 
@@ -405,19 +346,14 @@ const CartModal = memo(({
               </span>
             </h3>
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700"
-          >
+          <button onClick={onClose} className="rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700">
             <X size={20} />
           </button>
         </div>
 
         <div className="max-h-[50vh] overflow-y-auto p-4">
           {cart.length === 0 ? (
-            <div className="py-8 text-center text-sm italic text-slate-400">
-              Panier vide
-            </div>
+            <div className="py-8 text-center text-sm italic text-slate-400">Panier vide</div>
           ) : (
             <div className="space-y-3">
               {cart.map((item, index) => {
@@ -471,9 +407,7 @@ const CartModal = memo(({
                             const newDiscount = prompt('Remise en % (0-100):', String(discountPercent));
                             if (newDiscount !== null) {
                               const val = parseFloat(newDiscount);
-                              if (!isNaN(val) && val >= 0 && val <= 100) {
-                                onUpdateDiscount(index, val);
-                              }
+                              if (!isNaN(val) && val >= 0 && val <= 100) onUpdateDiscount(index, val);
                             }
                           }}
                           className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800"
@@ -496,7 +430,7 @@ const CartModal = memo(({
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
               <span>Sous-total</span>
-              <span>{formatSubtotal}</span>
+              <span>{formatPrice(subtotalCDF, subtotalUSD)}</span>
             </div>
 
             {cart.length > 0 && (
@@ -523,13 +457,13 @@ const CartModal = memo(({
             {globalDiscount > 0 && (
               <div className="flex items-center justify-between text-sm text-green-600">
                 <span>Remise</span>
-                <span>-{formatDiscount}</span>
+                <span>-{formatPrice(discountAmountCDF, discountAmountUSD)}</span>
               </div>
             )}
 
             <div className="flex items-center justify-between border-t border-slate-200 pt-2 text-lg font-black text-slate-800 dark:border-slate-600 dark:text-slate-200">
               <span>Total</span>
-              <span className="text-xl text-blue-600">{formatTotal}</span>
+              <span className="text-xl text-blue-600">{formatPrice(totalCDF, totalUSD)}</span>
             </div>
 
             <div className="grid grid-cols-3 gap-2 pt-2">
@@ -558,11 +492,7 @@ const CartModal = memo(({
               disabled={cart.length === 0 || isProcessing}
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-600"
             >
-              {isProcessing ? (
-                <Loader2 size={18} className="animate-spin" />
-              ) : (
-                <CheckCircle size={18} />
-              )}
+              {isProcessing ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle size={18} />}
               {isProcessing ? 'Traitement...' : 'Valider la vente'}
             </button>
           </div>
@@ -574,14 +504,12 @@ const CartModal = memo(({
 
 CartModal.displayName = 'CartModal';
 
-// Composant principal VendorPos
+// Composant principal VendorPos - VENTE DIRECTE AU SERVEUR
 const VendorPos = observer(() => {
   const isOnline = useOnline();
   const { toast } = useToast();
   const { user } = useAuthStore();
   
-  const { getPendingCount, syncPendingSales, resetFailedSales, localSales, syncInProgress: storeSyncInProgress } = useSaleStore();
-
   const [loading, setLoading] = useState(true);
   const [showCartModal, setShowCartModal] = useState(false);
   const [showProductsModal, setShowProductsModal] = useState(false);
@@ -604,19 +532,10 @@ const VendorPos = observer(() => {
   const config = posService.config;
   const isProcessing = posService.isProcessing;
 
-  const pendingCount = getPendingCount();
-  
-  const failedSales = useMemo(() => 
-    localSales.filter(s => !s.synced && (s.retryCount || 0) >= 3),
-    [localSales]
-  );
-
   useEffect(() => {
     console.log('=== VendorPos - Informations utilisateur ===');
     console.log('User from auth:', user);
-    console.log('User pharmacy_id:', user?.pharmacy_id);
     console.log('CashierInfo:', cashierInfo);
-    console.log('===========================================');
   }, [user, cashierInfo]);
 
   const currencyMode = useMemo(() => {
@@ -644,33 +563,15 @@ const VendorPos = observer(() => {
     }, 0);
   }, [cart]);
 
-  const totalCDF = useMemo(() => {
-    return subtotalCDF * (1 - (globalDiscount / 100));
-  }, [subtotalCDF, globalDiscount]);
-
-  const totalUSD = useMemo(() => {
-    return totalCDF / activeCurrency.exchangeRate;
-  }, [totalCDF, activeCurrency.exchangeRate]);
-
-  const subtotalUSD = useMemo(() => {
-    return subtotalCDF / activeCurrency.exchangeRate;
-  }, [subtotalCDF, activeCurrency.exchangeRate]);
-
-  const discountAmountCDF = useMemo(() => {
-    return subtotalCDF * (globalDiscount / 100);
-  }, [subtotalCDF, globalDiscount]);
-
-  const discountAmountUSD = useMemo(() => {
-    return discountAmountCDF / activeCurrency.exchangeRate;
-  }, [discountAmountCDF, activeCurrency.exchangeRate]);
-
-  const totalItems = useMemo(() => {
-    return cart.reduce((acc, item) => acc + (item.quantity || 0), 0);
-  }, [cart]);
+  const totalCDF = useMemo(() => subtotalCDF * (1 - (globalDiscount / 100)), [subtotalCDF, globalDiscount]);
+  const totalUSD = useMemo(() => totalCDF / activeCurrency.exchangeRate, [totalCDF, activeCurrency.exchangeRate]);
+  const subtotalUSD = useMemo(() => subtotalCDF / activeCurrency.exchangeRate, [subtotalCDF, activeCurrency.exchangeRate]);
+  const discountAmountCDF = useMemo(() => subtotalCDF * (globalDiscount / 100), [subtotalCDF, globalDiscount]);
+  const discountAmountUSD = useMemo(() => discountAmountCDF / activeCurrency.exchangeRate, [discountAmountCDF, activeCurrency.exchangeRate]);
+  const totalItems = useMemo(() => cart.reduce((acc, item) => acc + (item.quantity || 0), 0), [cart]);
 
   const filteredProductsForModal = useMemo(() => {
     let filtered = [...products];
-    
     if (productsSearch.trim()) {
       const term = productsSearch.toLowerCase().trim();
       filtered = filtered.filter(p =>
@@ -679,7 +580,6 @@ const VendorPos = observer(() => {
         p.barcode?.toLowerCase().includes(term)
       );
     }
-    
     return filtered.sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   }, [products, productsSearch]);
 
@@ -710,48 +610,19 @@ const VendorPos = observer(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        console.log('=== Chargement initial VendorPos ===');
-        
         if (!cashierInfo.pharmacy_id && user?.pharmacy_id) {
-          console.log('Définition du pharmacy_id dans cashierInfo:', user.pharmacy_id);
           posService.setCashierInfo({ pharmacy_id: user.pharmacy_id });
         }
-        
         await posService.loadInitialData();
-        console.log('Produits chargés:', posService.products.length);
-        
-        if (isOnline) {
-          await syncPendingSales();
-        }
       } catch (error) {
         console.error('Erreur chargement:', error);
-        toast({
-          title: "Erreur",
-          description: "Impossible de charger les données",
-          variant: "destructive",
-        });
+        toast({ title: "Erreur", description: "Impossible de charger les données", variant: "destructive" });
       } finally {
         setLoading(false);
       }
     };
     loadData();
-  }, [toast, isOnline, syncPendingSales, user]);
-
-  useEffect(() => {
-    if (isOnline && pendingCount > 0 && !storeSyncInProgress) {
-      syncPendingSales();
-    }
-  }, [isOnline, pendingCount, syncPendingSales, storeSyncInProgress]);
-
-  useEffect(() => {
-    if (!isOnline) return;
-    const interval = setInterval(() => {
-      if (pendingCount > 0 && !storeSyncInProgress) {
-        syncPendingSales();
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [isOnline, pendingCount, syncPendingSales, storeSyncInProgress]);
+  }, [toast, user]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -759,9 +630,7 @@ const VendorPos = observer(() => {
         e.preventDefault();
         searchInputRef.current?.focus();
       }
-      if (e.key === 'Escape' && showCartModal) {
-        setShowCartModal(false);
-      }
+      if (e.key === 'Escape' && showCartModal) setShowCartModal(false);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -769,27 +638,16 @@ const VendorPos = observer(() => {
 
   const handleSelectSuggestion = useCallback((product: Product) => {
     if (product.quantity <= 0) {
-      toast({
-        title: "Rupture de stock",
-        description: `${product.name} n'est plus disponible`,
-        variant: "destructive",
-      });
+      toast({ title: "Rupture de stock", description: `${product.name} n'est plus disponible`, variant: "destructive" });
       return;
     }
     posService.addToCart(product);
     posService.setSearch('');
     searchInputRef.current?.focus();
-    toast({
-      title: "Ajouté au panier",
-      description: `${product.name} a été ajouté`,
-      variant: "success",
-    });
+    toast({ title: "Ajouté au panier", description: `${product.name} a été ajouté`, variant: "success" });
   }, [toast]);
 
-  const handleUpdateQuantity = useCallback((index: number, delta: number) => {
-    posService.updateQuantity(index, delta);
-  }, []);
-
+  const handleUpdateQuantity = useCallback((index: number, delta: number) => posService.updateQuantity(index, delta), []);
   const handleUpdateDiscount = useCallback((index: number, discountPercent: number) => {
     const newCart = [...cart];
     if (newCart[index]) {
@@ -797,47 +655,28 @@ const VendorPos = observer(() => {
       posService.setCart(newCart);
     }
   }, [cart]);
+  const handleRemoveFromCart = useCallback((index: number) => posService.removeFromCart(index), []);
 
-  const handleRemoveFromCart = useCallback((index: number) => {
-    posService.removeFromCart(index);
-  }, []);
-
-  // VENTE DIRECTE AU SERVEUR - PAS DE STOCKAGE LOCAL
+  // VENTE DIRECTE AU SERVEUR - PAS DE SYNCHRONISATION
   const handleValidateSale = useCallback(async () => {
     if (cart.length === 0) {
-      toast({
-        title: "Panier vide",
-        description: "Ajoutez des produits avant de valider",
-        variant: "destructive",
-      });
+      toast({ title: "Panier vide", description: "Ajoutez des produits avant de valider", variant: "destructive" });
       return;
     }
     
     if (isProcessing || isProcessingSale) {
-      toast({
-        title: "Vente en cours",
-        description: "Une vente est déjà en cours de validation",
-        variant: "warning",
-      });
+      toast({ title: "Vente en cours", description: "Une vente est déjà en cours de validation", variant: "warning" });
       return;
     }
 
     if (!isOnline) {
-      toast({
-        title: "Pas de connexion",
-        description: "Vous devez être connecté à internet pour effectuer une vente",
-        variant: "destructive",
-      });
+      toast({ title: "Pas de connexion", description: "Vous devez être connecté à internet pour effectuer une vente", variant: "destructive" });
       return;
     }
 
     const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
     if (!pharmacyId) {
-      toast({
-        title: "Erreur",
-        description: "Pharmacie non identifiée",
-        variant: "destructive",
-      });
+      toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
       return;
     }
 
@@ -845,7 +684,6 @@ const VendorPos = observer(() => {
     setShowCartModal(false);
     
     try {
-      // Préparer les données de la vente
       const saleData = {
         items: cart.map(item => ({
           product_id: item.id,
@@ -859,16 +697,15 @@ const VendorPos = observer(() => {
       };
 
       console.log('📤 Envoi de la vente au serveur:', saleData);
-
-      // Appel API direct - réponse rapide (1-3 secondes)
       const response = await api.post('/sales', saleData);
-      
       console.log('✅ Vente enregistrée sur le serveur:', response.data);
 
       const saleResponse = response.data.sale || response.data;
       const receiptNumber = saleResponse?.receipt_number || `VENTE-${Date.now()}`;
 
-      // Créer l'objet facture pour l'affichage
+      // Recharger les produits pour mettre à jour les stocks
+      await posService.loadProducts();
+
       const saleForInvoice = {
         id: saleResponse?.id || `sale_${Date.now()}`,
         receiptNumber: receiptNumber,
@@ -896,68 +733,34 @@ const VendorPos = observer(() => {
       };
       
       setCurrentSaleForInvoice(saleForInvoice);
-      
-      // Vider le panier
       posService.setCart([]);
       setGlobalDiscount(0);
       
-      toast({
-        title: "Succès",
-        description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`,
-        variant: "success",
-      });
-      
-      // Afficher la facture
+      toast({ title: "Succès", description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`, variant: "success" });
       setShowInvoice(true);
       
     } catch (error: any) {
       console.error('❌ Erreur lors de la validation de la vente:', error);
       
       let errorMessage = "La validation de la vente a échoué";
-      if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
-      } else if (error.response?.data?.error) {
-        errorMessage = error.response.data.error;
-      } else if (error.message) {
-        errorMessage = error.message;
-      }
+      if (error.response?.data?.message) errorMessage = error.response.data.message;
+      else if (error.response?.data?.error) errorMessage = error.response.data.error;
+      else if (error.message) errorMessage = error.message;
       
-      toast({
-        title: "Erreur",
-        description: errorMessage,
-        variant: "destructive",
-      });
-      
+      toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
       setCurrentSaleForInvoice(null);
     } finally {
       setIsProcessingSale(false);
     }
   }, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, customerName, isOnline, user]);
 
-  const handleResetFailedSales = useCallback(() => {
-    resetFailedSales();
-    toast({
-      title: "Réessai",
-      description: "Tentative de synchronisation des ventes en échec",
-      variant: "default",
-    });
-  }, [resetFailedSales, toast]);
-
   const handleAddProductFromModal = useCallback((product: Product) => {
     if (product.quantity <= 0) {
-      toast({
-        title: "Rupture de stock",
-        description: `${product.name} n'est plus disponible`,
-        variant: "destructive",
-      });
+      toast({ title: "Rupture de stock", description: `${product.name} n'est plus disponible`, variant: "destructive" });
       return;
     }
     posService.addToCart(product);
-    toast({
-      title: "Ajouté au panier",
-      description: `${product.name} a été ajouté`,
-      variant: "success",
-    });
+    toast({ title: "Ajouté au panier", description: `${product.name} a été ajouté`, variant: "success" });
   }, [toast]);
 
   const handleCloseInvoice = useCallback(() => {
@@ -980,34 +783,7 @@ const VendorPos = observer(() => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <Toaster />
 
-      {pendingCount > 0 && (
-        <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
-          {storeSyncInProgress ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <RefreshCw size={16} className="animate-spin" />
-          )}
-          {pendingCount} vente(s) en attente de synchronisation
-        </div>
-      )}
-
-      {failedSales.length > 0 && !pendingCount && (
-        <div className="sticky top-0 z-40 flex items-center justify-between gap-2 bg-red-500 px-4 py-2 text-sm font-medium text-white">
-          <div className="flex items-center gap-2">
-            <AlertCircle size={16} />
-            {failedSales.length} vente(s) en échec
-          </div>
-          <button
-            onClick={handleResetFailedSales}
-            className="rounded-lg bg-white/20 px-3 py-1 text-xs hover:bg-white/30"
-          >
-            <RefreshCw size={12} className="inline mr-1" />
-            Réessayer
-          </button>
-        </div>
-      )}
-
-      {!isOnline && pendingCount === 0 && failedSales.length === 0 && (
+      {!isOnline && (
         <div className="sticky top-0 z-40 flex items-center justify-center gap-2 bg-amber-500 py-2 text-sm font-medium text-white">
           <WifiOff size={16} />
           Mode hors-ligne - Connexion requise pour les ventes
@@ -1032,13 +808,9 @@ const VendorPos = observer(() => {
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-1.5 dark:bg-slate-700">
               <div className="h-6 w-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 dark:bg-blue-900 dark:text-blue-400">
-                <span className="text-xs font-bold">
-                  {cashierInfo?.name?.charAt(0) || 'V'}
-                </span>
+                <span className="text-xs font-bold">{cashierInfo?.name?.charAt(0) || 'V'}</span>
               </div>
-              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                {cashierInfo?.name || 'Vendeur'}
-              </span>
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{cashierInfo?.name || 'Vendeur'}</span>
             </div>
             {!isOnline && <WifiOff size={16} className="text-amber-500" />}
           </div>
@@ -1079,11 +851,7 @@ const VendorPos = observer(() => {
               {currencyMode === 'both' && 'Vente en FC / USD'}
             </span>
           </div>
-          {cart.length > 0 && (
-            <div className="text-amber-700 dark:text-amber-400">
-              {totalItems} article{totalItems > 1 ? 's' : ''}
-            </div>
-          )}
+          {cart.length > 0 && <div className="text-amber-700 dark:text-amber-400">{totalItems} article{totalItems > 1 ? 's' : ''}</div>}
         </div>
 
         <div className="mb-4 flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
@@ -1141,10 +909,7 @@ const VendorPos = observer(() => {
                 <p className="text-xl font-black text-slate-800 dark:text-slate-200">{totalItems}</p>
               </div>
             </div>
-            <button
-              onClick={() => setShowCartModal(true)}
-              className="mt-3 w-full rounded-xl bg-blue-600 py-2 text-sm font-semibold text-white"
-            >
+            <button onClick={() => setShowCartModal(true)} className="mt-3 w-full rounded-xl bg-blue-600 py-2 text-sm font-semibold text-white">
               Voir le panier et valider
             </button>
           </div>
@@ -1176,6 +941,7 @@ const VendorPos = observer(() => {
         totalItems={totalItems}
       />
 
+      {/* Modal produits */}
       {showProductsModal && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center">
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-t-3xl bg-white shadow-2xl dark:bg-slate-800 sm:rounded-3xl">
@@ -1218,12 +984,7 @@ const VendorPos = observer(() => {
                   const isAvailable = (product.quantity || 0) > 0;
                   const status = getProductStatus(product, lowStockThreshold, expiryWarningDays);
                   return (
-                    <div
-                      key={product.id}
-                      className={`flex items-center justify-between rounded-xl border border-slate-100 p-3 dark:border-slate-700 ${
-                        !isAvailable ? 'opacity-60' : ''
-                      }`}
-                    >
+                    <div key={product.id} className={`flex items-center justify-between rounded-xl border border-slate-100 p-3 dark:border-slate-700 ${!isAvailable ? 'opacity-60' : ''}`}>
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <p className="font-medium text-slate-800 dark:text-slate-200">{product.name}</p>
@@ -1252,9 +1013,7 @@ const VendorPos = observer(() => {
                           }}
                           disabled={!isAvailable}
                           className={`mt-1 rounded-lg px-3 py-1 text-xs font-semibold ${
-                            isAvailable
-                              ? 'bg-blue-600 text-white hover:bg-blue-700'
-                              : 'cursor-not-allowed bg-slate-200 text-slate-400'
+                            isAvailable ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'
                           }`}
                         >
                           Ajouter
@@ -1265,29 +1024,15 @@ const VendorPos = observer(() => {
                 })}
               </div>
 
-              {paginatedProducts.length === 0 && (
-                <div className="py-8 text-center text-slate-400">
-                  Aucun produit trouvé
-                </div>
-              )}
+              {paginatedProducts.length === 0 && <div className="py-8 text-center text-slate-400">Aucun produit trouvé</div>}
 
               {totalPages > 1 && (
                 <div className="mt-4 flex items-center justify-center gap-2">
-                  <button
-                    onClick={() => setProductsPage(p => Math.max(1, p - 1))}
-                    disabled={productsPage === 1}
-                    className="rounded-lg border border-slate-200 p-1 disabled:opacity-50"
-                  >
+                  <button onClick={() => setProductsPage(p => Math.max(1, p - 1))} disabled={productsPage === 1} className="rounded-lg border border-slate-200 p-1 disabled:opacity-50">
                     <ChevronLeft size={16} />
                   </button>
-                  <span className="text-sm">
-                    Page {productsPage} / {totalPages}
-                  </span>
-                  <button
-                    onClick={() => setProductsPage(p => Math.min(totalPages, p + 1))}
-                    disabled={productsPage === totalPages}
-                    className="rounded-lg border border-slate-200 p-1 disabled:opacity-50"
-                  >
+                  <span className="text-sm">Page {productsPage} / {totalPages}</span>
+                  <button onClick={() => setProductsPage(p => Math.min(totalPages, p + 1))} disabled={productsPage === totalPages} className="rounded-lg border border-slate-200 p-1 disabled:opacity-50">
                     <ChevronRight size={16} />
                   </button>
                 </div>
@@ -1302,7 +1047,6 @@ const VendorPos = observer(() => {
           sale={currentSaleForInvoice}
           pharmacyId={cashierInfo.pharmacy_id}
           onClose={handleCloseInvoice}
-          onPrint={() => {}}
         />
       )}
     </div>
