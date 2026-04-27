@@ -37,7 +37,7 @@ import Suppliers from '@/modules/inventory/views/Suppliers';
 import PaymentPage from '@/pages/PaymentPage';
 import PaymentSuccessPage from '@/pages/PaymentSuccessPage';
 import ConfigViewWrapper from '@/modules/core/ConfigViewWrapper';
-import Facture from '@/modules/sales/views/Facture';
+import FactureManager from '@/modules/sales/views/FactureManager';
 import Rapports from '@/modules/sales/views/Rapports';
 import Historique from '@/modules/sales/views/Historique';
 import OutOfService from '@/modules/core/endehors';
@@ -210,7 +210,7 @@ export default function AppRoutes() {
           
           {/* Opérations commerciales */}
           <Route path="/vendor-pos" element={<VendorPos />} />
-          <Route path="/factures" element={<Facture />} />
+          <Route path="/factures" element={<FactureManager />} />
           <Route path="/historique" element={<Historique />} />
           <Route path="/rapports" element={<Rapports />} />
           <Route path="/stock-report" element={<StockReport />} />
