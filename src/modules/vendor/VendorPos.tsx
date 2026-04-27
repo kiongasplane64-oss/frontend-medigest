@@ -658,102 +658,143 @@ const VendorPos = observer(() => {
   const handleRemoveFromCart = useCallback((index: number) => posService.removeFromCart(index), []);
 
   // VENTE DIRECTE AU SERVEUR - PAS DE SYNCHRONISATION
-  const handleValidateSale = useCallback(async () => {
-    if (cart.length === 0) {
-      toast({ title: "Panier vide", description: "Ajoutez des produits avant de valider", variant: "destructive" });
-      return;
+  // VENTE DIRECTE AU SERVEUR - PAS DE SYNCHRONISATION
+const handleValidateSale = useCallback(async () => {
+  if (cart.length === 0) {
+    toast({ title: "Panier vide", description: "Ajoutez des produits avant de valider", variant: "destructive" });
+    return;
+  }
+  
+  if (isProcessing || isProcessingSale) {
+    toast({ title: "Vente en cours", description: "Une vente est déjà en cours de validation", variant: "warning" });
+    return;
+  }
+
+  if (!isOnline) {
+    toast({ title: "Pas de connexion", description: "Vous devez être connecté à internet pour effectuer une vente", variant: "destructive" });
+    return;
+  }
+
+  const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
+  if (!pharmacyId) {
+    toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
+    return;
+  }
+
+  setIsProcessingSale(true);
+  setShowCartModal(false);
+  
+  try {
+    // Construction des items SANS unit_price et tva_rate (backend les prend du stock)
+    const saleItems = cart.map(item => ({
+      product_id: item.id,
+      quantity: item.quantity,
+      discount_percent: item.discount_percent || 0,
+      // NE PAS inclure unit_price ou tva_rate - le backend les récupère du stock
+    }));
+
+    // Construction des données de vente - CORRIGÉ
+    const saleData = {
+      items: saleItems,
+      payment_method: paymentMethod,  // String simple, pas .value
+      customer_name: customerName,
+      pharmacy_id: pharmacyId,
+      // CORRECTION: utiliser 'global_discount' pas 'global_discount_percent'
+      global_discount: globalDiscount > 0 ? globalDiscount : undefined,
+      // Optionnel: client_id si vous avez un système de clients
+      // customer_id: customerId,
+    };
+
+    console.log('📤 Envoi de la vente au serveur:', JSON.stringify(saleData, null, 2));
+    
+    const response = await api.post('/sales', saleData);
+    console.log('✅ Vente enregistrée sur le serveur:', response.data);
+
+    // Extraire les données de la réponse (différents formats possibles)
+    const saleResponse = response.data?.sale || response.data;
+    const receiptNumber = saleResponse?.receipt_number || 
+                         response.data?.receipt_number || 
+                         `VENTE-${Date.now()}`;
+
+    // Recharger les produits pour mettre à jour les stocks
+    await posService.loadProducts();
+
+    const saleForInvoice = {
+      id: saleResponse?.id || `sale_${Date.now()}`,
+      receiptNumber: receiptNumber,
+      items: cart.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: item.unitPrice,
+        quantity: item.quantity,
+        code: item.code,
+        discount_percent: item.discount_percent || 0,
+        discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
+      })),
+      subtotal: subtotalCDF,
+      total: totalCDF,
+      discount_percent: globalDiscount,
+      discount_amount: discountAmountCDF,
+      paymentMethod: paymentMethod,
+      timestamp: Date.now(),
+      cashierName: cashierInfo.name,
+      cashierId: cashierInfo.id,
+      posName: cashierInfo.posName,
+      branchId: pharmacyId,
+      sessionNumber: cashierInfo.sessionNumber,
+      customerName: customerName,
+    };
+    
+    setCurrentSaleForInvoice(saleForInvoice);
+    posService.setCart([]);
+    setGlobalDiscount(0);
+    
+    toast({ title: "Succès", description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`, variant: "success" });
+    setShowInvoice(true);
+    
+  } catch (error: any) {
+    console.error('❌ Erreur lors de la validation de la vente:', error);
+    
+    // Amélioration du logging d'erreur
+    if (error.response) {
+      console.error('📡 Réponse serveur:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data,
+        headers: error.response.headers
+      });
     }
     
-    if (isProcessing || isProcessingSale) {
-      toast({ title: "Vente en cours", description: "Une vente est déjà en cours de validation", variant: "warning" });
-      return;
+    let errorMessage = "La validation de la vente a échoué";
+    if (error.response?.data?.detail) {
+      // Gérer les détails d'erreur FastAPI
+      const detail = error.response.data.detail;
+      if (typeof detail === 'string') {
+        errorMessage = detail;
+      } else if (typeof detail === 'object' && detail.message) {
+        errorMessage = detail.message;
+      } else if (typeof detail === 'object' && detail.unavailable_items) {
+        // Erreur de stock insuffisant
+        const unavailable = detail.unavailable_items;
+        errorMessage = `Stock insuffisant: ${unavailable.map((u: any) => `${u.product_name} (dispo: ${u.available})`).join(', ')}`;
+      } else {
+        errorMessage = JSON.stringify(detail);
+      }
+    } else if (error.response?.data?.message) {
+      errorMessage = error.response.data.message;
+    } else if (error.response?.data?.error) {
+      errorMessage = error.response.data.error;
+    } else if (error.message) {
+      errorMessage = error.message;
     }
-
-    if (!isOnline) {
-      toast({ title: "Pas de connexion", description: "Vous devez être connecté à internet pour effectuer une vente", variant: "destructive" });
-      return;
-    }
-
-    const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
-    if (!pharmacyId) {
-      toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
-      return;
-    }
-
-    setIsProcessingSale(true);
-    setShowCartModal(false);
     
-    try {
-      const saleData = {
-        items: cart.map(item => ({
-          product_id: item.id,
-          quantity: item.quantity,
-          discount_percent: item.discount_percent || 0,
-        })),
-        payment_method: paymentMethod,
-        customer_name: customerName,
-        pharmacy_id: pharmacyId,
-        global_discount_percent: globalDiscount > 0 ? globalDiscount : undefined,
-      };
-
-      console.log('📤 Envoi de la vente au serveur:', saleData);
-      const response = await api.post('/sales', saleData);
-      console.log('✅ Vente enregistrée sur le serveur:', response.data);
-
-      const saleResponse = response.data.sale || response.data;
-      const receiptNumber = saleResponse?.receipt_number || `VENTE-${Date.now()}`;
-
-      // Recharger les produits pour mettre à jour les stocks
-      await posService.loadProducts();
-
-      const saleForInvoice = {
-        id: saleResponse?.id || `sale_${Date.now()}`,
-        receiptNumber: receiptNumber,
-        items: cart.map(item => ({
-          id: item.id,
-          name: item.name,
-          price: item.unitPrice,
-          quantity: item.quantity,
-          code: item.code,
-          discount_percent: item.discount_percent || 0,
-          discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
-        })),
-        subtotal: subtotalCDF,
-        total: totalCDF,
-        discount_percent: globalDiscount,
-        discount_amount: discountAmountCDF,
-        paymentMethod: paymentMethod,
-        timestamp: Date.now(),
-        cashierName: cashierInfo.name,
-        cashierId: cashierInfo.id,
-        posName: cashierInfo.posName,
-        branchId: pharmacyId,
-        sessionNumber: cashierInfo.sessionNumber,
-        customerName: customerName,
-      };
-      
-      setCurrentSaleForInvoice(saleForInvoice);
-      posService.setCart([]);
-      setGlobalDiscount(0);
-      
-      toast({ title: "Succès", description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`, variant: "success" });
-      setShowInvoice(true);
-      
-    } catch (error: any) {
-      console.error('❌ Erreur lors de la validation de la vente:', error);
-      
-      let errorMessage = "La validation de la vente a échoué";
-      if (error.response?.data?.message) errorMessage = error.response.data.message;
-      else if (error.response?.data?.error) errorMessage = error.response.data.error;
-      else if (error.message) errorMessage = error.message;
-      
-      toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
-      setCurrentSaleForInvoice(null);
-    } finally {
-      setIsProcessingSale(false);
-    }
-  }, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, customerName, isOnline, user]);
-
+    toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
+    setCurrentSaleForInvoice(null);
+  } finally {
+    setIsProcessingSale(false);
+  }
+}, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, customerName, isOnline, user]);
+  
   const handleAddProductFromModal = useCallback((product: Product) => {
     if (product.quantity <= 0) {
       toast({ title: "Rupture de stock", description: `${product.name} n'est plus disponible`, variant: "destructive" });

@@ -850,28 +850,20 @@ export class PosService {
       const cartSnapshot = this.cart.map(item => ({ ...item }));
       const customerNameSnapshot = this.customerName;
       const paymentMethodSnapshot = this.paymentMethod;
-      const globalDiscount = 0; // À passer en paramètre si besoin
+      const globalDiscount = 0;
 
-      // Calcul des totaux
-      const subtotal = cartSnapshot.reduce((acc, item) => {
-        const itemTotal = item.unitPrice * item.quantity;
-        const itemDiscount = itemTotal * ((item.discount_percent || 0) / 100);
-        return acc + (itemTotal - itemDiscount);
-      }, 0);
-      
-      const total = subtotal * (1 - (globalDiscount / 100));
-
-      // Préparer les données pour l'API
+      // Préparer les données pour l'API - CORRIGÉ
       const saleData = {
         items: cartSnapshot.map(item => ({
           product_id: item.id,
           quantity: item.quantity,
           discount_percent: item.discount_percent || 0,
+          // NE PAS inclure unit_price ou tva_rate
         })),
-        payment_method: paymentMethodSnapshot,
+        payment_method: paymentMethodSnapshot,  // String simple
         customer_name: customerNameSnapshot,
         pharmacy_id: this.cashierInfo.pharmacy_id,
-        global_discount_percent: globalDiscount > 0 ? globalDiscount : undefined,
+        global_discount: globalDiscount > 0 ? globalDiscount : undefined,  // CORRIGÉ: sans _percent
       };
 
       console.log('📤 Envoi de la vente au serveur:', saleData);
@@ -882,6 +874,14 @@ export class PosService {
       console.log('✅ Vente enregistrée sur le serveur:', saleResponse);
 
       // Créer l'objet facture
+      const subtotal = cartSnapshot.reduce((acc, item) => {
+        const itemTotal = item.unitPrice * item.quantity;
+        const itemDiscount = itemTotal * ((item.discount_percent || 0) / 100);
+        return acc + (itemTotal - itemDiscount);
+      }, 0);
+      
+      const total = subtotal * (1 - (globalDiscount / 100));
+
       const invoiceData = {
         id: saleResponse?.id || `sale_${Date.now()}`,
         receiptNumber: saleResponse?.receipt_number || `VENTE-${Date.now()}`,
@@ -937,7 +937,24 @@ export class PosService {
       
     } catch (error: any) {
       console.error('❌ Erreur validation:', error);
-      const errorMessage = error.response?.data?.message || error.message || 'Erreur lors de la validation';
+      
+      let errorMessage = 'Erreur lors de la validation';
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (typeof detail === 'string') {
+          errorMessage = detail;
+        } else if (typeof detail === 'object' && detail.message) {
+          errorMessage = detail.message;
+        } else if (typeof detail === 'object' && detail.unavailable_items) {
+          const unavailable = detail.unavailable_items;
+          errorMessage = `Stock insuffisant: ${unavailable.map((u: any) => `${u.product_name} (dispo: ${u.available})`).join(', ')}`;
+        }
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast.error(errorMessage);
       
       this.setProcessing(false);
