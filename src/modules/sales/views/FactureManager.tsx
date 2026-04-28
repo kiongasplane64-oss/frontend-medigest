@@ -307,18 +307,23 @@ const FactureManager: React.FC = () => {
   }, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
 
   // Charger la liste des vendeurs de la branche
+
   const loadSellers = useCallback(async () => {
-    if (!userBranch?.id) return;
-    
-    try {
-      const branchId = userBranch.id;
-      const response = await api.get('/users/sellers', { 
-        params: { branch_id: branchId } 
-      });
-      setSellers(response.data.users || response.data || []);
-    } catch (error) {
-      console.error('Erreur chargement vendeurs:', error);
-    }
+      if (!userBranch?.id) return;
+      
+      try {
+          const branchId = userBranch.id;
+          // L'URL doit correspondre à l'endpoint que nous avons créé
+          const response = await api.get('/users/sellers', { 
+              params: { branch_id: branchId } 
+          });
+          // La réponse peut être dans response.data.users ou response.data.sellers
+          const sellersList = response.data.users || response.data.sellers || [];
+          setSellers(sellersList);
+      } catch (error) {
+          console.error('Erreur chargement vendeurs:', error);
+          // Ne pas bloquer l'affichage si les vendeurs ne chargent pas
+      }
   }, [userBranch]);
 
   // Charger les détails d'une vente

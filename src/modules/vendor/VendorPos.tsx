@@ -30,32 +30,45 @@ import { Toaster } from '@/components/ui/Toaster';
 import FacturePrinter from '../sales/views/FacturePrinter';
 import { useAuthStore } from '@/store/useAuthStore';
 import api from '@/api/client';
+import { useSaleStore } from '@/store/saleStore';
+
+// ============================================
+// TYPES
+// ============================================
 
 type ProductStatus = 'in_stock' | 'low_stock' | 'out_of_stock' | 'expiring_soon' | 'expired';
 
+// ============================================
+// UTILITAIRES
+// ============================================
+
 const getProductStatus = (
-  product: Product, 
-  lowStockThreshold: number = 10, 
+  product: Product,
+  lowStockThreshold: number = 10,
   expiryWarningDays: number = 30
 ): ProductStatus => {
   const quantity = product.quantity || 0;
   const expiryDate = product.expiry_date;
-  
+
   if (expiryDate) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const expiry = new Date(expiryDate);
     expiry.setHours(0, 0, 0, 0);
     const diffDays = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    
+
     if (diffDays < 0) return 'expired';
     if (diffDays <= expiryWarningDays) return 'expiring_soon';
   }
-  
+
   if (quantity <= 0) return 'out_of_stock';
   if (quantity <= lowStockThreshold) return 'low_stock';
   return 'in_stock';
 };
+
+// ============================================
+// COMPOSANTS UI
+// ============================================
 
 const ProductStatusBadge = memo(({ status, stock }: { status: ProductStatus; stock: number }) => {
   const getStatusConfig = () => {
@@ -86,9 +99,13 @@ const ProductStatusBadge = memo(({ status, stock }: { status: ProductStatus; sto
 
 ProductStatusBadge.displayName = 'ProductStatusBadge';
 
-const SearchAutocomplete = memo(({ 
-  searchValue, 
-  products, 
+// ============================================
+// COMPOSANT DE RECHERCHE AUTOCOMPLETE
+// ============================================
+
+const SearchAutocomplete = memo(({
+  searchValue,
+  products,
   onSelectSuggestion,
   inputRef,
   currencyMode,
@@ -115,36 +132,36 @@ const SearchAutocomplete = memo(({
 
   const filteredSuggestions = useMemo(() => {
     if (!searchValue.trim()) return [];
-    
+
     const term = searchValue.toLowerCase().trim();
-    
-    const matched = products.filter(p => 
+
+    const matched = products.filter(p =>
       p.name.toLowerCase().includes(term) ||
       p.code?.toLowerCase().includes(term) ||
       p.barcode?.toLowerCase().includes(term)
     );
-    
+
     const sorted = [...matched].sort((a, b) => {
       const aStartsWith = a.name.toLowerCase().startsWith(term);
       const bStartsWith = b.name.toLowerCase().startsWith(term);
-      
+
       if (aStartsWith && !bStartsWith) return -1;
       if (!aStartsWith && bStartsWith) return 1;
-      
+
       return a.name.localeCompare(b.name, 'fr');
     });
-    
+
     return sorted.slice(0, 15);
   }, [products, searchValue]);
 
   useEffect(() => {
     if (searchAbortRef.current) clearTimeout(searchAbortRef.current);
-    
+
     searchAbortRef.current = window.setTimeout(() => {
       setShowSuggestions(filteredSuggestions.length > 0);
       setSelectedIndex(-1);
     }, 100);
-    
+
     return () => {
       if (searchAbortRef.current) clearTimeout(searchAbortRef.current);
     };
@@ -198,7 +215,7 @@ const SearchAutocomplete = memo(({
 
   const getPriceDisplay = (price: number) => {
     const priceInUSD = price / exchangeRate;
-    
+
     if (currencyMode === 'cdf_only') {
       const cdfCurrency = currencies.find(c => c.code === 'CDF');
       return `${cdfCurrency?.symbol || 'FC'} ${price.toFixed(2)}`;
@@ -233,13 +250,12 @@ const SearchAutocomplete = memo(({
               }}
               onMouseEnter={() => setSelectedIndex(index)}
               disabled={!isAvailable}
-              className={`w-full px-4 py-3 text-left transition-colors ${
-                index === selectedIndex 
-                  ? 'bg-blue-50 dark:bg-blue-900/50' 
+              className={`w-full px-4 py-3 text-left transition-colors ${index === selectedIndex
+                  ? 'bg-blue-50 dark:bg-blue-900/50'
                   : 'hover:bg-slate-50 dark:hover:bg-slate-700'
-              } ${index !== filteredSuggestions.length - 1 ? 'border-b border-slate-100 dark:border-slate-700' : ''} ${
-                !isAvailable ? 'opacity-60 cursor-not-allowed' : ''
-              }`}
+                } ${index !== filteredSuggestions.length - 1 ? 'border-b border-slate-100 dark:border-slate-700' : ''
+                } ${!isAvailable ? 'opacity-60 cursor-not-allowed' : ''
+                }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex-1">
@@ -268,12 +284,16 @@ const SearchAutocomplete = memo(({
 
 SearchAutocomplete.displayName = 'SearchAutocomplete';
 
-const CartModal = memo(({ 
-  isOpen, 
-  onClose, 
-  cart, 
-  onUpdateQuantity, 
-  onRemove, 
+// ============================================
+// MODAL PANIER
+// ============================================
+
+const CartModal = memo(({
+  isOpen,
+  onClose,
+  cart,
+  onUpdateQuantity,
+  onRemove,
   onValidate,
   onUpdateDiscount,
   globalDiscount,
@@ -471,11 +491,10 @@ const CartModal = memo(({
                 <button
                   key={method}
                   onClick={() => setPaymentMethod(method)}
-                  className={`rounded-xl p-2 transition-all ${
-                    paymentMethod === method
+                  className={`rounded-xl p-2 transition-all ${paymentMethod === method
                       ? 'bg-blue-600 text-white'
                       : 'border border-slate-200 bg-white text-slate-500 hover:border-blue-300 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-400'
-                  }`}
+                    }`}
                 >
                   <div className="flex flex-col items-center gap-1">
                     {method === 'cash' && <Banknote size={16} />}
@@ -504,12 +523,17 @@ const CartModal = memo(({
 
 CartModal.displayName = 'CartModal';
 
-// Composant principal VendorPos - VENTE DIRECTE AU SERVEUR
+// ============================================
+// COMPOSANT PRINCIPAL VendorPos
+// ============================================
+
 const VendorPos = observer(() => {
   const isOnline = useOnline();
   const { toast } = useToast();
   const { user } = useAuthStore();
-  
+  const { fetchSales, addSaleFromApi } = useSaleStore();
+
+  // États
   const [loading, setLoading] = useState(true);
   const [showCartModal, setShowCartModal] = useState(false);
   const [showProductsModal, setShowProductsModal] = useState(false);
@@ -525,6 +549,7 @@ const VendorPos = observer(() => {
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Services
   const products = posService.products;
   const cart = posService.cart;
   const paymentMethod = posService.paymentMethod;
@@ -532,11 +557,9 @@ const VendorPos = observer(() => {
   const config = posService.config;
   const isProcessing = posService.isProcessing;
 
-  useEffect(() => {
-    console.log('=== VendorPos - Informations utilisateur ===');
-    console.log('User from auth:', user);
-    console.log('CashierInfo:', cashierInfo);
-  }, [user, cashierInfo]);
+  // ============================================
+  // CALCULS
+  // ============================================
 
   const currencyMode = useMemo(() => {
     const currencies = config.currencies;
@@ -590,6 +613,16 @@ const VendorPos = observer(() => {
     productsPage * ITEMS_PER_PAGE
   );
 
+  // ============================================
+  // EFFETS
+  // ============================================
+
+  useEffect(() => {
+    console.log('=== VendorPos - Informations utilisateur ===');
+    console.log('User from auth:', user);
+    console.log('CashierInfo:', cashierInfo);
+  }, [user, cashierInfo]);
+
   useEffect(() => {
     const loadThresholds = async () => {
       try {
@@ -636,6 +669,10 @@ const VendorPos = observer(() => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showCartModal]);
 
+  // ============================================
+  // GESTIONNAIRES
+  // ============================================
+
   const handleSelectSuggestion = useCallback((product: Product) => {
     if (product.quantity <= 0) {
       toast({ title: "Rupture de stock", description: `${product.name} n'est plus disponible`, variant: "destructive" });
@@ -648,6 +685,7 @@ const VendorPos = observer(() => {
   }, [toast]);
 
   const handleUpdateQuantity = useCallback((index: number, delta: number) => posService.updateQuantity(index, delta), []);
+  
   const handleUpdateDiscount = useCallback((index: number, discountPercent: number) => {
     const newCart = [...cart];
     if (newCart[index]) {
@@ -655,145 +693,8 @@ const VendorPos = observer(() => {
       posService.setCart(newCart);
     }
   }, [cart]);
+  
   const handleRemoveFromCart = useCallback((index: number) => posService.removeFromCart(index), []);
-
-  // VENTE DIRECTE AU SERVEUR - PAS DE SYNCHRONISATION
-  // VENTE DIRECTE AU SERVEUR - PAS DE SYNCHRONISATION
-const handleValidateSale = useCallback(async () => {
-  if (cart.length === 0) {
-    toast({ title: "Panier vide", description: "Ajoutez des produits avant de valider", variant: "destructive" });
-    return;
-  }
-  
-  if (isProcessing || isProcessingSale) {
-    toast({ title: "Vente en cours", description: "Une vente est déjà en cours de validation", variant: "warning" });
-    return;
-  }
-
-  if (!isOnline) {
-    toast({ title: "Pas de connexion", description: "Vous devez être connecté à internet pour effectuer une vente", variant: "destructive" });
-    return;
-  }
-
-  const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
-  if (!pharmacyId) {
-    toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
-    return;
-  }
-
-  setIsProcessingSale(true);
-  setShowCartModal(false);
-  
-  try {
-    // Construction des items SANS unit_price et tva_rate (backend les prend du stock)
-    const saleItems = cart.map(item => ({
-      product_id: item.id,
-      quantity: item.quantity,
-      discount_percent: item.discount_percent || 0,
-      // NE PAS inclure unit_price ou tva_rate - le backend les récupère du stock
-    }));
-
-    // Construction des données de vente - CORRIGÉ
-    const saleData = {
-      items: saleItems,
-      payment_method: paymentMethod,  // String simple, pas .value
-      customer_name: customerName,
-      pharmacy_id: pharmacyId,
-      // CORRECTION: utiliser 'global_discount' pas 'global_discount_percent'
-      global_discount: globalDiscount > 0 ? globalDiscount : undefined,
-      // Optionnel: client_id si vous avez un système de clients
-      // customer_id: customerId,
-    };
-
-    console.log('📤 Envoi de la vente au serveur:', JSON.stringify(saleData, null, 2));
-    
-    const response = await api.post('/sales', saleData);
-    console.log('✅ Vente enregistrée sur le serveur:', response.data);
-
-    // Extraire les données de la réponse (différents formats possibles)
-    const saleResponse = response.data?.sale || response.data;
-    const receiptNumber = saleResponse?.receipt_number || 
-                         response.data?.receipt_number || 
-                         `VENTE-${Date.now()}`;
-
-    // Recharger les produits pour mettre à jour les stocks
-    await posService.loadProducts();
-
-    const saleForInvoice = {
-      id: saleResponse?.id || `sale_${Date.now()}`,
-      receiptNumber: receiptNumber,
-      items: cart.map(item => ({
-        id: item.id,
-        name: item.name,
-        price: item.unitPrice,
-        quantity: item.quantity,
-        code: item.code,
-        discount_percent: item.discount_percent || 0,
-        discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
-      })),
-      subtotal: subtotalCDF,
-      total: totalCDF,
-      discount_percent: globalDiscount,
-      discount_amount: discountAmountCDF,
-      paymentMethod: paymentMethod,
-      timestamp: Date.now(),
-      cashierName: cashierInfo.name,
-      cashierId: cashierInfo.id,
-      posName: cashierInfo.posName,
-      branchId: pharmacyId,
-      sessionNumber: cashierInfo.sessionNumber,
-      customerName: customerName,
-    };
-    
-    setCurrentSaleForInvoice(saleForInvoice);
-    posService.setCart([]);
-    setGlobalDiscount(0);
-    
-    toast({ title: "Succès", description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`, variant: "success" });
-    setShowInvoice(true);
-    
-  } catch (error: any) {
-    console.error('❌ Erreur lors de la validation de la vente:', error);
-    
-    // Amélioration du logging d'erreur
-    if (error.response) {
-      console.error('📡 Réponse serveur:', {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data,
-        headers: error.response.headers
-      });
-    }
-    
-    let errorMessage = "La validation de la vente a échoué";
-    if (error.response?.data?.detail) {
-      // Gérer les détails d'erreur FastAPI
-      const detail = error.response.data.detail;
-      if (typeof detail === 'string') {
-        errorMessage = detail;
-      } else if (typeof detail === 'object' && detail.message) {
-        errorMessage = detail.message;
-      } else if (typeof detail === 'object' && detail.unavailable_items) {
-        // Erreur de stock insuffisant
-        const unavailable = detail.unavailable_items;
-        errorMessage = `Stock insuffisant: ${unavailable.map((u: any) => `${u.product_name} (dispo: ${u.available})`).join(', ')}`;
-      } else {
-        errorMessage = JSON.stringify(detail);
-      }
-    } else if (error.response?.data?.message) {
-      errorMessage = error.response.data.message;
-    } else if (error.response?.data?.error) {
-      errorMessage = error.response.data.error;
-    } else if (error.message) {
-      errorMessage = error.message;
-    }
-    
-    toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
-    setCurrentSaleForInvoice(null);
-  } finally {
-    setIsProcessingSale(false);
-  }
-}, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, customerName, isOnline, user]);
   
   const handleAddProductFromModal = useCallback((product: Product) => {
     if (product.quantity <= 0) {
@@ -808,6 +709,151 @@ const handleValidateSale = useCallback(async () => {
     setShowInvoice(false);
     setCurrentSaleForInvoice(null);
   }, []);
+
+  // ============================================
+  // VALIDATION DE VENTE
+  // ============================================
+
+  const handleValidateSale = useCallback(async () => {
+    if (cart.length === 0) {
+      toast({ title: "Panier vide", description: "Ajoutez des produits avant de valider", variant: "destructive" });
+      return;
+    }
+
+    if (isProcessing || isProcessingSale) {
+      toast({ title: "Vente en cours", description: "Une vente est déjà en cours de validation", variant: "warning" });
+      return;
+    }
+
+    if (!isOnline) {
+      toast({ title: "Pas de connexion", description: "Vous devez être connecté à internet pour effectuer une vente", variant: "destructive" });
+      return;
+    }
+
+    const pharmacyId = cashierInfo.pharmacy_id || user?.pharmacy_id;
+    if (!pharmacyId) {
+      toast({ title: "Erreur", description: "Pharmacie non identifiée", variant: "destructive" });
+      return;
+    }
+
+    setIsProcessingSale(true);
+    setShowCartModal(false);
+
+    try {
+      // Construction des items
+      const saleItems = cart.map(item => ({
+        product_id: item.id,
+        quantity: item.quantity,
+        discount_percent: item.discount_percent || 0,
+      }));
+
+      // Construction des données de vente
+      const saleData = {
+        items: saleItems,
+        payment_method: paymentMethod,
+        customer_name: customerName,
+        pharmacy_id: pharmacyId,
+        global_discount: globalDiscount > 0 ? globalDiscount : undefined,
+      };
+
+      console.log('📤 Envoi de la vente au serveur:', JSON.stringify(saleData, null, 2));
+
+      const response = await api.post('/sales', saleData);
+      console.log('✅ Vente enregistrée sur le serveur:', response.data);
+
+      // Extraire les données de la réponse
+      const saleResponse = response.data?.sale || response.data;
+      const receiptNumber = saleResponse?.receipt_number ||
+        response.data?.receipt_number ||
+        `VENTE-${Date.now()}`;
+
+      // 🔧 AJOUT CRUCIAL : Ajouter la vente au store avec tous ses détails
+      if (saleResponse && saleResponse.id) {
+        console.log('Items dans la réponse:', saleResponse.items);
+        addSaleFromApi(saleResponse);
+      }
+
+      // Recharger les produits pour mettre à jour les stocks
+      await posService.loadProducts();
+
+      // Recharger l'historique des ventes
+      await fetchSales();
+
+      const saleForInvoice = {
+        id: saleResponse?.id || `sale_${Date.now()}`,
+        receiptNumber: receiptNumber,
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.unitPrice,
+          quantity: item.quantity,
+          code: item.code,
+          discount_percent: item.discount_percent || 0,
+          discount_amount: ((item.unitPrice * item.quantity) * ((item.discount_percent || 0) / 100))
+        })),
+        subtotal: subtotalCDF,
+        total: totalCDF,
+        discount_percent: globalDiscount,
+        discount_amount: discountAmountCDF,
+        paymentMethod: paymentMethod,
+        timestamp: Date.now(),
+        cashierName: cashierInfo.name,
+        cashierId: cashierInfo.id,
+        posName: cashierInfo.posName,
+        branchId: pharmacyId,
+        sessionNumber: cashierInfo.sessionNumber,
+        customerName: customerName,
+      };
+
+      setCurrentSaleForInvoice(saleForInvoice);
+      posService.setCart([]);
+      setGlobalDiscount(0);
+
+      toast({ title: "Succès", description: `Vente enregistrée avec succès. Réf: ${receiptNumber}`, variant: "success" });
+      setShowInvoice(true);
+
+    } catch (error: any) {
+      console.error('❌ Erreur lors de la validation de la vente:', error);
+
+      if (error.response) {
+        console.error('📡 Réponse serveur:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data,
+        });
+      }
+
+      let errorMessage = "La validation de la vente a échoué";
+      if (error.response?.data?.detail) {
+        const detail = error.response.data.detail;
+        if (typeof detail === 'string') {
+          errorMessage = detail;
+        } else if (typeof detail === 'object' && detail.message) {
+          errorMessage = detail.message;
+        } else if (typeof detail === 'object' && detail.unavailable_items) {
+          const unavailable = detail.unavailable_items;
+          errorMessage = `Stock insuffisant: ${unavailable.map((u: any) => `${u.product_name} (dispo: ${u.available})`).join(', ')}`;
+        } else {
+          errorMessage = JSON.stringify(detail);
+        }
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+
+      toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
+      setCurrentSaleForInvoice(null);
+    } finally {
+      setIsProcessingSale(false);
+    }
+  }, [cart, isProcessing, isProcessingSale, globalDiscount, toast, posService, subtotalCDF, totalCDF, paymentMethod, cashierInfo, discountAmountCDF, discountAmountUSD, customerName, isOnline, user, addSaleFromApi, fetchSales]);
+
+  // ============================================
+  // RENDU
+  // ============================================
 
   if (loading) {
     return (
@@ -916,7 +962,7 @@ const handleValidateSale = useCallback(async () => {
             <Package size={20} />
             Voir produits ({products.length})
           </button>
-          
+
           <button
             onClick={() => setShowCartModal(true)}
             className="relative flex items-center justify-center gap-2 rounded-2xl bg-blue-600 py-4 font-semibold text-white transition-colors hover:bg-blue-700"
@@ -937,11 +983,11 @@ const handleValidateSale = useCallback(async () => {
               <div>
                 <p className="text-xs text-slate-400">Total</p>
                 <p className="text-xl font-black text-blue-600">
-                  {currencyMode === 'cdf_only' 
+                  {currencyMode === 'cdf_only'
                     ? `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${totalCDF.toFixed(2)}`
                     : currencyMode === 'usd_only'
-                    ? `${config.currencies.find(c => c.code === 'USD')?.symbol || '$'} ${totalUSD.toFixed(2)}`
-                    : `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${totalCDF.toFixed(2)}`
+                      ? `${config.currencies.find(c => c.code === 'USD')?.symbol || '$'} ${totalUSD.toFixed(2)}`
+                      : `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${totalCDF.toFixed(2)}`
                   }
                 </p>
               </div>
@@ -1036,11 +1082,11 @@ const handleValidateSale = useCallback(async () => {
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-bold text-blue-600">
-                          {currencyMode === 'cdf_only' 
+                          {currencyMode === 'cdf_only'
                             ? `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${(product.selling_price || 0).toFixed(2)}`
                             : currencyMode === 'usd_only'
-                            ? `${config.currencies.find(c => c.code === 'USD')?.symbol || '$'} ${((product.selling_price || 0) / activeCurrency.exchangeRate).toFixed(2)}`
-                            : `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${(product.selling_price || 0).toFixed(2)}`
+                              ? `${config.currencies.find(c => c.code === 'USD')?.symbol || '$'} ${((product.selling_price || 0) / activeCurrency.exchangeRate).toFixed(2)}`
+                              : `${config.currencies.find(c => c.code === 'CDF')?.symbol || 'FC'} ${(product.selling_price || 0).toFixed(2)}`
                           }
                         </p>
                         <button
@@ -1053,9 +1099,8 @@ const handleValidateSale = useCallback(async () => {
                             }
                           }}
                           disabled={!isAvailable}
-                          className={`mt-1 rounded-lg px-3 py-1 text-xs font-semibold ${
-                            isAvailable ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'
-                          }`}
+                          className={`mt-1 rounded-lg px-3 py-1 text-xs font-semibold ${isAvailable ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-200 text-slate-400'
+                            }`}
                         >
                           Ajouter
                         </button>

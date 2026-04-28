@@ -10,9 +10,9 @@ export interface LocalSaleItem {
   price: number;
   quantity: number;
   code?: string;
-  product_code?: string;      // 🔧 AJOUTÉ - Alias pour code (compatibilité)
-  product_name?: string;       // 🔧 AJOUTÉ - Nom du produit (compatibilité)
-  productId?: string;          // 🔧 AJOUTÉ - ID du produit (compatibilité)
+  product_code?: string;
+  product_name?: string;
+  productId?: string;
   discount?: number;
   discount_percent?: number;
   batch_number?: string;
@@ -76,13 +76,37 @@ export const useSaleStore = create<SaleStore>()(
       syncInProgress: false,
       lastSyncAttempt: null,
 
+      // ============================================
+      // RÉCUPÉRATION DES VENTES AVEC ITEMS
+      // ============================================
       fetchSales: async () => {
         set({ loading: true, error: null });
         try {
           const response = await saleService.getSales({
             limit: 500,
           });
-          set({ sales: response.items || [] });
+          
+          // Log pour déboguer
+          console.log('📦 Ventes récupérées:', response.items?.length || 0);
+          if (response.items && response.items.length > 0) {
+            const firstSale = response.items[0];
+            console.log('📋 Première vente:', {
+              id: firstSale.id,
+              itemsCount: firstSale.items?.length || 0,
+              hasItems: !!firstSale.items,
+              items: firstSale.items
+            });
+            
+            // Vérifier que chaque vente a ses items
+            const salesWithItems = response.items.map(sale => ({
+              ...sale,
+              items: sale.items || []
+            }));
+            
+            set({ sales: salesWithItems });
+          } else {
+            set({ sales: [] });
+          }
         } catch (error) {
           console.error('Erreur chargement ventes:', error);
           set({ error: 'Impossible de charger les ventes' });
@@ -91,6 +115,9 @@ export const useSaleStore = create<SaleStore>()(
         }
       },
 
+      // ============================================
+      // AJOUT D'UNE VENTE LOCALE
+      // ============================================
       addLocalSale: (sale) => {
         const id = `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         
@@ -123,20 +150,44 @@ export const useSaleStore = create<SaleStore>()(
         return id;
       },
 
+      // ============================================
+      // AJOUT D'UNE VENTE DEPUIS L'API AVEC SES ITEMS
+      // ============================================
       addSaleFromApi: (sale, localId) => {
+        console.log('➕ Ajout vente au store:', {
+          id: sale.id,
+          itemsCount: sale.items?.length || 0,
+          items: sale.items
+        });
+        
         set((state) => {
+          // Vérifier si la vente existe déjà
           const saleExists = state.sales.some(s => s.id === sale.id);
-          if (saleExists) {
-            return state;
-          }
+          
+          // S'assurer que les items sont présents
+          const saleWithItems = {
+            ...sale,
+            items: sale.items || []
+          };
           
           let newLocalSales = state.localSales;
           if (localId) {
             newLocalSales = state.localSales.filter(local => local.id !== localId);
           }
           
+          if (saleExists) {
+            // Mettre à jour la vente existante avec les items
+            return {
+              sales: state.sales.map(s => 
+                s.id === sale.id ? { ...s, items: saleWithItems.items } : s
+              ),
+              localSales: newLocalSales,
+            };
+          }
+          
+          // Ajouter la nouvelle vente au début du tableau
           return {
-            sales: [sale, ...state.sales],
+            sales: [saleWithItems, ...state.sales],
             localSales: newLocalSales,
           };
         });
@@ -150,10 +201,14 @@ export const useSaleStore = create<SaleStore>()(
         }));
       },
 
+      // ============================================
+      // SYNCHRONISATION DES VENTES PENDING
+      // ============================================
       syncPendingSales: async () => {
         const { syncInProgress, localSales, maxRetries } = get();
         
         if (syncInProgress) {
+          console.log('🔄 Synchronisation déjà en cours');
           return;
         }
         
@@ -162,9 +217,11 @@ export const useSaleStore = create<SaleStore>()(
         );
         
         if (pendingSales.length === 0) {
+          console.log('✅ Aucune vente en attente de synchronisation');
           return;
         }
         
+        console.log(`🔄 Synchronisation de ${pendingSales.length} vente(s)...`);
         set({ syncInProgress: true, syncing: true });
         
         for (const pendingSale of pendingSales) {
@@ -197,6 +254,7 @@ export const useSaleStore = create<SaleStore>()(
             }
             
             if (createdSale) {
+              console.log(`✅ Vente ${pendingSale.id} synchronisée avec succès`);
               get().addSaleFromApi(createdSale, pendingSale.id);
             } else {
               set((state) => ({
@@ -207,6 +265,7 @@ export const useSaleStore = create<SaleStore>()(
             }
           } catch (error: any) {
             const newRetryCount = (pendingSale.retryCount || 0) + 1;
+            console.error(`❌ Erreur synchronisation vente ${pendingSale.id}:`, error.message);
             set((state) => ({
               localSales: state.localSales.map((sale) =>
                 sale.id === pendingSale.id
@@ -223,11 +282,13 @@ export const useSaleStore = create<SaleStore>()(
         }
         
         set({ syncInProgress: false, syncing: false });
+        console.log('🔄 Synchronisation terminée');
       },
 
       clearError: () => set({ error: null }),
       
       resetFailedSales: () => {
+        console.log('🔄 Réinitialisation des ventes échouées');
         set((state) => ({
           localSales: state.localSales.map((sale) =>
             !sale.synced && (sale.retryCount || 0) >= state.maxRetries
