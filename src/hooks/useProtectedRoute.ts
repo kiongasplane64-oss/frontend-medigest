@@ -1,94 +1,166 @@
 // hooks/useProtectedRoute.ts
-import { useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useAuthStore } from '@/store/useAuthStore';
+import { useEffect, useRef } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { useAuthStore } from "@/store/useAuthStore";
 
 export const useProtectedRoute = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated, user, isSuperAdmin, isLoading } = useAuthStore();
-  const hasRedirected = useRef(false);
+
+  const isRedirecting = useRef(false);
+  const lastPathRef = useRef<string>("");
 
   useEffect(() => {
-    // Attendre que le chargement soit terminé
     if (isLoading) return;
+    if (isRedirecting.current) return;
 
-    // Si non authentifié et pas sur une route publique
-    if (!isAuthenticated) {
-      const publicRoutes = ['/login', '/register', '/forgot-password'];
-      if (!publicRoutes.includes(location.pathname)) {
-        console.log('🔐 Non authentifié, redirection vers login');
-        navigate('/login', { replace: true });
-      }
-      return;
-    }
-
-    // Si authentifié mais déjà redirigé, éviter les boucles
-    if (hasRedirected.current) return;
-
-    const userRole = user?.role;
-    const isSuperAdminUser = userRole === 'super_admin' || isSuperAdmin();
     const currentPath = location.pathname;
 
-    console.log('🔍 [ProtectedRoute] Vérification:', {
-      currentPath,
-      userRole,
-      isSuperAdminUser,
-      hasSubscription: user?.has_subscription
-    });
+    // Éviter les redirections en boucle
+    if (lastPathRef.current === currentPath && isAuthenticated) {
+      console.log("🔄 Évitement de boucle détecté, même chemin:", currentPath);
+      return;
+    }
+    lastPathRef.current = currentPath;
 
-    // Cas 1: Super Admin
+    // ROUTES PUBLIQUES
+    const publicRoutes = [
+      "/login",
+      "/register",
+      "/forgot-password",
+      "/verify-otp",
+      "/out-of-service",
+    ];
+
+    // ===============================
+    // 🔒 NON AUTHENTIFIÉ
+    // ===============================
+    if (!isAuthenticated) {
+      if (!publicRoutes.includes(currentPath)) {
+        console.log("🔐 Non authentifié → /login");
+        isRedirecting.current = true;
+        navigate("/login", { replace: true });
+        setTimeout(() => {
+          isRedirecting.current = false;
+        }, 100);
+      }
+      return;
+    }
+
+    // ===============================
+    // ⏳ Attendre que user soit chargé
+    // ===============================
+    if (!user) {
+      console.log("⏳ Utilisateur en cours de chargement...");
+      return;
+    }
+
+    const userRole = user?.role;
+    const isSuperAdminUser = userRole === "super_admin" || isSuperAdmin();
+    const isSellerUser = userRole === "seller" || userRole === "vendeur";
+
+    // ===============================
+    // 👑 SUPER ADMIN - Redirection uniquement si pas sur super-admin
+    // ===============================
     if (isSuperAdminUser) {
-      // Si sur une route non Super Admin, rediriger vers /super-admin
-      if (!currentPath.startsWith('/super-admin') && currentPath !== '/superadmin-welcome') {
-        console.log('🚀 Super Admin sur route non autorisée, redirection vers /super-admin');
-        hasRedirected.current = true;
-        navigate('/super-admin', { replace: true });
+      if (
+        !currentPath.startsWith("/super-admin") &&
+        currentPath !== "/superadmin-welcome"
+      ) {
+        console.log("👑 SuperAdmin → /super-admin");
+        isRedirecting.current = true;
+        navigate("/super-admin", { replace: true });
         setTimeout(() => {
-          hasRedirected.current = false;
-        }, 1000);
+          isRedirecting.current = false;
+        }, 100);
       }
       return;
     }
 
-    // Cas 2: Utilisateur standard sans abonnement
-    if (!user?.has_subscription) {
-      // Si pas sur /subscription, rediriger
-      if (currentPath !== '/subscription') {
-        console.log('🚀 Utilisateur sans abonnement, redirection vers /subscription');
-        hasRedirected.current = true;
-        navigate('/subscription', { replace: true });
-        setTimeout(() => {
-          hasRedirected.current = false;
-        }, 1000);
+    // ===============================
+    // 🚫 SUPPRIMÉ : Logique de redirection pour vendeurs
+    // Les vendeurs sont gérés par VendorLayout + NoSubscriptionGuard
+    // ===============================
+    // if (isSellerUser) {
+    //   if (currentPath !== "/vendor-pos" && !publicRoutes.includes(currentPath)) {
+    //     console.log("👨‍💼 Vendeur → /vendor-pos");
+    //     isRedirecting.current = true;
+    //     navigate("/vendor-pos", { replace: true });
+    //     setTimeout(() => {
+    //       isRedirecting.current = false;
+    //     }, 100);
+    //     return;
+    //   }
+    // }
+
+    // ===============================
+    // ✅ VÉRIFICATION ABONNEMENT (POUR LES ADMINS UNIQUEMENT)
+    // ===============================
+    if (!isSellerUser) {
+      // Routes autorisées sans abonnement
+      const subscriptionSafeRoutes = [
+        "/subscription",
+        "/payment",
+        "/payment-success",
+        "/activate-code",
+      ];
+
+      // has_subscription peut être undefined pendant le chargement
+      const hasActiveSubscription = user?.has_subscription === true;
+
+      if (!hasActiveSubscription) {
+        // Pas d'abonnement actif → rediriger vers subscription
+        if (!subscriptionSafeRoutes.includes(currentPath) && !publicRoutes.includes(currentPath)) {
+          console.log("💳 Pas d'abonnement → /subscription");
+          isRedirecting.current = true;
+          navigate("/subscription", { replace: true });
+          setTimeout(() => {
+            isRedirecting.current = false;
+          }, 100);
+        }
+        return;
       }
+    }
+
+    // ===============================
+    // ✅ AVEC ABONNEMENT ACTIF (ADMIN) 
+    // ===============================
+    
+    // Pour les admins seulement - redirection depuis /subscription
+    if (!isSellerUser && currentPath === "/subscription") {
+      console.log("👨‍💻 Admin abonné → /dashboard");
+      isRedirecting.current = true;
+      navigate("/dashboard", { replace: true });
+      setTimeout(() => {
+        isRedirecting.current = false;
+      }, 100);
       return;
     }
 
-    // Cas 3: Utilisateur standard avec abonnement
-    if (user?.has_subscription) {
-      // Si sur /subscription, rediriger vers /dashboard
-      if (currentPath === '/subscription') {
-        console.log('🚀 Utilisateur avec abonnement sur /subscription, redirection vers /dashboard');
-        hasRedirected.current = true;
-        navigate('/dashboard', { replace: true });
-        setTimeout(() => {
-          hasRedirected.current = false;
-        }, 1000);
-        return;
-      }
-      
-      // Si sur une route Super Admin, rediriger vers /dashboard
-      if (currentPath.startsWith('/super-admin') || currentPath === '/superadmin-welcome') {
-        console.log('🚀 Utilisateur standard sur route Super Admin, redirection vers /dashboard');
-        hasRedirected.current = true;
-        navigate('/dashboard', { replace: true });
-        setTimeout(() => {
-          hasRedirected.current = false;
-        }, 1000);
-        return;
-      }
+    // 🚫 Accès super-admin interdit pour les admins
+    if (!isSellerUser && (currentPath.startsWith("/super-admin") || currentPath === "/superadmin-welcome")) {
+      console.log("👨‍💻 Admin → accès super-admin interdit → /dashboard");
+      isRedirecting.current = true;
+      navigate("/dashboard", { replace: true });
+      setTimeout(() => {
+        isRedirecting.current = false;
+      }, 100);
+      return;
     }
 
-  }, [isAuthenticated, user, location.pathname, isLoading, navigate, isSuperAdmin]);
+    // 🔄 VENDEUR: Ne pas rediriger depuis vendor-pos vers autre chose
+    // Les vendeurs restent sur vendor-pos, c'est leur seul point d'entrée
+
+    // ✅ Accès autorisé
+    console.log(`✅ Accès autorisé: ${currentPath} (rôle: ${userRole})`);
+
+  }, [
+    isAuthenticated,
+    user,
+    location.pathname,
+    isLoading,
+    navigate,
+    isSuperAdmin,
+  ]);
 };

@@ -1,264 +1,242 @@
 // components/NoSubscriptionGuard.tsx
-import { useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useSubscription } from '@/hooks/useSubscription';
-import { AlertTriangle, Calendar, Clock, CreditCard } from 'lucide-react';
+import { useLocation } from "react-router-dom";
+import { useSubscription } from "@/hooks/useSubscription";
+import { useAuthStore } from "@/store/useAuthStore";
+import { useEffect, useState } from "react";
 
 interface NoSubscriptionGuardProps {
   children: React.ReactNode;
 }
 
 export function NoSubscriptionGuard({ children }: NoSubscriptionGuardProps) {
-  const navigate = useNavigate();
   const location = useLocation();
-  const { 
-    canAccess, 
-    isExpired, 
-    daysRemaining, 
+
+  // Récupérer l'état d'authentification depuis le store
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuthStore();
+
+  const {
+    canAccess,
+    isExpired,
+    daysRemaining,
     trialDaysRemaining,
     isTrial,
     subscription,
-    user
+    isLoading: isSubLoading,
+    hasActiveSubscription,
   } = useSubscription();
+
+  const [isChecking, setIsChecking] = useState(true);
+  const currentPath = location.pathname;
+
+  // ROUTES JAMAIS BLOQUEES
+  const publicAllowedPaths = [
+    "/login",
+    "/register",
+    "/verify-otp",
+    "/out-of-service",
+  ];
+
+  const subscriptionAllowedPaths = [
+    "/subscription",
+    "/payment",
+    "/payment-success",
+    "/activate-code",
+  ];
+
+  // ===============================
+  // 🔒 ÉTAPE 1: VÉRIFIER SI CONNECTÉ
+  // ===============================
   
-  // Vérifier si l'accès est bloqué
-  const isBlocked = !canAccess && user?.role !== 'super_admin';
-  
-  // Redirection automatique si nécessaire (optionnel)
   useEffect(() => {
-    // Si l'utilisateur est bloqué et n'est pas déjà sur la page d'abonnement
-    if (isBlocked && location.pathname !== '/subscription') {
-      // Optionnel: rediriger automatiquement vers la page d'abonnement
-      // Désactivé pour permettre à l'utilisateur de voir le message
-      // navigate('/subscription', { state: { from: location.pathname } });
+    if (isAuthLoading || isSubLoading) return;
+    
+    const isSeller = user?.role === "seller" || user?.role === "vendeur";
+    
+    // Pour les vendeurs, on vérifie l'abonnement de leur branche via canAccess
+    // canAccess dans useSubscription vérifie déjà l'abonnement via l'API /status
+    if (isSeller) {
+      const hasAccess = canAccess === true || hasActiveSubscription === true;
+      
+      if (!hasAccess && !subscriptionAllowedPaths.includes(currentPath) && !publicAllowedPaths.includes(currentPath)) {
+        console.log("❌ [NoSubscriptionGuard] Vendeur sans abonnement de branche → redirection /subscription");
+        // Note: On utilise window.location pour une redirection propre sans boucle
+        window.location.href = "/subscription";
+      }
     }
-  }, [isBlocked, location.pathname, navigate]);
-  
-  // Si l'utilisateur a accès, afficher les enfants normalement
-  if (canAccess || user?.role === 'super_admin') {
+    
+    // Petite optimisation : attendre un peu avant de finir la vérification
+    const timer = setTimeout(() => {
+      setIsChecking(false);
+    }, 100);
+    
+    return () => clearTimeout(timer);
+  }, [isAuthLoading, isSubLoading, canAccess, hasActiveSubscription, user, currentPath]);
+
+  // Attendre le chargement de l'authentification
+  if (isAuthLoading || isSubLoading || isChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+      </div>
+    );
+  }
+
+  // 🔐 SI NON AUTHENTIFIÉ → Ne pas rediriger automatiquement
+  // Laisser useProtectedRoute gérer la redirection vers login
+  // Retourner null silencieusement pour éviter les boucles
+  if (!isAuthenticated) {
+    console.log("🔐 [NoSubscriptionGuard] Non authentifié, en attente de redirection par useProtectedRoute...");
+    return null;
+  }
+
+  // DEBUG: Loguer les valeurs
+  console.log("🔍 [NoSubscriptionGuard] State:", {
+    currentPath,
+    isAuthenticated,
+    canAccess,
+    isExpired,
+    daysRemaining,
+    userRole: user?.role,
+    hasActiveSubscription,
+  });
+
+  // ===============================
+  // ✅ ÉTAPE 2: VÉRIFIER L'ABONNEMENT
+  // ===============================
+
+  // 1. Routes publiques → toujours autorisées (même sans abonnement)
+  if (publicAllowedPaths.includes(currentPath)) {
+    console.log("✅ [NoSubscriptionGuard] Route publique → accès autorisé");
     return <>{children}</>;
   }
-  
-  // Sinon, afficher l'interface de blocage
-  return (
-    <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full">
-        <ExpiredSubscriptionCard
-          isExpired={isExpired}
-          daysRemaining={daysRemaining}
-          isTrial={isTrial}
-          trialDaysRemaining={trialDaysRemaining}
-          subscription={subscription}
-          onRenew={() => navigate('/subscription', { state: { from: location.pathname } })}
-        />
-      </div>
-    </div>
-  );
-}
 
-interface ExpiredSubscriptionCardProps {
-  isExpired: boolean;
-  daysRemaining: number;
-  isTrial: boolean;
-  trialDaysRemaining: number;
-  subscription: any;
-  onRenew: () => void;
-}
+  // 2. Routes abonnement → autorisées même sans accès
+  if (subscriptionAllowedPaths.includes(currentPath)) {
+    console.log("✅ [NoSubscriptionGuard] Route d'abonnement → accès autorisé");
+    return <>{children}</>;
+  }
 
-function ExpiredSubscriptionCard({
-  isExpired,
-  daysRemaining,
-  isTrial,
-  trialDaysRemaining,
-  subscription,
-  onRenew
-}: ExpiredSubscriptionCardProps) {
-  const getTitle = () => {
-    if (isTrial && trialDaysRemaining <= 0) return "Période d'essai terminée";
-    if (isTrial) return "Fin d'essai imminente";
-    if (isExpired) return "Abonnement expiré";
-    if (daysRemaining <= 7 && daysRemaining > 0) return "Renouvellement imminent";
-    return "Accès restreint";
-  };
+  // 3. Super admin → toujours autorisé
+  if (user?.role === "super_admin") {
+    console.log("✅ [NoSubscriptionGuard] Super Admin → accès autorisé");
+    return <>{children}</>;
+  }
+
+  // 4. Vendeur → vérification via canAccess (qui prend en compte l'abonnement de la branche)
+  const isSeller = user?.role === "seller" || user?.role === "vendeur";
   
-  const getDescription = () => {
-    if (isTrial && trialDaysRemaining <= 0) {
-      return "Votre période d'essai est terminée. Pour continuer à utiliser toutes les fonctionnalités, veuillez souscrire à un abonnement.";
-    }
-    if (isTrial && trialDaysRemaining > 0) {
-      return `Votre période d'essai se termine dans ${trialDaysRemaining} jour${trialDaysRemaining > 1 ? 's' : ''}. Après cette date, vous perdrez l'accès à certaines fonctionnalités.`;
-    }
-    if (isExpired) {
-      return "Votre abonnement a expiré. Vous êtes actuellement en mode lecture seule. Pour retrouver l'accès complet, veuillez renouveler votre abonnement.";
-    }
-    if (daysRemaining <= 7 && daysRemaining > 0) {
-      return `Votre abonnement expire dans ${daysRemaining} jour${daysRemaining > 1 ? 's' : ''}. Renouvelez dès maintenant pour éviter toute interruption.`;
-    }
-    return "Vous n'avez pas d'abonnement actif. Souscrivez à un forfait pour accéder à toutes les fonctionnalités.";
-  };
-  
-  const getActionButtonText = () => {
-    if (isTrial && trialDaysRemaining <= 0) return "Souscrire un abonnement";
-    if (isExpired) return "Renouveler l'abonnement";
-    return "Voir les offres";
-  };
-  
-  const getExpiryDate = () => {
-    if (subscription?.end_date) {
-      return new Date(subscription.end_date).toLocaleDateString('fr-FR', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      });
-    }
-    return null;
-  };
-  
-  const getStartDate = () => {
-    if (subscription?.start_date) {
-      return new Date(subscription.start_date).toLocaleDateString('fr-FR', {
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      });
-    }
-    return null;
-  };
-  
-  return (
-    <div className="bg-white rounded-4xl shadow-2xl overflow-hidden">
-      {/* Header avec dégradé */}
-      <div className={`p-8 text-white ${
-        isExpired || (isTrial && trialDaysRemaining <= 0)
-          ? 'bg-linear-to-r from-red-600 to-red-500'
-          : 'bg-linear-to-r from-amber-500 to-orange-500'
-      }`}>
-        <div className="flex items-center gap-4 mb-4">
-          <div className="w-16 h-16 bg-white/20 rounded-3xl flex items-center justify-center">
-            <AlertTriangle size={32} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-3xl font-black uppercase italic tracking-tighter">
-              {getTitle()}
-            </h1>
-            <p className="text-sm font-medium opacity-90 mt-1">
-              {subscription?.plan_name || 'Aucun plan actif'}
-            </p>
-          </div>
-        </div>
-      </div>
+  if (isSeller) {
+    const hasBranchSubscription = canAccess === true || hasActiveSubscription === true;
+    
+    if (hasBranchSubscription) {
+      console.log("✅ [NoSubscriptionGuard] Vendeur avec abonnement actif de branche → accès autorisé");
+      return <>{children}</>;
+    } else {
+      console.log("❌ [NoSubscriptionGuard] Vendeur sans abonnement de branche actif");
       
-      {/* Contenu */}
-      <div className="p-8 space-y-6">
-        <p className="text-slate-600 font-medium leading-relaxed">
-          {getDescription()}
-        </p>
-        
-        {/* Informations sur l'abonnement */}
-        {(getStartDate() || getExpiryDate()) && (
-          <div className="bg-slate-50 rounded-3xl p-6 space-y-3">
-            <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest">
-              Détails de l'abonnement
-            </h3>
-            
-            {getStartDate() && (
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <Calendar size={18} className="text-slate-400" />
-                  <span className="text-sm text-slate-600">Début</span>
-                </div>
-                <span className="text-sm font-bold text-slate-800">{getStartDate()}</span>
-              </div>
-            )}
-            
-            {getExpiryDate() && (
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3">
-                  <Clock size={18} className="text-slate-400" />
-                  <span className="text-sm text-slate-600">Fin</span>
-                </div>
-                <span className="text-sm font-bold text-slate-800">{getExpiryDate()}</span>
-              </div>
-            )}
-            
-            {!isExpired && daysRemaining > 0 && !isTrial && (
-              <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                <div className="flex items-center gap-3">
-                  <Clock size={18} className="text-amber-500" />
-                  <span className="text-sm text-slate-600">Temps restant</span>
-                </div>
-                <span className="text-sm font-black text-amber-600">
-                  {daysRemaining} jour{daysRemaining > 1 ? 's' : ''}
-                </span>
-              </div>
-            )}
-            
-            {isTrial && trialDaysRemaining > 0 && (
-              <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                <div className="flex items-center gap-3">
-                  <Clock size={18} className="text-blue-500" />
-                  <span className="text-sm text-slate-600">Essai restant</span>
-                </div>
-                <span className="text-sm font-black text-blue-600">
-                  {trialDaysRemaining} jour{trialDaysRemaining > 1 ? 's' : ''}
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {/* Mode lecture seule - Avertissement */}
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle size={20} className="text-amber-500 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-bold text-amber-800 mb-1">
-                Mode lecture seule actif
-              </p>
-              <p className="text-xs text-amber-700">
-                Vous pouvez consulter vos données, mais vous ne pouvez pas créer, modifier ou supprimer des éléments.
-              </p>
+      // Afficher la page de blocage
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-6 text-center space-y-4">
+            <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
             </div>
+            <h2 className="text-xl font-bold text-red-600">Accès restreint</h2>
+            <p className="text-slate-600 text-sm">
+              L'abonnement de votre pharmacie a expiré ou n'est pas actif.
+              Veuillez contacter l'administrateur de votre pharmacie pour renouveler l'abonnement.
+            </p>
+            <button
+              onClick={() => {
+                // Déconnexion volontaire uniquement
+                localStorage.clear();
+                sessionStorage.clear();
+                window.location.href = "/login";
+              }}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition"
+            >
+              Se déconnecter
+            </button>
           </div>
         </div>
-        
-        {/* Restrictions */}
-        <div className="space-y-2">
-          <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">
-            Restrictions actuelles
-          </h4>
-          <ul className="space-y-2">
-            <li className="flex items-center gap-3 text-sm text-slate-500">
-              <div className="w-1.5 h-1.5 bg-slate-300 rounded-full" />
-              Consultation des données uniquement
-            </li>
-            <li className="flex items-center gap-3 text-sm text-slate-500">
-              <div className="w-1.5 h-1.5 bg-slate-300 rounded-full" />
-              Création/Modification/Supression désactivées
-            </li>
-            <li className="flex items-center gap-3 text-sm text-slate-500">
-              <div className="w-1.5 h-1.5 bg-slate-300 rounded-full" />
-              Export des données limité
-            </li>
-          </ul>
+      );
+    }
+  }
+
+  // 5. Admin: Abonnement actif → autorisation DIRECTE
+  const isSubscriptionActive = hasActiveSubscription === true || 
+                                (subscription?.status === "active" || subscription?.status === "trialing") ||
+                                (!isExpired && daysRemaining > 0) ||
+                                (isTrial && trialDaysRemaining > 0);
+
+  if (isSubscriptionActive) {
+    console.log("✅ [NoSubscriptionGuard] Abonnement actif → accès autorisé");
+    return <>{children}</>;
+  }
+
+  // 6. Accès OK via canAccess
+  if (canAccess === true) {
+    console.log("✅ [NoSubscriptionGuard] canAccess=true → accès autorisé");
+    return <>{children}</>;
+  }
+
+  // ===============================
+  // ❌ ÉTAPE 3: BLOQUÉ → UI simple + CTA
+  // ===============================
+  console.log("❌ [NoSubscriptionGuard] ACCÈS BLOQUÉ - Aucune condition validée");
+  
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-6 text-center space-y-4">
+        <div className="mx-auto w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mb-4">
+          <svg className="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
         </div>
-        
-        {/* Bouton d'action */}
+        <h2 className="text-xl font-bold text-red-600">Accès restreint</h2>
+
+        <p className="text-slate-600 text-sm">
+          {isExpired
+            ? "Votre abonnement a expiré."
+            : isTrial && trialDaysRemaining <= 0
+            ? "Votre période d'essai est terminée."
+            : "Vous n'avez pas d'abonnement actif."}
+        </p>
+
+        {subscription?.end_date && (
+          <p className="text-xs text-slate-400">
+            Expire le {new Date(subscription.end_date).toLocaleDateString()}
+          </p>
+        )}
+
+        {daysRemaining > 0 && daysRemaining <= 3 && (
+          <p className="text-xs text-amber-600 font-semibold">
+            {daysRemaining} jour(s) restant(s)
+          </p>
+        )}
+
         <button
-          onClick={onRenew}
-          className="w-full py-5 bg-linear-to-r from-blue-600 to-blue-500 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:from-blue-700 hover:to-blue-600 transition-all shadow-lg hover:shadow-xl active:scale-98 flex items-center justify-center gap-3"
+          onClick={() =>
+            window.location.href = "/subscription"
+          }
+          className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition"
         >
-          <CreditCard size={20} />
-          {getActionButtonText()}
+          Voir les offres
         </button>
         
-        {/* Message de support */}
-        <p className="text-center text-xs text-slate-400">
-          Besoin d'aide ? Contactez notre support à{' '}
-          <a href="mailto:support@pharmastock.com" className="text-blue-500 hover:underline">
-            support@pharmastock.com
-          </a>
-        </p>
+        <button
+          onClick={() => {
+            // Déconnexion volontaire uniquement
+            localStorage.clear();
+            sessionStorage.clear();
+            window.location.href = "/login";
+          }}
+          className="w-full py-2 text-sm text-slate-500 hover:text-slate-700 transition"
+        >
+          Se déconnecter
+        </button>
       </div>
     </div>
   );
