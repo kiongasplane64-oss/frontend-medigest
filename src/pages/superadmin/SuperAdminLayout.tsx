@@ -1,5 +1,5 @@
-// SuperAdminLayout.tsx
-import { useState, useEffect, useCallback } from 'react';
+// SuperAdminLayout.tsx - Version corrigée
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Bell, RefreshCw, LogOut, Globe, AlertCircle } from 'lucide-react';
@@ -66,12 +66,56 @@ interface DashboardOverview {
   timestamp: string;
 }
 
+// Fonction utilitaire pour vérifier si le token est expiré
+const isTokenExpired = (token: string | null): boolean => {
+  if (!token) return true;
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return true;
+    
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload.exp) return false;
+    
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    return payload.exp <= nowInSeconds + 60; // Marge de 60 secondes
+  } catch (error) {
+    console.error('Erreur lors de la vérification du token:', error);
+    return true;
+  }
+};
+
+// Fonction pour rafraîchir le token
+const refreshToken = async (): Promise<string | null> => {
+  try {
+    const refreshTokenValue = localStorage.getItem('refresh_token');
+    if (!refreshTokenValue) {
+      throw new Error('No refresh token available');
+    }
+    
+    const response = await api.post('/auth/refresh', { refresh_token: refreshTokenValue });
+    const newAccessToken = response.data?.access_token || response.data?.token;
+    
+    if (newAccessToken) {
+      localStorage.setItem('access_token', newAccessToken);
+      api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
+      return newAccessToken;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Erreur lors du refresh token:', error);
+    return null;
+  }
+};
+
 export default function SuperAdminLayout() {
   const navigate = useNavigate();
-  const { user, logout, refreshSession, token } = useAuthStore();
+  const { user, logout, token } = useAuthStore();
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>('overview');
   const [isInitialized, setIsInitialized] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Vérification d'authentification avec gestion du token
   useEffect(() => {
@@ -116,16 +160,21 @@ export default function SuperAdminLayout() {
 
     const checkTokenExpiration = async () => {
       try {
-        const tokenExpired = useAuthStore.getState().isTokenExpired();
+        const currentToken = localStorage.getItem('access_token') || token;
+        const tokenExpired = isTokenExpired(currentToken);
+        
         if (tokenExpired) {
           console.log('🔄 Token expiré, tentative de refresh...');
-          const newToken = await refreshSession();
+          const newToken = await refreshToken();
           if (newToken) {
             console.log('✅ Token rafraîchi avec succès');
             toast.success('Session rafraîchie automatiquement');
           } else {
             console.error('❌ Échec du refresh token');
             setAuthError('Session expirée, veuillez vous reconnecter');
+            if (refreshIntervalRef.current) {
+              clearInterval(refreshIntervalRef.current);
+            }
             logout();
             navigate('/login', { replace: true });
           }
@@ -136,13 +185,17 @@ export default function SuperAdminLayout() {
     };
 
     // Vérifier toutes les 5 minutes
-    const interval = setInterval(checkTokenExpiration, 5 * 60 * 1000);
+    refreshIntervalRef.current = setInterval(checkTokenExpiration, 5 * 60 * 1000);
     
     // Vérifier immédiatement au montage
     checkTokenExpiration();
 
-    return () => clearInterval(interval);
-  }, [isInitialized, refreshSession, logout, navigate]);
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, [isInitialized, logout, navigate, token]);
 
   // Requêtes API (l'intercepteur gère automatiquement le token)
   const { 
