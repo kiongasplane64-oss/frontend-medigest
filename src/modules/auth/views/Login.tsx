@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useAuthRedirect } from '@/hooks/useAuthRedirect';
 import api, { setAuthToken } from '@/api/client';
 import { normalizeUser, LoginResponse } from '@/types/auth';
 import {
@@ -24,8 +23,7 @@ type AuthMode = 'login' | 'forgot_password' | 'confirm_reset';
 export default function Login() {
   const { setAuth } = useAuthStore();
   
-  // ✅ Le hook gère les redirections - une seule fois
-  useAuthRedirect();
+  // ✅ Plus de useAuthRedirect - la redirection est gérée par useUnifiedRouting dans App.tsx
   
   // Modal Super Admin
   const [showSuperAdminModal, setShowSuperAdminModal] = useState(false);
@@ -86,10 +84,8 @@ export default function Login() {
         setShowSuperAdminModal(false);
         setSuperAdminKey('');
         
-        // ✅ Redirection via navigate, pas de conflit
-        setTimeout(() => {
-          window.location.href = '/superadmin-welcome';
-        }, 100);
+        // ✅ Redirection directe vers la page d'accueil super admin
+        window.location.href = '/superadmin-welcome';
       } else {
         setSuperAdminKeyError('Clé d\'accès invalide');
       }
@@ -104,6 +100,7 @@ export default function Login() {
   /**
    * ✅ FONCTION DE CONNEXION SIMPLIFIÉE
    * Ne fait QUE l'authentification - PAS de redirection
+   * La redirection est gérée automatiquement par useUnifiedRouting
    */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -136,7 +133,8 @@ export default function Login() {
       
       toast.success('Connexion réussie !');
       
-      // ✅ PAS de navigate() ici - le hook useAuthRedirect s'en charge
+      // ✅ PAS de navigate() ici - le hook useUnifiedRouting s'en charge automatiquement
+      // Le hook détectera le changement d'état isAuthenticated et redirigera
       
     } catch (err: any) {
       console.error('❌ Erreur connexion:', err);

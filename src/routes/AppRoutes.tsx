@@ -1,7 +1,6 @@
-// routes/AppRoutes.tsx
+// routes/AppRoutes.tsx - Version corrigée
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { useProtectedRoute } from '@/hooks/useProtectedRoute';
 
 // SuperAdmins
 import SuperAdminDashboard from '@/pages/superadmin/SuperAdminDashboard';
@@ -14,7 +13,6 @@ import Login from '@/modules/auth/views/Login';
 import Register from '@/pages/Register';
 import VerifyOtp from '@/pages/VerifyOtp';
 import ActivationCodePage from '@/pages/ActivationCodePage';
-import { NoSubscriptionGuard } from '@/components/NoSubscriptionGuard';
 import { ExpiryWarningBanner } from '@/components/ExpiryWarningBanner';
 
 // Layouts
@@ -98,13 +96,12 @@ const NotFoundPage = () => (
   </div>
 );
 
-// ========== LAYOUT ADMIN ==========
+// routes/AppRoutes.tsx - Version optimisée avec normalisation
 
+// ========== LAYOUT ADMIN ==========
 const AdminLayout = () => {
   const { user, isLoading } = useAuthStore();
-  const isAdmin = user?.role === 'admin' || user?.role === 'owner' || user?.role === 'pharmacy_admin';
   
-  // Attendre le chargement pour éviter les flashs
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -113,7 +110,14 @@ const AdminLayout = () => {
     );
   }
   
-  if (!isAdmin) {
+  // Après normalisation, 'vendeur' devient 'seller'
+  // Donc on vérifie uniquement 'seller' (pas besoin de 'vendeur')
+  const isAuthorized = user && 
+                       user.role !== 'super_admin' && 
+                       user.role !== 'seller';
+  
+  if (!isAuthorized) {
+    console.log('Accès refusé - AdminLayout:', { role: user?.role });
     return <Navigate to="/login" replace />;
   }
   
@@ -123,11 +127,9 @@ const AdminLayout = () => {
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-y-auto p-6">
           <ExpiryWarningBanner />
-          <NoSubscriptionGuard>
-            <div className="space-y-6">
-              <Outlet />
-            </div>
-          </NoSubscriptionGuard>
+          <div className="space-y-6">
+            <Outlet />
+          </div>
         </div>
       </div>
     </div>
@@ -135,12 +137,9 @@ const AdminLayout = () => {
 };
 
 // ========== LAYOUT VENDEUR ==========
-
 const VendorLayout = () => {
   const { user, isLoading } = useAuthStore();
-  const isSeller = user?.role === 'seller' || user?.role === 'vendeur';
   
-  // Attendre le chargement pour éviter les flashs
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -149,26 +148,25 @@ const VendorLayout = () => {
     );
   }
   
+  // La normalisation convertit 'vendeur' → 'seller'
+  const isSeller = user?.role === 'seller';
+  
   if (!isSeller) {
+    console.log('Accès refusé - VendorLayout:', { role: user?.role });
     return <Navigate to="/login" replace />;
   }
   
   return (
-    <NoSubscriptionGuard>
-      <div className="min-h-screen bg-gray-50">
-        <Outlet />
-      </div>
-    </NoSubscriptionGuard>
+    <div className="min-h-screen bg-gray-50">
+      <Outlet />
+    </div>
   );
 };
 
 // ========== LAYOUT SUPER ADMIN ==========
-
 const SuperAdminLayout = () => {
   const { user, isLoading } = useAuthStore();
-  const isSuperAdmin = user?.role === 'super_admin';
   
-  // Attendre le chargement pour éviter les flashs
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -177,7 +175,10 @@ const SuperAdminLayout = () => {
     );
   }
   
+  const isSuperAdmin = user?.role === 'super_admin';
+  
   if (!isSuperAdmin) {
+    console.log('Accès refusé - SuperAdminLayout:', { role: user?.role });
     return <Navigate to="/login" replace />;
   }
   
@@ -189,11 +190,9 @@ const SuperAdminLayout = () => {
 };
 
 // ========== LAYOUT PUBLIC ==========
-
 const PublicLayout = () => {
   const { isAuthenticated, user, isLoading } = useAuthStore();
   
-  // Attendre le chargement pour éviter les flashs et boucles
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen bg-linear-to-br from-blue-50 to-indigo-100">
@@ -202,15 +201,17 @@ const PublicLayout = () => {
     );
   }
   
-  // Si déjà authentifié, rediriger vers le bon dashboard
   if (isAuthenticated && user) {
-    if (user.role === 'super_admin') {
-      return <Navigate to="/super-admin" replace />;
+    // Utiliser les rôles normalisés
+    switch (user.role) {
+      case 'super_admin':
+        return <Navigate to="/super-admin" replace />;
+      case 'seller':  // 'vendeur' est déjà normalisé en 'seller'
+        return <Navigate to="/vendor-pos" replace />;
+      default:
+        // admin, user, pharmacien, caissier, comptable, etc.
+        return <Navigate to="/dashboard" replace />;
     }
-    if (user.role === 'seller' || user.role === 'vendeur') {
-      return <Navigate to="/vendor-pos" replace />;
-    }
-    return <Navigate to="/dashboard" replace />;
   }
   
   return (
@@ -234,44 +235,23 @@ const GlobalLoadingSpinner = () => (
 // ========== ROUTES PRINCIPALES ==========
 
 export default function AppRoutes() {
-  const { isLoading: isAuthLoading, isAuthenticated } = useAuthStore();
-  const [isInitialized, setIsInitialized] = useState(false);
+  const { isLoading: isAuthLoading } = useAuthStore(); // Supprimer isInitialized
+  const [showRoutes, setShowRoutes] = useState(false);
   
-  // Hook de redirection centralisé (avec protection contre les boucles)
-  useProtectedRoute();
-  
-  // Gestion de l'initialisation avec timeout pour éviter les boucles
+  // Attendre que l'auth soit complètement initialisée avant d'afficher les routes
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
-    let mounted = true;
-    
+    // isAuthLoading devient false après la rehydratation complète
     if (!isAuthLoading) {
-      // Petit délai pour permettre aux hooks de se stabiliser
-      timeoutId = setTimeout(() => {
-        if (mounted) {
-          setIsInitialized(true);
-        }
-      }, 150);
-    } else {
-      // Réinitialiser quand le chargement commence
-      if (mounted) {
-        setIsInitialized(false);
-      }
+      // Petit délai pour stabiliser
+      const timer = setTimeout(() => {
+        setShowRoutes(true);
+      }, 50);
+      return () => clearTimeout(timer);
     }
-    
-    return () => {
-      mounted = false;
-      if (timeoutId) clearTimeout(timeoutId);
-    };
   }, [isAuthLoading]);
   
-  // Afficher le loader global uniquement au tout premier chargement
-  if (!isInitialized && isAuthLoading) {
-    return <GlobalLoadingSpinner />;
-  }
-  
-  // Éviter les rendus pendant les redirections
-  if (!isInitialized && !isAuthLoading && !isAuthenticated) {
+  // Afficher le loader pendant l'initialisation
+  if (!showRoutes) {
     return <GlobalLoadingSpinner />;
   }
   

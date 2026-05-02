@@ -1,4 +1,4 @@
-// src/store/useAuthStore.ts
+// store/useAuthStore.ts - VERSION COMPLÈTE CORRIGÉE (avec corrections de types)
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import axios, { AxiosInstance, InternalAxiosRequestConfig, AxiosError } from 'axios';
@@ -37,7 +37,7 @@ type UserInput = Partial<User> & {
   nom_complet?: string;
   tenant_id?: string | null;
   pharmacy_id?: string | null;
-  branch_id?: string | null;  // ← AJOUTÉ : branch_id dans UserInput
+  branch_id?: string | null;
   telephone?: string;
   phone?: string;
   actif?: boolean;
@@ -51,8 +51,10 @@ interface JwtPayload {
   role?: string;
   tenant_id?: string | null;
   pharmacy_id?: string | null;
-  branch_id?: string | null;  // ← AJOUTÉ : branch_id dans JwtPayload
+  branch_id?: string | null;
   subscription_active?: boolean;
+  subscription_status?: string;
+  subscription_end_date?: string;
   exp?: number;
   type?: string;
   [key: string]: unknown;
@@ -76,35 +78,27 @@ interface AuthState {
   setTenantId: (id: string | null) => void;
   updateUserActivation: (status: boolean) => void;
   updateUser: (updates: Partial<User>) => void;
-  setLoading: (loading: boolean) => void;
-  hydrateAuth: () => void;
-  syncFromStorage: () => boolean;
-  refreshSession: () => Promise<string | null>;
   clearAuth: () => void;
   logout: () => void;
+  checkTokenValidity: () => boolean;
 
   // Getters
   isSuperAdmin: () => boolean;
   isAdmin: () => boolean;
   hasRole: (role: string) => boolean;
   hasPermission: (permission: string) => boolean;
-  isTokenExpired: () => boolean;
   getCurrentPharmacyId: () => string | null;
 }
 
 const STORAGE_NAME = 'pharma-auth-storage';
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
-const USER_KEY = 'user';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL?.trim() || 'http://localhost:8000/api/v1';
 
-let refreshPromise: Promise<string | null> | null = null;
+// ==================== Configuration Axios ====================
 
-// ==================== Configuration Axios avec intercepteurs ====================
-
-// Création de l'instance axios
 export const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -114,14 +108,12 @@ export const api: AxiosInstance = axios.create({
   timeout: 30000,
 });
 
-// Variables pour gérer le refresh token avec queue
 let isRefreshing = false;
 let failedQueue: Array<{
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
 }> = [];
 
-// Fonction pour traiter la queue des requêtes en attente
 const processQueue = (error: Error | null, token: string | null = null) => {
   failedQueue.forEach(prom => {
     if (error) {
@@ -133,57 +125,36 @@ const processQueue = (error: Error | null, token: string | null = null) => {
   failedQueue = [];
 };
 
-// 🔥 INTERCEPTEUR REQUÊTE : Ajoute le token à chaque requête
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = localStorage.getItem(ACCESS_TOKEN_KEY);
     
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      if (import.meta.env.DEV) {
-        console.log(`🔑 Token ajouté à ${config.method?.toUpperCase()} ${config.url}`);
-      }
-    } else if (import.meta.env.DEV) {
-      console.warn(`⚠️ Pas de token pour ${config.method?.toUpperCase()} ${config.url}`);
     }
     
     return config;
   },
-  (error) => {
-    console.error('❌ Erreur intercepteur requête:', error);
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// 🔥 INTERCEPTEUR RÉPONSE : Gère les erreurs 401 et refresh token
 api.interceptors.response.use(
-  (response) => {
-    if (import.meta.env.DEV) {
-      console.log(`✅ Réponse ${response.status} pour ${response.config.url}`);
-    }
-    return response;
-  },
+  (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
     
-    // Si ce n'est pas une erreur 401 ou que la requête a déjà été retry, rejeter l'erreur
-    if (error.response?.status !== 401 || originalRequest._retry) {
-      if (error.response) {
-        console.error(`❌ Erreur ${error.response.status} pour ${originalRequest.url}:`, error.response.data);
-      } else if (error.request) {
-        console.error('❌ Pas de réponse du serveur:', error.request);
-      } else {
-        console.error('❌ Erreur de configuration:', error.message);
-      }
+    // Ne pas tenter de refresh si on est sur la page login
+    if (window.location.pathname === '/login') {
       return Promise.reject(error);
     }
     
-    // Marquer la requête comme retry
+    if (error.response?.status !== 401 || originalRequest._retry) {
+      return Promise.reject(error);
+    }
+    
     originalRequest._retry = true;
     
-    // Essayer de rafraîchir le token
     if (isRefreshing) {
-      // Si un refresh est déjà en cours, ajouter la requête à la queue
       return new Promise((resolve, reject) => {
         failedQueue.push({ resolve, reject });
       })
@@ -206,9 +177,8 @@ api.interceptors.response.use(
         throw new Error('No refresh token available');
       }
       
-      console.log('🔄 401 détecté, tentative de refresh token...');
+      console.log('🔄 Tentative de refresh token...');
       
-      // Appel au endpoint de refresh
       const response = await axios.post(
         `${API_BASE_URL}/auth/refresh`,
         { refresh_token: refreshToken },
@@ -226,38 +196,30 @@ api.interceptors.response.use(
         throw new Error('No access token in refresh response');
       }
       
-      // Mettre à jour le token dans localStorage
       localStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken);
-      
-      // Mettre à jour le header axios par défaut
       api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
-      
-      // Traiter la queue des requêtes en attente
       processQueue(null, newAccessToken);
-      
-      // Mettre à jour le header de la requête originale
       originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
       
       console.log('✅ Token rafraîchi avec succès');
       
-      // Réessayer la requête originale
       return api(originalRequest);
       
     } catch (refreshError) {
       console.error('❌ Échec du refresh token:', refreshError);
-      
-      // Traiter la queue avec l'erreur
       processQueue(refreshError instanceof Error ? refreshError : new Error('Refresh failed'), null);
       
-      // Nettoyer les tokens
       localStorage.removeItem(ACCESS_TOKEN_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
       delete api.defaults.headers.common['Authorization'];
       
-      // Rediriger vers login (éviter les boucles)
+      // Nettoyer aussi le store Zustand
+      const store = useAuthStore.getState();
+      store.clearAuth();
+      
       const currentPath = window.location.pathname;
       if (!currentPath.includes('/login') && !currentPath.includes('/auth')) {
+        console.log('🔄 Redirection vers /login après échec refresh');
         window.location.href = '/login';
       }
       
@@ -271,50 +233,42 @@ api.interceptors.response.use(
 
 // ==================== Fonctions utilitaires ====================
 
-const safeStorage = {
-  get(key: string): string | null {
-    try {
-      return localStorage.getItem(key);
-    } catch (error) {
-      console.error(`❌ Impossible de lire ${key}:`, error);
-      return null;
-    }
-  },
-
-  set(key: string, value: string): void {
-    try {
-      localStorage.setItem(key, value);
-    } catch (error) {
-      console.error(`❌ Impossible d'écrire ${key}:`, error);
-    }
-  },
-
-  remove(key: string): void {
-    try {
-      localStorage.removeItem(key);
-    } catch (error) {
-      console.error(`❌ Impossible de supprimer ${key}:`, error);
-    }
-  },
-};
-
 const normalizeRole = (role: string | null | undefined): string => {
   if (!role) return 'user';
   
+  // Convertir en minuscules et supprimer les espaces
   const normalized = role.toLowerCase().trim();
   
+  // Super Admin - différents formats possibles
   if (normalized === 'super_admin' || 
       normalized === 'super-admin' || 
       normalized === 'superadmin' ||
-      normalized === 'super admin') {
+      normalized === 'super admin' ||
+      normalized === 'super_administrateur' ||
+      normalized === 'superadministrateur') {
     return 'super_admin';
   }
   
-  if (normalized === 'admin') return 'admin';
-  if (normalized === 'pharmacien') return 'pharmacien';
-  if (normalized === 'caissier') return 'caissier';
+  // Admin - différents formats possibles
+  if (normalized === 'admin' || 
+      normalized === 'administrateur' ||
+      normalized === 'administrator') {
+    return 'admin';
+  }
+  
+  // Seller/Vendeur
+  if (normalized === 'seller' || 
+      normalized === 'vendeur' ||
+      normalized === 'vendeuse') {
+    return 'seller';
+  }
+  
+  // Autres rôles métier
+  if (normalized === 'pharmacien' || normalized === 'pharmacienne') return 'pharmacien';
+  if (normalized === 'caissier' || normalized === 'caissière') return 'caissier';
   if (normalized === 'comptable') return 'comptable';
   
+  // Pour tout autre rôle non reconnu, retourner la version normalisée
   return normalized;
 };
 
@@ -331,8 +285,8 @@ const normalizeUser = (user: UserInput): User => {
     tenant_id: user?.tenant_id ?? null,
     pharmacy_id: user?.pharmacy_id ?? null,
     branch_id: user?.branch_id ?? undefined,
-    telephone: user?.telephone ?? user?.phone ?? '',
-    phone: user?.phone ?? user?.telephone ?? '',
+    telephone: String(user?.telephone ?? user?.phone ?? ''),
+    phone: String(user?.phone ?? user?.telephone ?? ''),
     actif,
     activated,
     permissions: user?.permissions ?? {},
@@ -362,56 +316,169 @@ const decodeJwt = (token: string): JwtPayload | null => {
 const isJwtExpired = (token: string | null): boolean => {
   if (!token) return true;
 
-  const payload = decodeJwt(token);
-  if (!payload?.exp) return false;
+  try {
+    const payload = decodeJwt(token);
+    if (!payload?.exp) return false;
 
-  const nowInSeconds = Math.floor(Date.now() / 1000);
-  return payload.exp <= nowInSeconds + 10;
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    // Ajouter une marge de 5 minutes pour éviter les problèmes de synchronisation
+    const isExpired = payload.exp <= nowInSeconds + 300;
+    
+    if (isExpired) {
+      console.log(`⏰ Token expiré: exp=${payload.exp}, now=${nowInSeconds}`);
+    }
+    
+    return isExpired;
+  } catch (error) {
+    console.error('Erreur vérification expiration token:', error);
+    return true;
+  }
 };
+
+// ==================== Fonction mergeUserWithTokenPayload améliorée ====================
 
 const mergeUserWithTokenPayload = (user: UserInput | null, token: string): User => {
-  const payload = decodeJwt(token);
-  const roleFromUser = user?.role;
-  const roleFromPayload = payload?.role;
-  const finalRole = roleFromUser ? normalizeRole(roleFromUser) : normalizeRole(roleFromPayload);
-
-  return normalizeUser({
-    id: user?.id ?? payload?.sub ?? '',
-    email: user?.email ?? String(payload?.email ?? ''),
-    role: finalRole,
-    nom_complet: user?.nom_complet ?? 'Utilisateur',
-    tenant_id: user?.tenant_id ?? payload?.tenant_id ?? null,
-    pharmacy_id: user?.pharmacy_id ?? (payload?.pharmacy_id as string | null) ?? null,
-    branch_id: user?.branch_id ?? (payload?.branch_id as string | null) ?? undefined,
-    telephone: user?.telephone ?? user?.phone ?? '',
-    phone: user?.phone ?? user?.telephone ?? '',
-    actif: user?.actif ?? user?.activated ?? true,
-    activated: user?.activated ?? user?.actif ?? true,
-    permissions: user?.permissions ?? {},
-    has_subscription: user?.has_subscription ?? payload?.subscription_active ?? false,
-  });
+  try {
+    const payload = decodeJwt(token);
+    
+    console.log('🔍 Decoded JWT payload:', payload);
+    
+    // Extraire le rôle de l'utilisateur (priorité à l'utilisateur du payload)
+    const roleFromUser = user?.role;
+    const roleFromPayload = payload?.role;
+    let finalRole: string = roleFromPayload ? normalizeRole(String(roleFromPayload)) : 'user';
+    
+    // Si l'utilisateur a un rôle explicite, on l'utilise (sauf pour super_admin qui prime)
+    if (roleFromUser && normalizeRole(roleFromUser) === 'super_admin') {
+      finalRole = 'super_admin';
+    } else if (roleFromUser && normalizeRole(roleFromUser) === 'admin') {
+      finalRole = 'admin';
+    } else if (roleFromUser && normalizeRole(roleFromUser) === 'seller') {
+      finalRole = 'seller';
+    } else if (roleFromUser) {
+      finalRole = normalizeRole(roleFromUser);
+    }
+    
+    console.log('🔍 Role determination:', { 
+      roleFromUser, 
+      roleFromPayload, 
+      finalRole,
+      normalizedRoleFromUser: roleFromUser ? normalizeRole(roleFromUser) : null
+    });
+    
+    // Extraire l'ID utilisateur
+    const userId = user?.id || payload?.sub || payload?.user_id || '';
+    
+    // Extraire l'email
+    const email = user?.email || String(payload?.email || payload?.sub || '');
+    
+    // Extraire le nom complet (convertir en string)
+    let nomComplet: string = 'Utilisateur';
+    if (user?.nom_complet) {
+      nomComplet = String(user.nom_complet);
+    } else if (payload?.nom_complet) {
+      nomComplet = String(payload.nom_complet);
+    } else if (payload?.full_name) {
+      nomComplet = String(payload.full_name);
+    }
+    
+    // Extraire le tenant_id
+    const tenantId = user?.tenant_id || payload?.tenant_id || null;
+    
+    // Extraire le pharmacy_id
+    const pharmacyId = user?.pharmacy_id || (payload?.pharmacy_id as string | null) || null;
+    
+    // Extraire le branch_id
+    const branchId = user?.branch_id || (payload?.branch_id as string | null) || undefined;
+    
+    // Extraire les informations d'abonnement
+    const hasSubscription = user?.has_subscription ?? payload?.subscription_active ?? false;
+    const subscriptionStatus = user?.subscription_status || (payload?.subscription_status as string) || undefined;
+    const subscriptionEndDate = user?.subscription_end_date || (payload?.subscription_end_date as string) || undefined;
+    
+    // Extraire le téléphone
+    let telephone: string = '';
+    if (user?.telephone) {
+      telephone = String(user.telephone);
+    } else if (user?.phone) {
+      telephone = String(user.phone);
+    } else if (payload?.phone) {
+      telephone = String(payload.phone);
+    } else if (payload?.telephone) {
+      telephone = String(payload.telephone);
+    }
+    
+    // Extraire le phone
+    let phone: string = '';
+    if (user?.phone) {
+      phone = String(user.phone);
+    } else if (user?.telephone) {
+      phone = String(user.telephone);
+    } else if (payload?.phone) {
+      phone = String(payload.phone);
+    } else if (payload?.telephone) {
+      phone = String(payload.telephone);
+    }
+    
+    console.log('🔍 User data extracted:', {
+      userId,
+      email,
+      finalRole,
+      tenantId,
+      pharmacyId,
+      hasSubscription,
+      subscriptionStatus
+    });
+    
+    return normalizeUser({
+      id: String(userId),
+      email: String(email),
+      role: finalRole,
+      nom_complet: nomComplet,
+      tenant_id: tenantId,
+      pharmacy_id: pharmacyId,
+      branch_id: branchId,
+      telephone: telephone,
+      phone: phone,
+      actif: user?.actif ?? user?.activated ?? true,
+      activated: user?.activated ?? user?.actif ?? true,
+      permissions: user?.permissions || {},
+      has_subscription: hasSubscription,
+      subscription_status: subscriptionStatus,
+      subscription_end_date: subscriptionEndDate,
+    });
+  } catch (error) {
+    console.error('❌ Erreur dans mergeUserWithTokenPayload:', error);
+    // Fallback: retourner un utilisateur basé uniquement sur l'input
+    return normalizeUser(user || {});
+  }
 };
 
-const syncUserToStorage = (user: User | null): void => {
-  if (!user) {
-    safeStorage.remove(USER_KEY);
-    return;
-  }
-  safeStorage.set(USER_KEY, JSON.stringify(user));
-};
+// ==================== Fonction de validation des tokens ====================
 
-const syncTokensToStorage = (token: string | null, refreshToken: string | null): void => {
-  if (token) {
-    safeStorage.set(ACCESS_TOKEN_KEY, token);
-  } else {
-    safeStorage.remove(ACCESS_TOKEN_KEY);
+const validateAndCleanupTokens = (): { token: string | null; refreshToken: string | null } => {
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+  
+  // Vérifier si le token est expiré
+  if (token && isJwtExpired(token)) {
+    console.log('⏰ Token expiré trouvé, nettoyage...');
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(STORAGE_NAME);
+    return { token: null, refreshToken: null };
   }
-
-  if (refreshToken) {
-    safeStorage.set(REFRESH_TOKEN_KEY, refreshToken);
-  } else {
-    safeStorage.remove(REFRESH_TOKEN_KEY);
+  
+  // Vérifier si le refresh token est expiré
+  if (refreshToken && isJwtExpired(refreshToken)) {
+    console.log('⏰ Refresh token expiré trouvé, nettoyage...');
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(STORAGE_NAME);
+    return { token: null, refreshToken: null };
   }
+  
+  return { token, refreshToken };
 };
 
 // ==================== Store Zustand ====================
@@ -438,10 +505,10 @@ export const useAuthStore = create<AuthState>()(
                           null;
         const subscriptionActive = Boolean(payload?.subscription_active ?? normalizedUser.has_subscription ?? false);
 
-        syncTokensToStorage(token, refreshToken);
-        syncUserToStorage(normalizedUser);
-
-        // Mettre à jour le header axios par défaut
+        // Stocker les tokens séparément pour l'intercepteur Axios
+        localStorage.setItem(ACCESS_TOKEN_KEY, token);
+        if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+        
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
         set({
@@ -466,10 +533,18 @@ export const useAuthStore = create<AuthState>()(
 
         const payload = decodeJwt(token);
 
-        syncTokensToStorage(token, refreshToken ?? get().refreshToken);
-        syncUserToStorage(nextUser);
+        localStorage.setItem(ACCESS_TOKEN_KEY, token);
+        
+        // Vérifier que refreshToken n'est pas null
+        if (refreshToken) {
+          localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+        } else if (get().refreshToken) {
+          const currentRefreshToken = get().refreshToken;
+          if (currentRefreshToken) {
+            localStorage.setItem(REFRESH_TOKEN_KEY, currentRefreshToken);
+          }
+        }
 
-        // Mettre à jour le header axios par défaut
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
         set({
@@ -479,8 +554,8 @@ export const useAuthStore = create<AuthState>()(
           isAuthenticated: true,
           tenantId: nextUser.tenant_id ?? payload?.tenant_id ?? null,
           currentPharmacyId: nextUser.pharmacy_id ?? 
-                           (payload?.pharmacy_id as string | null | undefined) ?? 
-                           get().currentPharmacyId,
+                          (payload?.pharmacy_id as string | null | undefined) ?? 
+                          get().currentPharmacyId,
           subscriptionActive: Boolean(payload?.subscription_active ?? get().subscriptionActive),
           isLoading: false,
         });
@@ -493,7 +568,11 @@ export const useAuthStore = create<AuthState>()(
       },
 
       setRefreshToken: (refreshToken) => {
-        syncTokensToStorage(get().token, refreshToken);
+        if (refreshToken) {
+          localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+        } else {
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
+        }
         set({ refreshToken });
       },
 
@@ -505,9 +584,6 @@ export const useAuthStore = create<AuthState>()(
             pharmacy_id: id 
           } : null 
         });
-        if (get().user) {
-          syncUserToStorage(get().user);
-        }
       },
 
       setTenantId: (id) => {
@@ -519,7 +595,6 @@ export const useAuthStore = create<AuthState>()(
             ...currentUser,
             tenant_id: id,
           };
-          syncUserToStorage(updatedUser);
           set({ user: updatedUser });
         }
       },
@@ -534,11 +609,9 @@ export const useAuthStore = create<AuthState>()(
             activated: status,
           };
 
-          syncUserToStorage(updatedUser);
           return { user: updatedUser };
         }),
 
-      // ==================== MÉTHODE updateUser ====================
       updateUser: (updates: Partial<User>) => {
         const currentUser = get().user;
         if (!currentUser) return;
@@ -548,173 +621,23 @@ export const useAuthStore = create<AuthState>()(
           ...updates,
         };
         
-        // Mettre à jour le store
         set({ user: updatedUser });
         
-        // Synchroniser avec le localStorage
-        syncUserToStorage(updatedUser);
-        
-        // Si le branch_id a changé, mettre à jour également currentPharmacyId si nécessaire
         if (updates.branch_id && get().currentPharmacyId !== updates.branch_id) {
           set({ currentPharmacyId: updates.branch_id });
         }
         
-        // Si le pharmacy_id a changé, mettre à jour currentPharmacyId également
         if (updates.pharmacy_id && get().currentPharmacyId !== updates.pharmacy_id) {
           set({ currentPharmacyId: updates.pharmacy_id });
         }
-        
-        console.log('👤 Utilisateur mis à jour:', { 
-          branch_id: updatedUser.branch_id,
-          pharmacy_id: updatedUser.pharmacy_id 
-        });
-      },
-      // ==================== FIN MÉTHODE ====================
-
-      setLoading: (loading) => set({ isLoading: loading }),
-
-      syncFromStorage: () => {
-        const token = safeStorage.get(ACCESS_TOKEN_KEY);
-        const refreshToken = safeStorage.get(REFRESH_TOKEN_KEY);
-        const userStr = safeStorage.get(USER_KEY);
-        
-        if (token && userStr) {
-          try {
-            const user = JSON.parse(userStr);
-            const payload = decodeJwt(token);
-            
-            if (isJwtExpired(token)) {
-              console.log('⏰ Token expiré lors de la sync');
-              return false;
-            }
-            
-            set({
-              user: user,
-              token: token,
-              refreshToken: refreshToken,
-              isAuthenticated: true,
-              currentPharmacyId: user.pharmacy_id ?? payload?.pharmacy_id ?? null,
-              tenantId: user.tenant_id ?? payload?.tenant_id ?? null,
-              subscriptionActive: Boolean(payload?.subscription_active ?? false),
-              isLoading: false,
-            });
-            
-            return true;
-          } catch (error) {
-            console.error('❌ Erreur sync storage:', error);
-          }
-        }
-        
-        return false;
-      },
-
-      hydrateAuth: () => {
-        try {
-          const persistedState = safeStorage.get(STORAGE_NAME);
-          
-          if (persistedState) {
-            try {
-              const parsed = JSON.parse(persistedState);
-              if (parsed.state?.token && parsed.state?.user) {
-                const token = parsed.state.token;
-                
-                if (!isJwtExpired(token)) {
-                  set({
-                    user: parsed.state.user,
-                    token: token,
-                    refreshToken: parsed.state.refreshToken,
-                    isAuthenticated: true,
-                    currentPharmacyId: parsed.state.currentPharmacyId,
-                    tenantId: parsed.state.tenantId,
-                    subscriptionActive: parsed.state.subscriptionActive,
-                    isLoading: false,
-                  });
-                  console.log('💧 Auth hydratée depuis persistence');
-                  return;
-                }
-              }
-            } catch (e) {
-              console.error('Erreur parsing persistence:', e);
-            }
-          }
-          
-          const synced = get().syncFromStorage();
-          
-          if (!synced) {
-            console.log('❌ Aucune session valide trouvée');
-            set({
-              user: null,
-              token: null,
-              refreshToken: null,
-              isAuthenticated: false,
-              currentPharmacyId: null,
-              tenantId: null,
-              subscriptionActive: false,
-              isLoading: false,
-            });
-          }
-        } catch (error) {
-          console.error('❌ Erreur hydratation auth:', error);
-          get().clearAuth();
-          set({ isLoading: false });
-        }
-      },
-
-      refreshSession: async () => {
-        if (refreshPromise) return refreshPromise;
-
-        refreshPromise = (async () => {
-          try {
-            const refreshToken = get().refreshToken ?? safeStorage.get(REFRESH_TOKEN_KEY);
-
-            if (!refreshToken) {
-              console.warn('⚠️ Aucun refresh token disponible');
-              return null;
-            }
-
-            console.log('🔄 Refresh session manuel...');
-            
-            const response = await axios.post(
-              `${API_BASE_URL}/auth/refresh`,
-              { refresh_token: refreshToken },
-              {
-                headers: {
-                  'Content-Type': 'application/json',
-                  Accept: 'application/json',
-                },
-                timeout: 20000,
-              },
-            );
-
-            const newAccessToken = response.data?.access_token ?? response.data?.token ?? null;
-
-            if (!newAccessToken) {
-              return null;
-            }
-
-            get().setTokens(newAccessToken, refreshToken);
-            console.log('✅ Session rafraîchie manuellement');
-            return newAccessToken;
-          } catch (error) {
-            console.error('❌ Échec du refresh manuel:', error);
-            get().clearAuth();
-            return null;
-          } finally {
-            refreshPromise = null;
-          }
-        })();
-
-        return refreshPromise;
       },
 
       clearAuth: () => {
         console.log('🔐 clearAuth: suppression de toutes les données');
-        safeStorage.remove(ACCESS_TOKEN_KEY);
-        safeStorage.remove(REFRESH_TOKEN_KEY);
-        safeStorage.remove(USER_KEY);
-        safeStorage.remove(STORAGE_NAME);
+        localStorage.removeItem(ACCESS_TOKEN_KEY);
+        localStorage.removeItem(REFRESH_TOKEN_KEY);
+        localStorage.removeItem(STORAGE_NAME);
         
-        // Supprimer le header axios
         delete api.defaults.headers.common['Authorization'];
 
         set({
@@ -732,6 +655,13 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         console.log('🔐 Déconnexion utilisateur');
         get().clearAuth();
+        window.location.href = '/login';
+      },
+
+      checkTokenValidity: () => {
+        const { token } = get();
+        if (!token) return false;
+        return !isJwtExpired(token);
       },
 
       isSuperAdmin: () => {
@@ -757,11 +687,6 @@ export const useAuthStore = create<AuthState>()(
         return Boolean(user.permissions?.[permission]);
       },
 
-      isTokenExpired: () => {
-        const currentToken = get().token;
-        return isJwtExpired(currentToken);
-      },
-
       getCurrentPharmacyId: () => {
         const state = get();
         return state.user?.pharmacy_id ?? state.currentPharmacyId ?? null;
@@ -780,56 +705,63 @@ export const useAuthStore = create<AuthState>()(
         subscriptionActive: state.subscriptionActive,
       }),
       onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        try {
-          if (state.user) {
-            state.user = normalizeUser(state.user);
-          }
-          state.isLoading = false;
-        } catch (error) {
-          console.error('❌ Erreur rehydratation:', error);
+        // Vérifier que state n'est pas undefined
+        if (!state) {
+          return;
         }
+        
+        // Nettoyer les tokens expirés avant la rehydratation
+        const { token: validToken } = validateAndCleanupTokens();
+        
+        if (!validToken) {
+          console.log('🔐 Pas de token valide, réinitialisation de l\'état');
+          state.isAuthenticated = false;
+          state.user = null;
+          state.token = null;
+          state.refreshToken = null;
+          state.isLoading = false;
+          delete api.defaults.headers.common['Authorization'];
+          return;
+        }
+        
+        if (state.token && isJwtExpired(state.token)) {
+          console.log('🔄 Token expiré lors de la rehydratation, nettoyage');
+          localStorage.removeItem(ACCESS_TOKEN_KEY);
+          localStorage.removeItem(REFRESH_TOKEN_KEY);
+          state.isAuthenticated = false;
+          state.user = null;
+          state.token = null;
+          state.refreshToken = null;
+        } else if (state.token) {
+          // Remettre le token dans localStorage pour Axios
+          localStorage.setItem(ACCESS_TOKEN_KEY, state.token);
+          if (state.refreshToken) {
+            localStorage.setItem(REFRESH_TOKEN_KEY, state.refreshToken);
+          }
+          api.defaults.headers.common['Authorization'] = `Bearer ${state.token}`;
+          console.log('🔐 Token restauré avec succès');
+        }
+        
+        // S'assurer que isLoading est false après rehydratation
+        state.isLoading = false;
       },
     },
   ),
 );
 
-// ==================== Hooks utilitaires ====================
+// ==================== Hook d'initialisation simplifié ====================
 
 export const useInitializeAuth = () => {
-  const hydrateAuth = useAuthStore((state) => state.hydrateAuth);
-  const refreshSession = useAuthStore((state) => state.refreshSession);
-  const isTokenExpired = useAuthStore((state) => state.isTokenExpired);
-  const token = useAuthStore((state) => state.token);
-
-  const initialize = async () => {
-    console.log('🔐 Initialisation auth...');
-    hydrateAuth();
-    
-    if (token && isTokenExpired()) {
-      console.log('🔄 Token expiré au démarrage, refresh automatique...');
-      await refreshSession();
-    }
-    
-    const finalState = useAuthStore.getState();
-    console.log('🔐 Auth initialisée:', {
-      isAuthenticated: finalState.isAuthenticated,
-      role: finalState.user?.role,
-      hasToken: !!finalState.token,
-    });
+  const { isAuthenticated, isLoading, checkTokenValidity } = useAuthStore();
+  
+  const isReady = !isLoading;
+  
+  return { 
+    isReady, 
+    isAuthenticated,
+    isValid: checkTokenValidity(),
+    isLoading 
   };
-
-  return { initialize };
 };
 
-export const usePharmacyId = () => {
-  return useAuthStore((state) => state.getCurrentPharmacyId());
-};
-
-export const useHasPharmacy = () => {
-  const pharmacyId = useAuthStore((state) => state.getCurrentPharmacyId());
-  return Boolean(pharmacyId);
-};
-
-// Export de l'instance api pour utilisation dans les composants
 export default api;
