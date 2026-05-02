@@ -1,4 +1,4 @@
-// api/client.ts
+// api/client.ts - Version corrigée
 import axios, {
   AxiosError,
   type AxiosInstance,
@@ -27,8 +27,61 @@ const api: AxiosInstance = axios.create({
 });
 
 // ============================================================
-// FONCTIONS SIMPLIFIÉES
+// FONCTIONS UTILITAIRES LOCALES
 // ============================================================
+
+// Vérifier si le token est expiré
+const isTokenExpired = (token: string | null): boolean => {
+  if (!token) return true;
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return true;
+    
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload.exp) return false;
+    
+    const nowInSeconds = Math.floor(Date.now() / 1000);
+    return payload.exp <= nowInSeconds + 60; // Marge de 60 secondes
+  } catch (error) {
+    console.error('Erreur lors de la vérification du token:', error);
+    return true;
+  }
+};
+
+// Rafraîchir le token manuellement
+const refreshTokenManuallyFn = async (): Promise<string | null> => {
+  try {
+    const refreshTokenValue = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!refreshTokenValue) {
+      throw new Error('No refresh token available');
+    }
+    
+    const response = await axios.post(
+      `${API_BASE_URL}/auth/refresh`,
+      { refresh_token: refreshTokenValue },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      }
+    );
+    
+    const newAccessToken = response.data?.access_token || response.data?.token;
+    const newRefreshToken = response.data?.refresh_token || refreshTokenValue;
+    
+    if (newAccessToken) {
+      setTokens(newAccessToken, newRefreshToken);
+      return newAccessToken;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Erreur lors du refresh token:', error);
+    return null;
+  }
+};
 
 // Récupération du token - UNE SEULE SOURCE DE VÉRITÉ
 const getToken = (): string | null => {
@@ -46,7 +99,7 @@ const getToken = (): string | null => {
   return null;
 };
 
-// 🔥 CORRECTION: Utiliser setTokens au lieu de setToken
+// Utiliser setTokens au lieu de setToken
 const setTokens = (token: string, refreshToken?: string | null): void => {
   localStorage.setItem(ACCESS_TOKEN_KEY, token);
   if (refreshToken) {
@@ -58,13 +111,13 @@ const setTokens = (token: string, refreshToken?: string | null): void => {
   state.setTokens(token, refreshToken);
 };
 
-// Suppression du token - Utiliser clearAuth ou logout
+// Suppression du token - Utiliser clearAuth
 const clearAuth = (): void => {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   
   const state = useAuthStore.getState();
-  state.clearAuth(); // ou state.logout()
+  state.clearAuth();
 };
 
 // Vérification si route publique
@@ -83,11 +136,11 @@ const isPublicRoute = (url?: string): boolean => {
 };
 
 // ============================================================
-// 🔥 INTERCEPTEUR REQUÊTE - CORRIGÉ
+// INTERCEPTEUR REQUÊTE
 // ============================================================
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // 🔥 CRITIQUE: Récupérer le token À CHAQUE REQUÊTE
+    // Récupérer le token À CHAQUE REQUÊTE
     const token = getToken();
     
     // Log pour débogage (uniquement en développement)
@@ -96,8 +149,7 @@ api.interceptors.request.use(
       console.log(`   Token présent: ${!!token}`);
     }
     
-    // 🔥 CORRECTION: Ne JAMAIS sauter l'ajout du token
-    // Sauf pour les routes publiques explicites
+    // Ne jamais sauter l'ajout du token sauf pour les routes publiques
     const isPublic = isPublicRoute(config.url);
     
     if (!isPublic && token) {
@@ -137,7 +189,7 @@ api.interceptors.request.use(
 );
 
 // ============================================================
-// 🔥 INTERCEPTEUR RÉPONSE - GESTION DES ERREURS
+// INTERCEPTEUR RÉPONSE - GESTION DES ERREURS
 // ============================================================
 api.interceptors.response.use(
   (response: AxiosResponse) => {
@@ -155,7 +207,7 @@ api.interceptors.response.use(
       console.error(`❌ Erreur ${status} ${url}`);
     }
     
-    // 🔥 Gestion des 401 (token expiré)
+    // Gestion des 401 (token expiré)
     if (status === 401 && originalRequest && !originalRequest._retry && !isPublicRoute(url)) {
       originalRequest._retry = true;
       
@@ -177,7 +229,7 @@ api.interceptors.response.use(
           const newRefreshToken = response.data?.refresh_token || refreshToken;
           
           if (newToken) {
-            // 🔥 CORRECTION: Utiliser setTokens
+            // Utiliser setTokens
             setTokens(newToken, newRefreshToken);
             
             // Mettre à jour le header de la requête originale
@@ -207,7 +259,7 @@ api.interceptors.response.use(
       }
     }
     
-    // 🔥 IMPORTANT: Transformer le HTML en erreur JSON pour éviter les erreurs de parsing
+    // Transformer le HTML en erreur JSON pour éviter les erreurs de parsing
     if (error.response?.data && typeof error.response.data === 'string') {
       const data = error.response.data as string;
       if (data.includes('<!doctype html') || data.includes('<html')) {
@@ -264,8 +316,7 @@ export const setAuthToken = (token: string | null, refreshToken?: string | null)
  * Rafraîchit manuellement le token
  */
 export const refreshTokenManually = async (): Promise<string | null> => {
-  const state = useAuthStore.getState();
-  return state.refreshSession();
+  return refreshTokenManuallyFn();
 };
 
 /**
@@ -275,8 +326,7 @@ export const isAuthenticated = (): boolean => {
   const token = getToken();
   if (!token) return false;
   
-  const state = useAuthStore.getState();
-  return !state.isTokenExpired();
+  return !isTokenExpired(token);
 };
 
 // ============================================================
