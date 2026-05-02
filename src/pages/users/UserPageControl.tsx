@@ -118,7 +118,9 @@ const UserPageControl: React.FC = () => {
   const [historyTotal, setHistoryTotal] = useState(0);
   const [filterRole, setFilterRole] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
+  // CORRECTION: Ajouter old_password dans le state
   const [passwordData, setPasswordData] = useState({
+    old_password: '',
     new_password: '',
     confirm_password: '',
   });
@@ -148,32 +150,25 @@ const UserPageControl: React.FC = () => {
         },
       });
       
-      // Vérifier la structure de la réponse
-      console.log('API Response:', response.data); // Pour déboguer
+      console.log('API Response:', response.data);
       
-      // Cas 1: La réponse est directement un tableau
       if (Array.isArray(response.data)) {
         setUsers(response.data);
         setTotalUsers(response.data.length);
       }
-      // Cas 2: La réponse a une structure { items: [], total: number }
       else if (response.data && Array.isArray(response.data.items)) {
         setUsers(response.data.items);
         setTotalUsers(response.data.total || response.data.items.length);
       }
-      // Cas 3: La réponse a une structure { data: [], total: number }
       else if (response.data && Array.isArray(response.data.data)) {
         setUsers(response.data.data);
         setTotalUsers(response.data.total || response.data.data.length);
       }
-      // Cas 4: La réponse a une structure { users: [], total: number }
       else if (response.data && Array.isArray(response.data.users)) {
         setUsers(response.data.users);
         setTotalUsers(response.data.total || response.data.users.length);
       }
-      // Cas 5: Format par défaut
       else if (response.data && typeof response.data === 'object') {
-        // Chercher un tableau dans la réponse
         const possibleArrays = ['items', 'data', 'users', 'results', 'records'];
         let foundArray = null;
         for (const key of possibleArrays) {
@@ -185,7 +180,6 @@ const UserPageControl: React.FC = () => {
         }
         setUsers(foundArray || []);
       }
-      // Cas 6: Si aucun format reconnu, mettre un tableau vide
       else {
         console.warn('Format de réponse non reconnu:', response.data);
         setUsers([]);
@@ -297,27 +291,75 @@ const UserPageControl: React.FC = () => {
     }
   };
 
+  // CORRECTION: Fonction handleChangePassword complète
   const handleChangePassword = async () => {
     if (!selectedUser) return;
+    
+    // Récupérer l'utilisateur connecté depuis le localStorage
+    let currentUser = null;
+    try {
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        currentUser = JSON.parse(userStr);
+      }
+    } catch (e) {
+      console.error('Erreur lecture user:', e);
+    }
+    
+    const isOwnPassword = currentUser && selectedUser.id === currentUser.id;
+    
+    // Validation
+    if (!passwordData.new_password || passwordData.new_password.length < 8) {
+      showSnackbar('Le mot de passe doit contenir au moins 8 caractères', 'error');
+      return;
+    }
+    
     if (passwordData.new_password !== passwordData.confirm_password) {
       showSnackbar('Les mots de passe ne correspondent pas', 'error');
       return;
     }
-    if (passwordData.new_password.length < 8) {
-      showSnackbar('Le mot de passe doit contenir au moins 8 caractères', 'error');
+    
+    // Si c'est son propre mot de passe, vérifier l'ancien mot de passe
+    if (isOwnPassword && !passwordData.old_password) {
+      showSnackbar('Veuillez saisir votre mot de passe actuel', 'error');
       return;
     }
 
     setSubmitting(true);
     try {
-      await api.post(`/users/${selectedUser.id}/change-password`, {
-        new_password: passwordData.new_password,
-      });
-      showSnackbar('Mot de passe modifié avec succès', 'success');
+      if (isOwnPassword) {
+        // Endpoint pour son propre compte
+        await api.post('/users/me/change-password', {
+          old_password: passwordData.old_password,
+          new_password: passwordData.new_password,
+        });
+        showSnackbar('Votre mot de passe a été modifié avec succès', 'success');
+      } else {
+        // Endpoint admin pour les autres utilisateurs
+        await api.post(`/users/${selectedUser.id}/change-password`, {
+          new_password: passwordData.new_password,
+        });
+        showSnackbar(`Mot de passe modifié pour ${selectedUser.nom_complet}`, 'success');
+      }
+      
       setDialogOpen(null);
-      setPasswordData({ new_password: '', confirm_password: '' });
+      setPasswordData({ 
+        old_password: '', 
+        new_password: '', 
+        confirm_password: '' 
+      });
+      
     } catch (error: any) {
-      showSnackbar(error.response?.data?.detail || 'Erreur lors du changement de mot de passe', 'error');
+      console.error('Erreur changement mot de passe:', error);
+      
+      let errorMessage = 'Erreur lors du changement de mot de passe';
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
+      
+      showSnackbar(errorMessage, 'error');
     } finally {
       setSubmitting(false);
     }
@@ -334,7 +376,7 @@ const UserPageControl: React.FC = () => {
     });
     setSelectedUser(null);
     setUserHistory([]);
-    setPasswordData({ new_password: '', confirm_password: '' });
+    setPasswordData({ old_password: '', new_password: '', confirm_password: '' });
   };
 
   const openEditDialog = (user: User) => {
@@ -363,7 +405,18 @@ const UserPageControl: React.FC = () => {
   const openPasswordDialog = (user: User) => {
     setSelectedUser(user);
     setDialogOpen('password');
-    setPasswordData({ new_password: '', confirm_password: '' });
+    setPasswordData({ old_password: '', new_password: '', confirm_password: '' });
+  };
+
+  // Fonction pour vérifier si l'utilisateur sélectionné est l'utilisateur connecté
+  const isCurrentUser = () => {
+    if (!selectedUser) return false;
+    try {
+      const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+      return selectedUser.id === currentUser.id;
+    } catch {
+      return false;
+    }
   };
 
   const getRoleColor = (role: string) => {
@@ -412,7 +465,7 @@ const UserPageControl: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Filtres - CORRECTION: utiliser slotProps au lieu de InputProps */}
+      {/* Filtres */}
       <Card sx={{ mb: 3, borderRadius: 2 }}>
         <CardContent>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
@@ -748,7 +801,7 @@ const UserPageControl: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Dialog Mot de passe */}
+      {/* Dialog Mot de passe - CORRECTION: Ajouter le champ ancien mot de passe pour son propre compte */}
       <Dialog open={dialogOpen === 'password'} onClose={() => setDialogOpen(null)} maxWidth="sm" fullWidth>
         <DialogTitle>
           Changer le mot de passe - {selectedUser?.nom_complet}
@@ -757,28 +810,51 @@ const UserPageControl: React.FC = () => {
           </IconButton>
         </DialogTitle>
         <DialogContent>
-          <Alert severity="warning" sx={{ mb: 2 }}>Minimum 8 caractères</Alert>
+          <Alert severity={isCurrentUser() ? "info" : "warning"} sx={{ mb: 2 }}>
+            {isCurrentUser() 
+              ? "Pour modifier votre propre mot de passe, vous devez saisir votre mot de passe actuel" 
+              : "Minimum 8 caractères"}
+          </Alert>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Afficher l'ancien mot de passe UNIQUEMENT pour son propre compte */}
+            {isCurrentUser() && (
+              <TextField
+                fullWidth
+                type="password"
+                label="Mot de passe actuel *"
+                value={passwordData.old_password}
+                onChange={(e) => setPasswordData({ ...passwordData, old_password: e.target.value })}
+                required
+              />
+            )}
             <TextField
               fullWidth
               type="password"
-              label="Nouveau mot de passe"
+              label="Nouveau mot de passe *"
               value={passwordData.new_password}
               onChange={(e) => setPasswordData({ ...passwordData, new_password: e.target.value })}
+              required
             />
             <TextField
               fullWidth
               type="password"
-              label="Confirmer"
+              label="Confirmer le nouveau mot de passe *"
               value={passwordData.confirm_password}
               onChange={(e) => setPasswordData({ ...passwordData, confirm_password: e.target.value })}
               error={passwordData.confirm_password !== '' && passwordData.new_password !== passwordData.confirm_password}
-              helperText={passwordData.confirm_password !== '' && passwordData.new_password !== passwordData.confirm_password ? 'Les mots de passe ne correspondent pas' : ''}
+              helperText={passwordData.confirm_password !== '' && passwordData.new_password !== passwordData.confirm_password 
+                ? 'Les mots de passe ne correspondent pas' 
+                : ''}
             />
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDialogOpen(null)}>Annuler</Button>
+          <Button onClick={() => {
+            setDialogOpen(null);
+            setPasswordData({ old_password: '', new_password: '', confirm_password: '' });
+          }}>
+            Annuler
+          </Button>
           <Button
             variant="contained"
             onClick={handleChangePassword}

@@ -1,4 +1,4 @@
-// modules/sales/FactureManager.tsx
+// modules/sales/views/FactureManager.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Search,
@@ -17,7 +17,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  Building2
+  Building2,
+  Receipt as ReceiptIcon
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/hooks/useToast';
@@ -60,17 +61,23 @@ interface Sale {
   branch_name?: string;
 }
 
-interface SalesResponse {
-  items: Sale[];
-  total: number;
-  page: number;
-  size: number;
-  has_more: boolean;
-}
-
+// Interface pour la réponse détaillée d'une vente
 interface SaleDetailResponse {
-  sale: Sale;
+  id: string;
+  reference: string;
+  receipt_number?: string;
+  invoice_number?: string;
+  customer_name: string;
+  seller_name: string;
+  payment_method: string;
+  subtotal: number;
+  total_discount: number;
+  total_tva: number;
+  total_amount: number;
+  status: string;
+  created_at: string;
   items: SaleItem[];
+  branch_name?: string;
 }
 
 interface BranchInfo {
@@ -156,7 +163,7 @@ const FactureManager: React.FC = () => {
       const userResponse = await api.get(`/users/${userId}`);
       const userData = userResponse.data;
       
-      const branchId = userData.branch_id || userData.current_branch_id;
+      const branchId = userData.active_branch_id || userData.branch_id || userData.current_branch_id;
       
       if (!branchId) {
         toast({ 
@@ -204,13 +211,14 @@ const FactureManager: React.FC = () => {
           endDate: today.toISOString().split('T')[0]
         };
       
-      case 'yesterday':
+      case 'yesterday': {
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
         return {
           startDate: yesterday.toISOString().split('T')[0],
           endDate: yesterday.toISOString().split('T')[0]
         };
+      }
       
       case 'week': {
         const dayOfWeek = today.getDay();
@@ -265,7 +273,8 @@ const FactureManager: React.FC = () => {
   // Charger les ventes de la branche
   const loadSales = useCallback(async () => {
     if (!userBranch?.id) {
-      console.warn('Aucune branche disponible');
+      console.warn('⚠️ Aucune branche disponible');
+      setLoading(false);
       return;
     }
     
@@ -274,84 +283,155 @@ const FactureManager: React.FC = () => {
       const { startDate, endDate } = getDateRange();
       const branchId = userBranch.id;
       
-      const params: any = {
+      const params: Record<string, any> = {
         branch_id: branchId,
-        page: currentPage,
+        skip: (currentPage - 1) * pageSize,
         limit: pageSize,
         start_date: startDate,
         end_date: endDate,
       };
       
-      if (filters.sellerId) params.seller_id = filters.sellerId;
+      if (filters.sellerId) params.user_id = filters.sellerId;
       if (filters.paymentMethod) params.payment_method = filters.paymentMethod;
       if (filters.status) params.status = filters.status;
       if (searchTerm) params.search = searchTerm;
       
-      const response = await api.get<SalesResponse>('/sales', { params });
+      params.sort_by = "created_at";
+      params.sort_order = "desc";
       
-      // Ajouter le nom de la branche aux ventes si nécessaire
-      const salesWithBranch = (response.data.items || []).map(sale => ({
+      console.log('📡 Requête ventes:', { url: '/sales', params });
+      
+      const response = await api.get('/sales', { params });
+      
+      let items: Sale[] = [];
+      let total = 0;
+      
+      if (response.data) {
+        if (response.data.items && Array.isArray(response.data.items)) {
+          items = response.data.items;
+          total = response.data.total || items.length;
+        }
+        else if (Array.isArray(response.data)) {
+          items = response.data;
+          total = items.length;
+        }
+        else if (response.data.data && Array.isArray(response.data.data)) {
+          items = response.data.data;
+          total = response.data.total || items.length;
+        }
+        else {
+          console.warn('Format de réponse non reconnu:', response.data);
+        }
+      }
+      
+      const salesWithBranch = items.map(sale => ({
         ...sale,
         branch_name: userBranch.name
       }));
       
-      setSales(salesWithBranch);
-      setTotalSales(response.data.total || 0);
+      console.log(`✅ ${salesWithBranch.length} ventes chargées (total: ${total})`);
       
-    } catch (error) {
-      console.error('Erreur chargement ventes:', error);
-      toast({ title: "Erreur", description: "Impossible de charger les ventes", variant: "destructive" });
+      setSales(salesWithBranch);
+      setTotalSales(total);
+      
+    } catch (error: any) {
+      console.error('❌ Erreur chargement ventes:', error);
+      
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        toast({ 
+          title: "Timeout", 
+          description: "Le serveur met trop de temps à répondre. Vérifiez votre connexion.", 
+          variant: "destructive" 
+        });
+      } else {
+        let errorMessage = "Impossible de charger les ventes";
+        if (error.response?.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response?.data?.message) {
+          errorMessage = error.response.data.message;
+        }
+        
+        toast({ 
+          title: "Erreur", 
+          description: errorMessage, 
+          variant: "destructive" 
+        });
+      }
+      setSales([]);
+      setTotalSales(0);
     } finally {
       setLoading(false);
     }
   }, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
 
   // Charger la liste des vendeurs de la branche
-
   const loadSellers = useCallback(async () => {
-      if (!userBranch?.id) return;
-      
-      try {
-          const branchId = userBranch.id;
-          // L'URL doit correspondre à l'endpoint que nous avons créé
-          const response = await api.get('/users/sellers', { 
-              params: { branch_id: branchId } 
-          });
-          // La réponse peut être dans response.data.users ou response.data.sellers
-          const sellersList = response.data.users || response.data.sellers || [];
-          setSellers(sellersList);
-      } catch (error) {
-          console.error('Erreur chargement vendeurs:', error);
-          // Ne pas bloquer l'affichage si les vendeurs ne chargent pas
+    if (!userBranch?.id) return;
+    
+    try {
+      const pharmacyId = userBranch.parent_pharmacy_id;
+      if (!pharmacyId) {
+        console.warn('⚠️ Aucune pharmacie parente trouvée');
+        return;
       }
+      
+      const response = await api.get(`/users/sellers/${pharmacyId}`);
+      
+      let sellersList: any[] = [];
+      if (response.data?.sellers && Array.isArray(response.data.sellers)) {
+        sellersList = response.data.sellers;
+      } else if (Array.isArray(response.data)) {
+        sellersList = response.data;
+      }
+      
+      setSellers(sellersList.map((s: any) => ({ 
+        id: s.id, 
+        name: s.nom_complet || s.name || s.email 
+      })));
+    } catch (error) {
+      console.error('Erreur chargement vendeurs:', error);
+      setSellers([]);
+    }
   }, [userBranch]);
 
   // Charger les détails d'une vente
   const loadSaleDetails = useCallback(async (saleId: string) => {
     try {
-      const response = await api.get<SaleDetailResponse>(`/sales/${saleId}`);
-      const data = response.data;
+      const response = await api.get(`/sales/${saleId}`);
+      const data: SaleDetailResponse = response.data;
       
-      if (data.sale) {
-        setSelectedSale({
-          ...data.sale,
-          branch_name: userBranch?.name
-        });
-        setSaleDetails(data.items || []);
-      } else if (data.items) {
-        setSelectedSale({
-          ...(sales.find(s => s.id === saleId) || {}),
-          branch_name: userBranch?.name
-        } as Sale);
-        setSaleDetails(data.items);
-      }
+      // La réponse peut être directement l'objet ou avoir une propriété data
+      const saleData = data.items ? data : (data as any).data || data;
       
+      setSelectedSale({
+        id: saleData.id,
+        reference: saleData.reference,
+        receipt_number: saleData.receipt_number || saleData.invoice_number || saleData.reference,
+        customer_name: saleData.customer_name,
+        seller_name: saleData.seller_name,
+        seller_id: saleData.seller_id || '',
+        payment_method: saleData.payment_method,
+        subtotal: saleData.subtotal,
+        total_discount: saleData.total_discount,
+        total_tva: saleData.total_tva,
+        total_amount: saleData.total_amount,
+        status: saleData.status,
+        created_at: saleData.created_at,
+        branch_name: userBranch?.name
+      });
+      
+      setSaleDetails(saleData.items || []);
       setShowDetailModal(true);
+      
     } catch (error) {
       console.error('Erreur chargement détails:', error);
-      toast({ title: "Erreur", description: "Impossible de charger les détails de la vente", variant: "destructive" });
+      toast({ 
+        title: "Erreur", 
+        description: "Impossible de charger les détails de la vente", 
+        variant: "destructive" 
+      });
     }
-  }, [sales, toast, userBranch]);
+  }, [toast, userBranch]);
 
   // Annuler/Rembourser une vente
   const handleRefund = useCallback(async () => {
@@ -375,7 +455,7 @@ const FactureManager: React.FC = () => {
       setRefundData(null);
       setSelectedSale(null);
       
-      loadSales();
+      await loadSales();
       
     } catch (error: any) {
       console.error('Erreur remboursement:', error);
@@ -405,10 +485,14 @@ const FactureManager: React.FC = () => {
   const exportToPDF = async (sale: Sale) => {
     try {
       let items = sale.items;
-      if (!items) {
-        const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${sale.id}`);
-        items = detailsResponse.data.items || [];
+      if (!items || items.length === 0) {
+        const detailsResponse = await api.get(`/sales/${sale.id}`);
+        const itemsData = detailsResponse.data.items || detailsResponse.data.data?.items || [];
+        items = itemsData;
       }
+      
+      // S'assurer que items est toujours un tableau
+      const safeItems = items || [];
       
       const element = document.createElement('div');
       element.className = 'p-6 font-mono';
@@ -429,7 +513,7 @@ const FactureManager: React.FC = () => {
         </div>
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="margin-bottom: 10px;">
-          ${items.map(item => `
+          ${safeItems.map((item: SaleItem) => `
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
               <span>${item.product_name} x${item.quantity}</span>
               <span>${item.total.toFixed(2)} FC</span>
@@ -473,6 +557,13 @@ const FactureManager: React.FC = () => {
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (!printWindow) return;
     
+    const itemsHtml = sale.items?.map(item => `
+      <div class="flex">
+        <span>${item.product_name} x${item.quantity}</span>
+        <span>${item.total.toFixed(2)} FC</span>
+      </div>
+    `).join('') || '<p>Chargement...</p>';
+    
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
@@ -499,12 +590,7 @@ const FactureManager: React.FC = () => {
           </div>
           <div class="border-dashed"></div>
           <div>
-            ${sale.items?.map(item => `
-              <div class="flex">
-                <span>${item.product_name} x${item.quantity}</span>
-                <span>${item.total.toFixed(2)} FC</span>
-              </div>
-            `).join('') || '<p>Chargement...</p>'}
+            ${itemsHtml}
           </div>
           <div class="border-dashed"></div>
           <div class="flex font-bold">
@@ -570,7 +656,7 @@ const FactureManager: React.FC = () => {
     if (userBranch?.id) {
       loadSales();
     }
-  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, filters.sellerId, filters.paymentMethod, filters.status, userBranch]);
+  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, filters.sellerId, filters.paymentMethod, filters.status, userBranch, loadSales]);
 
   const totalPages = Math.ceil(totalSales / pageSize);
 
@@ -623,7 +709,7 @@ const FactureManager: React.FC = () => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="rounded-xl bg-blue-600 p-2">
-              <Receipt size={24} className="text-white" />
+              <ReceiptIcon size={24} className="text-white" />
             </div>
             <div>
               <h1 className="text-xl font-black text-slate-800 dark:text-slate-200">Gestion des Factures</h1>
@@ -634,7 +720,7 @@ const FactureManager: React.FC = () => {
             </div>
           </div>
           <button
-            onClick={loadSales}
+            onClick={() => loadSales()}
             className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
@@ -765,7 +851,7 @@ const FactureManager: React.FC = () => {
           <div className="rounded-2xl bg-white p-4 shadow-sm dark:bg-slate-800">
             <div className="flex items-center gap-3">
               <div className="rounded-xl bg-blue-100 p-2 dark:bg-blue-900">
-                <Receipt size={20} className="text-blue-600 dark:text-blue-400" />
+                <ReceiptIcon size={20} className="text-blue-600 dark:text-blue-400" />
               </div>
               <div>
                 <p className="text-xs text-slate-400">Ventes</p>
@@ -1155,15 +1241,5 @@ const FactureManager: React.FC = () => {
     </div>
   );
 };
-
-// Icon Receipt
-const Receipt = ({ size, className }: { size: number; className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" />
-    <path d="M8 7h8" />
-    <path d="M8 12h8" />
-    <path d="M8 17h5" />
-  </svg>
-);
 
 export default FactureManager;
