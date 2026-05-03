@@ -335,10 +335,10 @@ interface SupplierCreditConfigCreate {
   repayment_percentage_of_sale?: number;
 }
 
-// Composant Avatar manquant
+/// Composant Avatar manquant
 const Avatar = styled(Box)(() => ({
   display: 'flex',
-  alignItems: 'center',
+  alignItems: 'center', 
   justifyContent: 'center',
   borderRadius: '50%',
 })) as React.ComponentType<{ sx?: any; children?: React.ReactNode }>;
