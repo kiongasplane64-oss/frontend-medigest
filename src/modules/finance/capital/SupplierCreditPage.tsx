@@ -335,6 +335,14 @@ interface SupplierCreditConfigCreate {
   repayment_percentage_of_sale?: number;
 }
 
+// Composant Avatar manquant
+const Avatar = styled(Box)(() => ({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: '50%',
+})) as React.ComponentType<{ sx?: any; children?: React.ReactNode }>;
+
 // ==============================================
 // STYLES PERSONNALISÉS
 // ==============================================
@@ -2532,13 +2540,5 @@ const SupplierCreditPage: React.FC = () => {
     </LocalizationProvider>
   );
 };
-
-// Composant Avatar manquant
-const Avatar = styled(Box)(() => ({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: '50%',
-})) as React.ComponentType<{ sx?: any; children?: React.ReactNode }>;
 
 export default SupplierCreditPage;
