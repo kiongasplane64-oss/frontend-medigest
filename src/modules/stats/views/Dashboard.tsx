@@ -1317,7 +1317,7 @@ const DashboardContent: React.FC = () => {
             </div>
 
             <Link
-              to="/inventory/alerts"
+              to="/alerts"
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-xs font-black text-amber-700 shadow-lg transition-all hover:bg-amber-50 sm:w-auto"
             >
               VOIR LES ALERTES <ArrowRight size={16} />

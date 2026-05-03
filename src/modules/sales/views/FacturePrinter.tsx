@@ -1,4 +1,4 @@
-// FacturePrinter.tsx - Version améliorée avec configuration réelle
+// FacturePrinter.tsx - Version corrigée avec compatibilité des types
 import React, { useRef, useEffect, useState } from 'react';
 import { formatDate, formatDateTime } from '@/utils/formatters';
 import { Printer, Download, QrCode } from 'lucide-react';
@@ -7,7 +7,10 @@ import html2canvas from 'html2canvas';
 import QRCode from 'qrcode';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 
-interface Product {
+// ==================== TYPES COMPATIBLES ====================
+
+// Interface pour un article de vente (format interne)
+interface PrinterProduct {
   id: string;
   name: string;
   price: number;
@@ -17,10 +20,29 @@ interface Product {
   discount_amount?: number;
 }
 
-interface Sale {
+// Interface pour un article de vente (format API)
+interface ApiSaleItem {
+  id: string;
+  product_id: string;
+  product_name: string;
+  product_code: string;
+  quantity: number;
+  unit_price: number;
+  discount_percent: number;
+  discount_amount: number;
+  subtotal: number;
+  total: number;
+  tva_rate?: number;
+  tva_amount?: number;
+  batch_number?: string;
+  expiry_date?: string;
+}
+
+// Interface Sale pour FacturePrinter
+export interface PrinterSale {
   id: string;
   receiptNumber?: string;
-  items: Product[];
+  items: PrinterProduct[];
   subtotal?: number;
   total: number;
   discount_percent?: number;
@@ -36,15 +58,62 @@ interface Sale {
   customerName?: string;
 }
 
+// Helper pour convertir un article SaleItem en PrinterProduct
+const convertToPrinterProduct = (item: ApiSaleItem): PrinterProduct => ({
+  id: item.id || item.product_id,
+  name: item.product_name,
+  price: item.unit_price,
+  quantity: item.quantity,
+  code: item.product_code,
+  discount_percent: item.discount_percent,
+  discount_amount: item.discount_amount
+});
+
+// Helper pour convertir une Sale complète (format API) en PrinterSale
+export const convertToPrinterSale = (sale: any): PrinterSale => {
+  const timestamp = typeof sale.created_at === 'string' 
+    ? new Date(sale.created_at).getTime() 
+    : (sale.timestamp || Date.now());
+  
+  // Convertir les items s'ils sont au format API
+  const printerItems: PrinterProduct[] = (sale.items || []).map((item: any) => {
+    // Si l'item a déjà le format PrinterProduct
+    if (item.name !== undefined && item.price !== undefined) {
+      return item as PrinterProduct;
+    }
+    // Sinon, convertir depuis le format API
+    return convertToPrinterProduct(item as ApiSaleItem);
+  });
+  
+  return {
+    id: sale.id,
+    receiptNumber: sale.receiptNumber || sale.invoice_number || sale.reference || sale.id,
+    items: printerItems,
+    subtotal: sale.subtotal,
+    total: sale.total_amount || sale.total,
+    discount_percent: sale.global_discount || sale.discount_percent,
+    discount_amount: sale.total_discount || sale.discount_amount,
+    paymentMethod: sale.payment_method || sale.paymentMethod,
+    timestamp,
+    cashierName: sale.cashierName || sale.seller_name,
+    cashierId: sale.cashierId || sale.created_by,
+    posName: sale.posName || sale.pharmacy_name || 'Caisse Principale',
+    branchId: sale.branchId || sale.branch_id,
+    branchName: sale.branchName,
+    sessionNumber: sale.sessionNumber || `SESS-${new Date(timestamp).toISOString().slice(0, 10)}`,
+    customerName: sale.customerName || sale.customer_name
+  };
+};
+
 interface FacturePrinterProps {
-  sale: Sale;
+  sale: any; // Accepter n'importe quel format, on le convertit
   pharmacyId?: string;
   onClose: () => void;
   onPrint?: () => void;
 }
 
 export const FacturePrinter: React.FC<FacturePrinterProps> = ({
-  sale,
+  sale: rawSale,
   pharmacyId,
   onClose,
   onPrint
@@ -53,6 +122,9 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
   const printRef = useRef<HTMLDivElement>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [showQrCode, setShowQrCode] = useState<boolean>(true);
+  
+  // Convertir la vente au format interne
+  const sale = convertToPrinterSale(rawSale);
   
   // Récupérer la configuration réelle de la pharmacie
   const { config: pharmacyConfig, isLoading: configLoading } = usePharmacyConfig(pharmacyId);
@@ -235,7 +307,9 @@ export const FacturePrinter: React.FC<FacturePrinterProps> = ({
       case 'cash': return 'Espèces';
       case 'mobile_money': return 'Mobile Money';
       case 'account': return 'Compte Client';
-      default: return method;
+      case 'bank_transfer': return 'Virement';
+      case 'check': return 'Chèque';
+      default: return method || 'N/A';
     }
   };
 

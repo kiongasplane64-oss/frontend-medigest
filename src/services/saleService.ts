@@ -22,6 +22,7 @@ export interface SaleCreate {
   customer_name?: string;
   customer_phone?: string;
   pharmacy_id?: string;
+  branch_id?: string;
   is_credit?: boolean;
   credit_due_date?: string;
   global_discount?: number;
@@ -36,16 +37,18 @@ export interface SaleCreate {
 export interface SaleItemResponse {
   id: string;
   sale_id: string;
+  tenant_id: string;
+  pharmacy_id: string;
   product_id: string;
   product_code: string;
   product_name: string;
   quantity: number;
   unit_price: number;
   discount_percent: number;
-  tva_rate: number;
-  subtotal: number;
   discount_amount: number;
+  tva_rate: number;
   tva_amount: number;
+  subtotal: number;
   total: number;
   batch_number?: string;
   expiry_date?: string;
@@ -57,6 +60,10 @@ export interface SaleResponse {
   reference: string;
   tenant_id: string;
   pharmacy_id: string;
+  pharmacy_name?: string;
+  pharmacy_code?: string;
+  branch_id?: string;
+  branch_name?: string;
   customer_id?: string;
   customer_name?: string;
   customer_phone?: string;
@@ -80,6 +87,7 @@ export interface SaleResponse {
   invoice_number?: string;
   receipt_number?: string;
   receipt_path?: string;
+  invoice_path?: string;
   validated_by?: string;
   validated_at?: string;
   cancelled_by?: string;
@@ -96,6 +104,7 @@ export interface SaleListResponse {
   page: number;
   size: number;
   has_more: boolean;
+  page_size?: number;
   pharmacies_summary?: {
     pharmacy_id: string;
     total_sales: number;
@@ -104,6 +113,7 @@ export interface SaleListResponse {
 }
 
 export interface DailyStatsResponse {
+  date?: string;
   total_amount: number;
   sales_count: number;
   average_basket: number;
@@ -122,23 +132,17 @@ export interface DailyStatsResponse {
   }>;
 }
 
+export interface PeriodStats {
+  total: number;
+  count: number;
+  average: number;
+}
+
 export interface SaleStatsResponse {
   today: DailyStatsResponse & { date: string };
-  week: {
-    total: number;
-    count: number;
-    average: number;
-  };
-  month: {
-    total: number;
-    count: number;
-    average: number;
-  };
-  year: {
-    total: number;
-    count: number;
-    average: number;
-  };
+  week: PeriodStats;
+  month: PeriodStats;
+  year: PeriodStats;
 }
 
 export interface SaleRefundRequest {
@@ -150,6 +154,7 @@ export interface SaleRefundRequest {
   }>;
   reason: string;
   refund_amount: number;
+  branch_id?: string;
 }
 
 export interface SaleRefundResponse {
@@ -188,6 +193,66 @@ export interface ApiResponse<T = any> {
     name: string;
     code: string;
   };
+}
+
+export interface SaleFilterParams {
+  page?: number;
+  limit?: number;
+  skip?: number;
+  status?: string;
+  payment_method?: string;
+  is_credit?: boolean;
+  start_date?: string;
+  end_date?: string;
+  customer_id?: string;
+  seller_id?: string;
+  user_id?: string;
+  pharmacy_id?: string;
+  branch_id?: string;
+  search?: string;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
+}
+
+export interface CreditSaleCreate {
+  customer_id: string;
+  items: Omit<SaleItemCreate, 'discount_percent'>[];
+  due_date: string;
+  guarantee_deposit?: number;
+  guarantor_name?: string;
+  guarantor_phone?: string;
+  notes?: string;
+  pharmacy_id?: string;
+  branch_id?: string;
+}
+
+export interface CreditPaymentData {
+  amount: number;
+  payment_method: string;
+  reference_payment?: string;
+  notes?: string;
+}
+
+export interface PharmacyContext {
+  accessible_pharmacies: Array<{
+    id: string;
+    name: string;
+    code: string;
+    address?: string;
+    phone?: string;
+    is_main: boolean;
+    is_active: boolean;
+  }>;
+  current_pharmacy: {
+    id: string;
+    name: string;
+    code: string;
+    address?: string;
+    phone?: string;
+    is_main: boolean;
+    is_active: boolean;
+  } | null;
+  can_switch: boolean;
 }
 
 // ============================================
@@ -230,21 +295,7 @@ class SaleService {
   /**
    * Récupère la liste des ventes avec filtres
    */
-  async getSales(params?: {
-    page?: number;
-    limit?: number;
-    status?: string;
-    payment_method?: string;
-    is_credit?: boolean;
-    start_date?: string;
-    end_date?: string;
-    customer_id?: string;
-    seller_id?: string;
-    pharmacy_id?: string;
-    search?: string;
-    sort_by?: string;
-    sort_order?: 'asc' | 'desc';
-  }): Promise<SaleListResponse> {
+  async getSales(params?: SaleFilterParams): Promise<SaleListResponse> {
     try {
       const response = await api.get(`${this.baseUrl}`, { params });
       return response.data;
@@ -266,6 +317,50 @@ class SaleService {
         return data.sale as SaleResponse;
       }
       
+      // Si la réponse a une structure SaleDetailResponse, extraire les champs
+      if (data && typeof data === 'object' && 'id' in data) {
+        return {
+          id: data.id,
+          reference: data.reference,
+          tenant_id: data.tenant_id,
+          pharmacy_id: data.pharmacy_id,
+          pharmacy_name: data.pharmacy_name,
+          branch_id: data.branch_id,
+          branch_name: data.branch_name,
+          customer_id: data.customer_id,
+          customer_name: data.customer_name,
+          customer_phone: data.customer_phone,
+          created_by: data.created_by,
+          seller_name: data.seller_name,
+          payment_method: data.payment_method,
+          reference_payment: data.reference_payment,
+          payment_date: data.payment_date,
+          is_credit: data.is_credit,
+          credit_due_date: data.credit_due_date,
+          guarantee_deposit: data.guarantee_deposit,
+          guarantor_name: data.guarantor_name,
+          guarantor_phone: data.guarantor_phone,
+          global_discount: data.global_discount,
+          notes: data.notes,
+          subtotal: data.subtotal,
+          total_discount: data.total_discount,
+          total_tva: data.total_tva,
+          total_amount: data.total_amount,
+          status: data.status,
+          invoice_number: data.invoice_number,
+          receipt_path: data.receipt_path,
+          invoice_path: data.invoice_path,
+          validated_by: data.validated_by,
+          validated_at: data.validated_at,
+          cancelled_by: data.cancelled_by,
+          cancelled_at: data.cancelled_at,
+          cancel_reason: data.cancel_reason,
+          created_at: data.created_at,
+          updated_at: data.updated_at,
+          items: data.items
+        };
+      }
+      
       return data as SaleResponse;
     } catch (error: any) {
       console.error('Erreur récupération vente:', error);
@@ -280,6 +375,7 @@ class SaleService {
   async getDailyStats(params?: {
     date?: string;
     pharmacy_id?: string;
+    branch_id?: string;
   }): Promise<DailyStatsResponse> {
     try {
       const response = await api.get(`${this.baseUrl}/stats/daily`, { params });
@@ -287,6 +383,7 @@ class SaleService {
       
       // Normaliser la réponse quel que soit le format
       return {
+        date: data?.date || new Date().toISOString().split('T')[0],
         total_amount: data?.total_amount ?? data?.total ?? 0,
         sales_count: data?.sales_count ?? data?.count ?? 0,
         average_basket: data?.average_basket ?? data?.average ?? 0,
@@ -298,6 +395,7 @@ class SaleService {
       console.error('Erreur récupération stats quotidiennes:', error);
       // Retourner des valeurs par défaut pour ne pas bloquer l'UI
       return {
+        date: new Date().toISOString().split('T')[0],
         total_amount: 0,
         sales_count: 0,
         average_basket: 0,
@@ -315,6 +413,7 @@ class SaleService {
     start_date?: string;
     end_date?: string;
     pharmacy_id?: string;
+    branch_id?: string;
   }): Promise<SaleStatsResponse> {
     try {
       const response = await api.get(`${this.baseUrl}/stats/overview`, { params });
@@ -322,6 +421,7 @@ class SaleService {
     } catch (error: any) {
       console.error('Erreur récupération stats:', error);
       const defaultDaily: DailyStatsResponse = {
+        date: new Date().toISOString().split('T')[0],
         total_amount: 0,
         sales_count: 0,
         average_basket: 0,
@@ -428,6 +528,7 @@ class SaleService {
     start_date?: string;
     end_date?: string;
     pharmacy_id?: string;
+    branch_id?: string;
     status?: string;
   }): Promise<Blob> {
     try {
@@ -445,27 +546,7 @@ class SaleService {
   /**
    * Récupère le contexte des pharmacies
    */
-  async getPharmacyContext(): Promise<{
-    accessible_pharmacies: Array<{
-      id: string;
-      name: string;
-      code: string;
-      address?: string;
-      phone?: string;
-      is_main: boolean;
-      is_active: boolean;
-    }>;
-    current_pharmacy: {
-      id: string;
-      name: string;
-      code: string;
-      address?: string;
-      phone?: string;
-      is_main: boolean;
-      is_active: boolean;
-    } | null;
-    can_switch: boolean;
-  }> {
+  async getPharmacyContext(): Promise<PharmacyContext> {
     try {
       const response = await api.get(`${this.baseUrl}/pharmacy/context`);
       return response.data;
@@ -507,6 +588,7 @@ class SaleService {
     customer_name?: string;
     customer_phone?: string;
     pharmacy_id?: string;
+    branch_id?: string;
   }): Promise<ApiResponse<SaleResponse>> {
     try {
       const response = await api.post(`${this.baseUrl}/quick`, data);
@@ -520,16 +602,7 @@ class SaleService {
   /**
    * Crée une vente à crédit
    */
-  async createCreditSale(data: {
-    customer_id: string;
-    items: Omit<SaleItemCreate, 'discount_percent'>[];
-    due_date: string;
-    guarantee_deposit?: number;
-    guarantor_name?: string;
-    guarantor_phone?: string;
-    notes?: string;
-    pharmacy_id?: string;
-  }): Promise<ApiResponse<SaleResponse>> {
+  async createCreditSale(data: CreditSaleCreate): Promise<ApiResponse<SaleResponse>> {
     try {
       const response = await api.post(`${this.baseUrl}/credit`, data);
       return response.data;
@@ -548,6 +621,7 @@ class SaleService {
     due_before?: string;
     due_after?: string;
     pharmacy_id?: string;
+    branch_id?: string;
   }): Promise<SaleListResponse> {
     try {
       const response = await api.get(`${this.baseUrl}/credit`, { params });
@@ -563,18 +637,58 @@ class SaleService {
    */
   async recordCreditPayment(
     saleId: string,
-    data: {
-      amount: number;
-      payment_method: string;
-      reference_payment?: string;
-      notes?: string;
-    }
+    data: CreditPaymentData
   ): Promise<ApiResponse> {
     try {
       const response = await api.post(`${this.baseUrl}/${saleId}/credit-payment`, data);
       return response.data;
     } catch (error: any) {
       console.error('Erreur enregistrement paiement crédit:', error);
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Récupère le prochain numéro de facture disponible
+   */
+  async getNextInvoiceNumber(params?: {
+    pharmacy_id?: string;
+    branch_id?: string;
+  }): Promise<{
+    invoice_number: string;
+    sequence_number: number;
+    date: string;
+    pharmacy_id: string;
+    tenant_id?: string;
+    unique: boolean;
+  }> {
+    try {
+      const response = await api.get(`${this.baseUrl}/next-invoice-number`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error('Erreur récupération prochain numéro facture:', error);
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Confirme l'utilisation d'un numéro de facture
+   */
+  async confirmInvoiceNumber(data: {
+    invoice_number: string;
+    pharmacy_id: string;
+  }): Promise<{
+    success: boolean;
+    invoice_number: string;
+    new_sequence: number;
+    pharmacy_id: string;
+    date: string;
+  }> {
+    try {
+      const response = await api.post(`${this.baseUrl}/confirm-invoice-number`, data);
+      return response.data;
+    } catch (error: any) {
+      console.error('Erreur confirmation numéro facture:', error);
       throw this.handleError(error);
     }
   }

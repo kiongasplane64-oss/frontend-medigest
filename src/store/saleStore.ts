@@ -17,8 +17,11 @@ export interface LocalSaleItem {
   discount_percent?: number;
   batch_number?: string;
   expiry_date?: string;
+  /** Catégorie du produit (nom) - utilisé pour le filtrage */
+  category?: string;
+  /** ID de la catégorie du produit */
+  categoryId?: string;
 }
-
 export interface LocalSale {
   id: string;
   tempId?: string;

@@ -26,9 +26,10 @@ import TransferList from '@/modules/inventory/views/TransferList';
 import ProfitAnalysis from '@/modules/benefice/views/benefice';
 import FinanceAnalysis from '@/modules/finance/views/FinanceDashboard';
 import Expense from '@/modules/finance/depense/Expense';
+import DebtPage from '@/modules/finance/dette/DebtPage';
 import ReturnPage from '@/modules/finance/views/returnPage';
 import SubscriptionPage from '@/pages/SubscriptionPage';
-import Suppliers from '@/modules/inventory/views/Suppliers';
+import SupplierCreditPage from '@/modules/finance/capital/SupplierCreditPage';
 import PaymentPage from '@/pages/PaymentPage';
 import PaymentSuccessPage from '@/pages/PaymentSuccessPage';
 import ConfigViewWrapper from '@/modules/core/ConfigViewWrapper';
@@ -42,6 +43,8 @@ import { useAuthStore } from '@/store/useAuthStore';
 import CapitalPage from '@/modules/finance/capital/capital';
 import StockReport from '@/modules/vendor/stockReport';
 import UserPageControl from '@/pages/users/UserPageControl';
+import Alerts from '@/modules/inventory/alerts';
+import CorbeillePage from '@/pages/CorbeillePage';
 
 // ========== COMPOSANTS WRAPPERS ==========
 
@@ -336,13 +339,21 @@ export default function AppRoutes() {
       <Route path="/expenses" element={<AdminLayout />}>
         <Route index element={<Expense />} />
       </Route>
+
+      <Route path="/debts" element={<AdminLayout />}>
+        <Route index element={<DebtPage />} />
+      </Route>
       
       <Route path="/profits" element={<AdminLayout />}>
         <Route index element={<ProfitAnalysis />} />
       </Route>
       
       <Route path="/suppliers" element={<AdminLayout />}>
-        <Route index element={<Suppliers />} />
+        <Route index element={<SupplierCreditPage />} />
+      </Route>
+
+      <Route path="/corbeil" element={<AdminLayout />}>
+        <Route index element={<CorbeillePage />} />
       </Route>
       
       <Route path="/clients" element={<AdminLayout />}>
@@ -383,6 +394,10 @@ export default function AppRoutes() {
       
       <Route path="/generate-code" element={<AdminLayout />}>
         <Route index element={<AdminGenerateCodePage />} />
+      </Route>
+
+      <Route path="/alerts/:pharmacyId" element={<Alerts />}>
+        <Route index element={<ConfigViewWrapper />} />
       </Route>
       
       {/* REDIRECTIONS */}
