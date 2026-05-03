@@ -1,5 +1,13 @@
 {
+  "buildCommand": "npx expo build:web",
+  "outputDirectory": "web-build",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": null,
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://votre-api.com/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/"
