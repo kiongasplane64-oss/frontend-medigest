@@ -1,5 +1,5 @@
 // pages/CorbeillePage.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -65,8 +65,6 @@ const apiService = {
 export default function CorbeillePage() {
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<TrashItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('');
   const [stats, setStats] = useState<{ total_items: number; items_by_type: Array<{ type: string; count: number }> } | null>(null);
@@ -79,11 +77,10 @@ export default function CorbeillePage() {
     try {
       setLoading(true);
       const [trashData, statsData] = await Promise.all([
-        apiService.getTrashItems({ page, limit: 20, item_type: selectedType || undefined, search: searchQuery || undefined }),
+        apiService.getTrashItems({ page: 1, limit: 20, item_type: selectedType || undefined, search: searchQuery || undefined }),
         apiService.getTrashStats(),
       ]);
       setItems(trashData.items);
-      setTotal(trashData.total);
       setStats(statsData);
     } catch (error) {
       console.error('Erreur chargement corbeille:', error);
@@ -91,7 +88,7 @@ export default function CorbeillePage() {
     } finally {
       setLoading(false);
     }
-  }, [page, selectedType, searchQuery]);
+  }, [selectedType, searchQuery]);
 
   useEffect(() => {
     loadData();
@@ -179,7 +176,7 @@ export default function CorbeillePage() {
     }
   };
 
-  if (loading && page === 1) {
+  if (loading && items.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#2196F3" />
@@ -227,7 +224,6 @@ export default function CorbeillePage() {
         </View>
 
         <TouchableOpacity style={styles.filterButton} onPress={() => {
-          // Simple toggle entre les types
           Alert.alert('Filtrer par type', 'Choisissez un type', [
             { text: 'Tous', onPress: () => setSelectedType('') },
             { text: 'Produits', onPress: () => setSelectedType('product') },
@@ -390,7 +386,6 @@ export default function CorbeillePage() {
                   </View>
                 )}
                 
-                {/* Données JSON */}
                 {detailsItem.data && (
                   <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Données:</Text>

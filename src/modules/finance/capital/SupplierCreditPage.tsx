@@ -1344,7 +1344,7 @@ const SupplierCreditPage: React.FC = () => {
                             }}
                           >
                             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <Box>
+                              <Box sx={{ flex: 1 }}>
                                 <Typography sx={{ fontWeight: 'bold' }}>{supplier.supplier_name}</Typography>
                                 {supplier.active_credits_count > 0 && (
                                   <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -1352,11 +1352,27 @@ const SupplierCreditPage: React.FC = () => {
                                   </Typography>
                                 )}
                               </Box>
-                              <Chip
-                                label={formatCurrency(supplier.current_debt)}
-                                size="small"
-                                color={supplier.current_debt > 0 ? 'error' : 'success'}
-                              />
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                                <Chip
+                                  label={formatCurrency(supplier.current_debt)}
+                                  size="small"
+                                  color={supplier.current_debt > 0 ? 'error' : 'success'}
+                                />
+                                <Tooltip title="Voir les détails du fournisseur">
+                                  <IconButton 
+                                    size="small" 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const supplierInfo = suppliersList.find(s => s.id === supplier.supplier_id);
+                                      if (supplierInfo) {
+                                        handleViewSupplierDetail(supplierInfo);
+                                      }
+                                    }}
+                                  >
+                                    <Visibility fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              </Box>
                             </Box>
                             {supplier.overdue_credits_count > 0 && (
                               <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
@@ -1402,6 +1418,18 @@ const SupplierCreditPage: React.FC = () => {
                           </Typography>
                         </Box>
                         <Box sx={{ display: 'flex', gap: 2 }}>
+                          <Tooltip title="Voir les détails du fournisseur">
+                            <IconButton 
+                              onClick={() => {
+                                const supplierInfo = suppliersList.find(s => s.id === selectedSupplier.supplier_id);
+                                if (supplierInfo) {
+                                  handleViewSupplierDetail(supplierInfo);
+                                }
+                              }}
+                            >
+                              <Visibility />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="Voir les transactions">
                             <IconButton onClick={() => handleViewTransactions()}>
                               <Receipt />

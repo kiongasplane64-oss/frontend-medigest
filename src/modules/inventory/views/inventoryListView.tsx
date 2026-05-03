@@ -1542,7 +1542,7 @@ export default function InventoryListView({
       case 'initial_stock':
         return <InitialStockView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'reports':
-        return <ReportStockView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
+        return <ReportStockView/>;
       case 'appro':
         return <ApproView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'achat':
