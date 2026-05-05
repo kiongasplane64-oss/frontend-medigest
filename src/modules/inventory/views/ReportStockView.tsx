@@ -1,22 +1,57 @@
 // src/modules/inventory/views/ReportStockView.tsx
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-  Modal,
-  RefreshControl,
-} from 'react-native';
+  Box,
+  Typography,
+  Paper,
+  TextField,
+  Button,
+  IconButton,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Grid,
+  Card,
+  CardContent,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  CircularProgress,
+  Tooltip,
+  Collapse,
+  InputAdornment,
+  useTheme,
+  alpha,
+  styled,
+  SelectChangeEvent,
+} from '@mui/material';
+import {
+  Search as SearchIcon,
+  Close as CloseIcon,
+  Delete as DeleteIcon,
+  Edit as EditIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+  Warning as WarningIcon,
+  Inventory as InventoryIcon,
+  AttachMoney as MoneyIcon,
+  TrendingUp as TrendingUpIcon,
+  PictureAsPdf as PdfIcon,
+  Folder as FolderIcon,
+} from '@mui/icons-material';
 import { useAuthStore } from '@/store/useAuthStore';
-import { Picker } from '@react-native-picker/picker';
-import { Trash2, Edit2, X, Download, AlertTriangle } from 'lucide-react-native';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import { useSnackbar } from 'notistack';
+import api from '@/api/client';
+import { formatCurrency } from '@/utils/formatters';
 
 // Types
 interface Category {
@@ -60,6 +95,7 @@ interface PharmacyInfo {
   phone: string;
   email: string;
   licenseNumber: string;
+  logo?: string;
 }
 
 interface ReportData {
@@ -81,59 +117,71 @@ interface ReportData {
   };
 }
 
-// API Service
+const StyledTableCell = styled(TableCell)(({ theme }) => ({
+  fontSize: '0.75rem',
+  padding: '8px 4px',
+  [theme.breakpoints.up('sm')]: {
+    padding: '8px 12px',
+    fontSize: '0.8125rem',
+  },
+}));
+
+const StyledTableRow = styled(TableRow)(({ theme }) => ({
+  '&:nth-of-type(odd)': {
+    backgroundColor: theme.palette.action.hover,
+  },
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.primary.main, 0.04),
+  },
+}));
+
 const apiService = {
   async getCategories(): Promise<Category[]> {
-    const response = await fetch('/api/stock/categories/simple');
-    const data = await response.json();
-    return data;
+    const response = await api.get('/stock/categories/simple');
+    return response.data;
   },
 
   async getProducts(params?: { category_id?: string; get_all?: boolean }): Promise<Product[]> {
     const queryParams = new URLSearchParams();
     if (params?.category_id) queryParams.append('category_id', params.category_id);
     if (params?.get_all) queryParams.append('get_all', 'true');
-    
-    const response = await fetch(`/api/stock/?${queryParams.toString()}`);
-    const data = await response.json();
-    return data.products || [];
+
+    const response = await api.get(`/stock/?${queryParams.toString()}`);
+    return response.data.products || [];
   },
 
   async deleteProduct(productId: string, reason?: string): Promise<{ success: boolean; message: string; trash_id?: string }> {
-    const response = await fetch(`/api/stock/${productId}?deletion_reason=${encodeURIComponent(reason || 'Suppression depuis rapport')}`, {
-      method: 'DELETE',
+    const response = await api.delete(`/stock/${productId}`, {
+      params: { deletion_reason: reason || 'Suppression depuis rapport' }
     });
-    return response.json();
+    return response.data;
   },
 
   async updateProduct(productId: string, data: Partial<Product>): Promise<Product> {
-    const response = await fetch(`/api/stock/${productId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return response.json();
+    const response = await api.put(`/stock/${productId}`, data);
+    return response.data;
   },
 
   async getPharmacyInfo(): Promise<PharmacyInfo> {
-    const response = await fetch('/api/pharmacies/current');
-    const data = await response.json();
-    return data;
+    const response = await api.get('/pharmacies/current');
+    return response.data;
   },
 };
 
 export default function ReportStockView() {
   const { user } = useAuthStore();
+  const { enqueueSnackbar } = useSnackbar();
+  const theme = useTheme();
+
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [deletionReason, setDeletionReason] = useState('');
-  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [productToCategorize, setProductToCategorize] = useState<Product | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
   const [reportData, setReportData] = useState<ReportData | null>(null);
@@ -143,53 +191,42 @@ export default function ReportStockView() {
   const [exporting, setExporting] = useState(false);
   const [currentPharmacy, setCurrentPharmacy] = useState<PharmacyInfo | null>(null);
 
-  // Chargement des données
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      
+
       const [categoriesData, productsData, pharmacyData] = await Promise.all([
         apiService.getCategories(),
         apiService.getProducts({ get_all: true }),
         apiService.getPharmacyInfo(),
       ]);
-      
+
       setCategories(categoriesData);
       setAllProducts(productsData);
       setCurrentPharmacy(pharmacyData);
-      
-      // Calculer les statistiques par catégorie
+
       const stats = calculateStatsByCategory(productsData, categoriesData, pharmacyData, user);
       setReportData(stats);
-      
     } catch (error) {
       console.error('Erreur chargement données:', error);
-      Alert.alert('Erreur', 'Impossible de charger les données du stock');
+      enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
-  }, [user]);
+  }, [user, enqueueSnackbar]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadData();
-  };
-
-  // Calcul des statistiques par catégorie
   const calculateStatsByCategory = (
-    productsListData: Product[], 
-    categoriesList: Category[], 
+    productsListData: Product[],
+    categoriesList: Category[],
     pharmacy: PharmacyInfo | null,
     currentUser: any
   ): ReportData => {
     const categoryMap = new Map<string, CategoryStats>();
-    
-    // Initialiser les catégories
+
     categoriesList.forEach(cat => {
       categoryMap.set(cat.id, {
         categoryId: cat.id,
@@ -202,8 +239,7 @@ export default function ReportStockView() {
         products: [],
       });
     });
-    
-    // Catégorie "Sans catégorie"
+
     const uncategorized: CategoryStats = {
       categoryId: 'uncategorized',
       categoryName: 'Sans catégorie',
@@ -214,8 +250,7 @@ export default function ReportStockView() {
       productCount: 0,
       products: [],
     };
-    
-    // Variables pour les totaux globaux
+
     let globalTotals = {
       totalQuantity: 0,
       totalPurchaseValue: 0,
@@ -223,24 +258,21 @@ export default function ReportStockView() {
       totalProfit: 0,
       productCount: 0,
     };
-    
-    // Parcourir tous les produits
+
     productsListData.forEach(product => {
       const quantity = product.quantity || 0;
       const purchaseValue = quantity * (product.purchase_price || 0);
       const sellingValue = quantity * (product.selling_price || 0);
       const profit = sellingValue - purchaseValue;
-      
+
       const productWithStats = { ...product };
-      
-      // Mettre à jour les totaux globaux
+
       globalTotals.totalQuantity += quantity;
       globalTotals.totalPurchaseValue += purchaseValue;
       globalTotals.totalSellingValue += sellingValue;
       globalTotals.totalProfit += profit;
       globalTotals.productCount += 1;
-      
-      // Catégoriser le produit
+
       if (product.category_id && categoryMap.has(product.category_id)) {
         const stats = categoryMap.get(product.category_id)!;
         stats.totalQuantity += quantity;
@@ -259,17 +291,11 @@ export default function ReportStockView() {
         uncategorized.products.push(productWithStats);
       }
     });
-    
-    // Convertir la map en tableau et trier
+
     const categoriesArray = Array.from(categoryMap.values())
       .filter(cat => cat.productCount > 0)
       .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
-    
-    // Filtrer les catégories vides
-    const nonEmptyCategories = uncategorized.productCount > 0 
-      ? [...categoriesArray, uncategorized]
-      : categoriesArray;
-    
+
     return {
       pharmacy: pharmacy || {
         id: '',
@@ -285,27 +311,24 @@ export default function ReportStockView() {
         role: currentUser?.role || '',
       },
       date: new Date().toLocaleDateString('fr-FR'),
-      categories: nonEmptyCategories,
+      categories: categoriesArray,
       uncategorized,
       globalTotals,
     };
   };
 
-  // Filtrer et trier les produits d'une catégorie
   const getFilteredProducts = (productsListData: Product[]): Product[] => {
     let filtered = [...productsListData];
-    
-    // Filtre par recherche
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p => 
+      filtered = filtered.filter(p =>
         p.name.toLowerCase().includes(query) ||
         p.code.toLowerCase().includes(query) ||
         (p.barcode && p.barcode.toLowerCase().includes(query))
       );
     }
-    
-    // Tri
+
     filtered.sort((a, b) => {
       let comparison = 0;
       switch (sortBy) {
@@ -323,219 +346,72 @@ export default function ReportStockView() {
       }
       return sortOrder === 'asc' ? comparison : -comparison;
     });
-    
+
     return filtered;
   };
 
-  // Supprimer un produit (envoyer à la corbeille)
   const handleDeleteProduct = async () => {
     if (!selectedProduct) return;
-    
+
     try {
       const result = await apiService.deleteProduct(selectedProduct.id, deletionReason);
-      
+
       if (result.success) {
-        Alert.alert('Succès', result.message);
-        setShowDeleteModal(false);
+        enqueueSnackbar(result.message, { variant: 'success' });
+        setDeleteDialogOpen(false);
         setSelectedProduct(null);
         setDeletionReason('');
         loadData();
       } else {
-        Alert.alert('Erreur', result.message);
+        enqueueSnackbar(result.message, { variant: 'error' });
       }
     } catch (error) {
       console.error('Erreur suppression:', error);
-      Alert.alert('Erreur', 'Impossible de supprimer le produit');
+      enqueueSnackbar('Impossible de supprimer le produit', { variant: 'error' });
     }
   };
 
-  // Mettre à jour la catégorie d'un produit
   const handleUpdateCategory = async () => {
     if (!productToCategorize || !selectedCategoryId) return;
-    
+
     try {
       await apiService.updateProduct(productToCategorize.id, { category_id: selectedCategoryId });
-      Alert.alert('Succès', 'Catégorie mise à jour avec succès');
-      setShowCategoryModal(false);
+      enqueueSnackbar('Catégorie mise à jour avec succès', { variant: 'success' });
+      setCategoryDialogOpen(false);
       setProductToCategorize(null);
       setSelectedCategoryId('');
       loadData();
     } catch (error) {
       console.error('Erreur mise à jour catégorie:', error);
-      Alert.alert('Erreur', 'Impossible de mettre à jour la catégorie');
+      enqueueSnackbar('Impossible de mettre à jour la catégorie', { variant: 'error' });
     }
   };
 
-  // Exporter en PDF
   const exportToPDF = async () => {
     if (!reportData) return;
-    
     setExporting(true);
-    
-    const getProductsHTML = (productsListData: Product[]) => {
-      return productsListData.map(p => `
-        <tr>
-          <td>${escapeHtml(p.code)}</td>
-          <td>${escapeHtml(p.name)}</td>
-          <td class="number">${p.quantity || 0}</td>
-          <td class="number">${formatMoney(p.purchase_price || 0)}</td>
-          <td class="number">${formatMoney(p.selling_price || 0)}</td>
-          <td class="number">${formatMoney(((p.quantity || 0) * (p.purchase_price || 0)))}</td>
-          <td class="number">${formatMoney(((p.quantity || 0) * (p.selling_price || 0)))}</td>
-          <td class="number">${formatMoney(((p.quantity || 0) * ((p.selling_price || 0) - (p.purchase_price || 0))))}</td>
-        </tr>
-      `).join('');
-    };
-    
-    const categoriesHTML = reportData.categories.map(cat => `
-      <div class="category-section">
-        <div class="category-header">
-          <h3>${escapeHtml(cat.categoryName)}</h3>
-          <div class="category-stats">
-            <span>📦 ${cat.productCount} produits</span>
-            <span>📊 ${cat.totalQuantity} unités</span>
-            <span>💰 Profit: ${formatMoney(cat.totalProfit)}</span>
-          </div>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Code</th>
-              <th>Nom du produit</th>
-              <th>Qté</th>
-              <th>PA</th>
-              <th>PV</th>
-              <th>Valeur Achat</th>
-              <th>Valeur Vente</th>
-              <th>Profit</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${getProductsHTML(cat.products)}
-          </tbody>
-          <tfoot>
-            <tr class="total-row">
-              <td colspan="4"></td>
-              <td><strong>Totaux:</strong></td>
-              <td class="number"><strong>${formatMoney(cat.totalPurchaseValue)}</strong></td>
-              <td class="number"><strong>${formatMoney(cat.totalSellingValue)}</strong></td>
-              <td class="number"><strong>${formatMoney(cat.totalProfit)}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    `).join('');
-    
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Rapport de Stock - ${escapeHtml(reportData.pharmacy.name)}</title>
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 12px; line-height: 1.4; color: #333; padding: 20px; }
-          .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2196F3; }
-          .header h1 { color: #2196F3; font-size: 24px; margin-bottom: 10px; }
-          .pharmacy-info { margin-top: 10px; font-size: 11px; color: #666; }
-          .report-meta { display: flex; justify-content: space-between; margin-bottom: 20px; padding: 10px; background: #f5f5f5; border-radius: 5px; }
-          .global-summary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 10px; margin-bottom: 30px; }
-          .global-summary h3 { margin-bottom: 10px; }
-          .summary-grid { display: flex; justify-content: space-around; flex-wrap: wrap; }
-          .summary-card { text-align: center; padding: 10px; }
-          .summary-card .label { font-size: 11px; opacity: 0.9; }
-          .summary-card .value { font-size: 18px; font-weight: bold; }
-          .category-section { margin-bottom: 30px; page-break-inside: avoid; }
-          .category-header { background: #e3f2fd; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; }
-          .category-header h3 { color: #1976D2; margin-bottom: 5px; }
-          .category-stats { display: flex; gap: 15px; font-size: 11px; color: #555; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 15px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; font-weight: bold; }
-          .number { text-align: right; }
-          .total-row { background-color: #f9f9f9; font-weight: bold; }
-          .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; text-align: center; font-size: 10px; color: #999; }
-          @media print { body { padding: 0; } .no-print { display: none; } }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <h1>📊 RAPPORT DE STOCK</h1>
-          <div class="pharmacy-info">
-            <strong>${escapeHtml(reportData.pharmacy.name)}</strong><br/>
-            ${escapeHtml(reportData.pharmacy.address)}<br/>
-            Tél: ${escapeHtml(reportData.pharmacy.phone)} | Email: ${escapeHtml(reportData.pharmacy.email)}
-          </div>
-        </div>
-        
-        <div class="report-meta">
-          <span>📅 Date: ${reportData.date}</span>
-          <span>👤 Rapport généré par: ${escapeHtml(reportData.user.name)}</span>
-          <span>🏷️ Rôle: ${escapeHtml(reportData.user.role)}</span>
-        </div>
-        
-        <div class="global-summary">
-          <h3>📈 RÉSUMÉ GLOBAL</h3>
-          <div class="summary-grid">
-            <div class="summary-card">
-              <div class="label">Produits</div>
-              <div class="value">${reportData.globalTotals.productCount}</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Unités en stock</div>
-              <div class="value">${reportData.globalTotals.totalQuantity}</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Valeur d'achat</div>
-              <div class="value">${formatMoney(reportData.globalTotals.totalPurchaseValue)}</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Valeur de vente</div>
-              <div class="value">${formatMoney(reportData.globalTotals.totalSellingValue)}</div>
-            </div>
-            <div class="summary-card">
-              <div class="label">Profit potentiel</div>
-              <div class="value">${formatMoney(reportData.globalTotals.totalProfit)}</div>
-            </div>
-          </div>
-        </div>
-        
-        ${categoriesHTML}
-        
-        <div class="footer">
-          <p>Rapport généré automatiquement par le système de gestion de pharmacie</p>
-          <p>Licence: ${escapeHtml(reportData.pharmacy.licenseNumber)}</p>
-        </div>
-      </body>
-      </html>
-    `;
-    
+
     try {
-      const { uri } = await Print.printToFileAsync({ html: htmlContent });
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: 'Partager le rapport de stock',
+      const response = await api.post('/reports/stock-pdf', reportData, {
+        responseType: 'blob',
       });
+
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `rapport_stock_${new Date().toISOString().split('T')[0]}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      enqueueSnackbar('PDF généré avec succès', { variant: 'success' });
     } catch (error) {
       console.error('Erreur export PDF:', error);
-      Alert.alert('Erreur', 'Impossible de générer le PDF');
+      enqueueSnackbar('Impossible de générer le PDF', { variant: 'error' });
     } finally {
       setExporting(false);
     }
-  };
-
-  const escapeHtml = (text: string): string => {
-    if (!text) return '';
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
-
-  const formatMoney = (value: number): string => {
-    return new Intl.NumberFormat('fr-CD', { style: 'currency', currency: 'CDF' }).format(value);
   };
 
   const toggleCategory = (categoryId: string) => {
@@ -550,20 +426,8 @@ export default function ReportStockView() {
     });
   };
 
-  // Utiliser allProducts pour le compteur de produits total
   const totalProductsCount = allProducts.length;
-  
-  // Utiliser currentPharmacy pour afficher le nom de la pharmacie dans le titre
   const pharmacyName = currentPharmacy?.name || 'Pharmacie';
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
-        <Text style={styles.loadingText}>Chargement du rapport...</Text>
-      </View>
-    );
-  }
 
   const filteredCategories = reportData?.categories.filter(cat => {
     if (selectedCategory === 'all') return true;
@@ -571,693 +435,371 @@ export default function ReportStockView() {
     return cat.categoryId === selectedCategory;
   }) || [];
 
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
+        <CircularProgress />
+        <Typography sx={{ ml: 2 }}>Chargement du rapport...</Typography>
+      </Box>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>📊 Rapport de Stock - {pharmacyName}</Text>
-        <Text style={styles.subtitle}>par catégorie | Total produits: {totalProductsCount}</Text>
-      </View>
+    <Box sx={{ p: 2, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+      {/* Header */}
+      <Paper sx={{ p: 3, mb: 2, bgcolor: theme.palette.primary.main, color: '#fff' }}>
+        <Typography variant="h4" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <InventoryIcon fontSize="large" />
+          Rapport de Stock - {pharmacyName}
+        </Typography>
+        <Typography variant="subtitle1" sx={{ opacity: 0.9, mt: 1 }}>
+          par catégorie | Total produits: {totalProductsCount}
+        </Typography>
+      </Paper>
 
-      <View style={styles.toolbar}>
-        <View style={styles.searchContainer}>
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Rechercher un produit..."
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholderTextColor="#999"
-          />
-          {searchQuery !== '' && (
-            <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearButton}>
-              <X size={18} color="#666" />
-            </TouchableOpacity>
-          )}
-        </View>
+      {/* Toolbar */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, md: 4 }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Rechercher un produit..."
+              value={searchQuery}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearchQuery('')}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+          </Grid>
 
-        <View style={styles.filters}>
-          <View style={styles.pickerContainer}>
-            <Picker
-              selectedValue={selectedCategory}
-              onValueChange={(value: string) => setSelectedCategory(value)}
-              style={styles.picker}
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Catégorie</InputLabel>
+              <Select
+                value={selectedCategory}
+                onChange={(e: SelectChangeEvent) => setSelectedCategory(e.target.value)}
+                label="Catégorie"
+              >
+                <MenuItem value="all">Toutes les catégories</MenuItem>
+                {categories.map(cat => (
+                  <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+                ))}
+                <MenuItem value="uncategorized">⚠️ Sans catégorie</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Trier par</InputLabel>
+              <Select
+                value={sortBy}
+                onChange={(e: SelectChangeEvent) => setSortBy(e.target.value as any)}
+                label="Trier par"
+              >
+                <MenuItem value="name">Nom</MenuItem>
+                <MenuItem value="quantity">Quantité</MenuItem>
+                <MenuItem value="profit">Profit</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+            <Button
+              fullWidth
+              variant="outlined"
+              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
             >
-              <Picker.Item label="Toutes les catégories" value="all" />
-              {categories.map(cat => (
-                <Picker.Item key={cat.id} label={cat.name} value={cat.id} />
-              ))}
-              <Picker.Item label="⚠️ Sans catégorie" value="uncategorized" />
-            </Picker>
-          </View>
+              {sortOrder === 'asc' ? '↑ Croissant' : '↓ Décroissant'}
+            </Button>
+          </Grid>
 
-          <View style={styles.pickerContainerSmall}>
-            <Picker
-              selectedValue={sortBy}
-              onValueChange={(value: string) => setSortBy(value as any)}
-              style={styles.picker}
+          <Grid size={{ xs: 12, md: 2 }}>
+            <Button
+              fullWidth
+              variant="contained"
+              color="success"
+              onClick={exportToPDF}
+              disabled={exporting}
+              startIcon={exporting ? <CircularProgress size={20} /> : <PdfIcon />}
             >
-              <Picker.Item label="Trier par nom" value="name" />
-              <Picker.Item label="Trier par quantité" value="quantity" />
-              <Picker.Item label="Trier par profit" value="profit" />
-            </Picker>
-          </View>
+              PDF
+            </Button>
+          </Grid>
+        </Grid>
+      </Paper>
 
-          <TouchableOpacity
-            style={styles.sortOrderButton}
-            onPress={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-          >
-            <Text style={styles.sortOrderText}>{sortOrder === 'asc' ? '↑' : '↓'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.exportButton}
-            onPress={exportToPDF}
-            disabled={exporting}
-          >
-            {exporting ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <>
-                <Download size={18} color="#fff" />
-                <Text style={styles.exportButtonText}>PDF</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-
+      {/* Global Summary */}
       {reportData && (
-        <View style={styles.globalSummary}>
-          <Text style={styles.globalSummaryTitle}>📈 Résumé global</Text>
-          <View style={styles.globalSummaryGrid}>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Produits</Text>
-              <Text style={styles.summaryValue}>{reportData.globalTotals.productCount}</Text>
-            </View>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Unités</Text>
-              <Text style={styles.summaryValue}>{reportData.globalTotals.totalQuantity}</Text>
-            </View>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Valeur achat</Text>
-              <Text style={styles.summaryValue}>{formatMoney(reportData.globalTotals.totalPurchaseValue)}</Text>
-            </View>
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryLabel}>Valeur vente</Text>
-              <Text style={styles.summaryValue}>{formatMoney(reportData.globalTotals.totalSellingValue)}</Text>
-            </View>
-            <View style={[styles.summaryCard, styles.profitCard]}>
-              <Text style={styles.summaryLabel}>Profit</Text>
-              <Text style={styles.summaryProfit}>{formatMoney(reportData.globalTotals.totalProfit)}</Text>
-            </View>
-          </View>
-        </View>
+        <Paper sx={{ p: 3, mb: 2 }}>
+          <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TrendingUpIcon color="primary" />
+            Résumé global
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E3F2FD' }}>
+                <CardContent>
+                  <InventoryIcon color="primary" />
+                  <Typography variant="caption" component="div">Produits</Typography>
+                  <Typography variant="h6">{reportData.globalTotals.productCount}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#FFF3E0' }}>
+                <CardContent>
+                  <InventoryIcon color="warning" />
+                  <Typography variant="caption" component="div">Unités</Typography>
+                  <Typography variant="h6">{reportData.globalTotals.totalQuantity}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E8F5E9' }}>
+                <CardContent>
+                  <MoneyIcon color="success" />
+                  <Typography variant="caption" component="div">Valeur achat</Typography>
+                  <Typography variant="body2">{formatCurrency(reportData.globalTotals.totalPurchaseValue)}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E8EAF6' }}>
+                <CardContent>
+                  <MoneyIcon color="info" />
+                  <Typography variant="caption" component="div">Valeur vente</Typography>
+                  <Typography variant="body2">{formatCurrency(reportData.globalTotals.totalSellingValue)}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 8, md: 4 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#C8E6C9' }}>
+                <CardContent>
+                  <TrendingUpIcon sx={{ color: '#2E7D32' }} />
+                  <Typography variant="caption" component="div">Profit potentiel</Typography>
+                  <Typography variant="h6" sx={{ color: '#2E7D32' }}>
+                    {formatCurrency(reportData.globalTotals.totalProfit)}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Paper>
       )}
 
-      <ScrollView
-        style={styles.categoriesList}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-      >
+      {/* Categories List */}
+      <Box>
         {filteredCategories.map(category => (
-          <View key={category.categoryId} style={styles.categoryCard}>
-            <TouchableOpacity
-              style={styles.categoryHeader}
-              onPress={() => toggleCategory(category.categoryId)}
+          <Paper key={category.categoryId} sx={{ mb: 2, overflow: 'hidden' }}>
+            <Box
+              sx={{
+                p: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                cursor: 'pointer',
+                bgcolor: category.categoryId === 'uncategorized' ? '#FFF3E0' : '#FAFAFA',
+                '&:hover': { bgcolor: '#F0F0F0' },
+              }}
+              onClick={() => toggleCategory(category.categoryId)}
             >
-              <View style={styles.categoryHeaderLeft}>
-                <Text style={styles.categoryHeaderIcon}>
-                  {category.categoryId === 'uncategorized' ? '⚠️' : '📁'}
-                </Text>
-                <Text style={styles.categoryName}>{category.categoryName}</Text>
-                {category.categoryId === 'uncategorized' && (
-                  <View style={styles.warningBadge}>
-                    <AlertTriangle size={12} color="#FF9800" />
-                    <Text style={styles.warningText}>Sans catégorie</Text>
-                  </View>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {category.categoryId === 'uncategorized' ? (
+                  <WarningIcon sx={{ color: '#FF9800' }} />
+                ) : (
+                  <FolderIcon color="primary" />
                 )}
-              </View>
-              <View style={styles.categoryStatsRight}>
-                <Text style={styles.categoryStat}>{category.productCount} produits</Text>
-                <Text style={styles.categoryStat}>{category.totalQuantity} unités</Text>
-                <Text style={[styles.categoryStat, styles.profitText]}>
-                  Profit: {formatMoney(category.totalProfit)}
-                </Text>
-                <Text style={styles.expandIcon}>
-                  {expandedCategories.has(category.categoryId) ? '▼' : '▶'}
-                </Text>
-              </View>
-            </TouchableOpacity>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                  {category.categoryName}
+                </Typography>
+                {category.categoryId === 'uncategorized' && (
+                  <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
+                )}
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="textSecondary">
+                  {category.productCount} produits | {category.totalQuantity} unités
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
+                  Profit: {formatCurrency(category.totalProfit)}
+                </Typography>
+                {expandedCategories.has(category.categoryId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </Box>
+            </Box>
 
-            {expandedCategories.has(category.categoryId) && (
-              <View style={styles.productsList}>
-                <View style={[styles.productRow, styles.productHeader]}>
-                  <Text style={[styles.productCell, styles.codeCell]}>Code</Text>
-                  <Text style={[styles.productCell, styles.nameCell]}>Produit</Text>
-                  <Text style={[styles.productCell, styles.qtyCell]}>Qté</Text>
-                  <Text style={[styles.productCell, styles.priceCell]}>PA</Text>
-                  <Text style={[styles.productCell, styles.priceCell]}>PV</Text>
-                  <Text style={[styles.productCell, styles.valueCell]}>Val Achat</Text>
-                  <Text style={[styles.productCell, styles.valueCell]}>Val Vente</Text>
-                  <Text style={[styles.productCell, styles.valueCell]}>Profit</Text>
-                  <Text style={[styles.productCell, styles.actionsCell]}>Actions</Text>
-                </View>
+            <Collapse in={expandedCategories.has(category.categoryId)}>
+              <Box sx={{ p: 2 }}>
+                <TableContainer>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <StyledTableRow>
+                        <StyledTableCell>Code</StyledTableCell>
+                        <StyledTableCell>Produit</StyledTableCell>
+                        <StyledTableCell align="right">Qté</StyledTableCell>
+                        <StyledTableCell align="right">PA</StyledTableCell>
+                        <StyledTableCell align="right">PV</StyledTableCell>
+                        <StyledTableCell align="right">Val Achat</StyledTableCell>
+                        <StyledTableCell align="right">Val Vente</StyledTableCell>
+                        <StyledTableCell align="right">Profit</StyledTableCell>
+                        <StyledTableCell align="center">Actions</StyledTableCell>
+                      </StyledTableRow>
+                    </TableHead>
+                    <TableBody>
+                      {getFilteredProducts(category.products).map(product => {
+                        const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
+                        const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
+                        const profit = sellingValue - purchaseValue;
 
-                {getFilteredProducts(category.products).map(product => {
-                  const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
-                  const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
-                  const profit = sellingValue - purchaseValue;
-                  
-                  return (
-                    <View key={product.id} style={styles.productRow}>
-                      <Text style={[styles.productCell, styles.codeCell]}>{product.code}</Text>
-                      <Text style={[styles.productCell, styles.nameCell]} numberOfLines={1}>
-                        {product.name}
-                      </Text>
-                      <Text style={[styles.productCell, styles.qtyCell]}>{product.quantity || 0}</Text>
-                      <Text style={[styles.productCell, styles.priceCell]}>{formatMoney(product.purchase_price || 0)}</Text>
-                      <Text style={[styles.productCell, styles.priceCell]}>{formatMoney(product.selling_price || 0)}</Text>
-                      <Text style={[styles.productCell, styles.valueCell]}>{formatMoney(purchaseValue)}</Text>
-                      <Text style={[styles.productCell, styles.valueCell]}>{formatMoney(sellingValue)}</Text>
-                      <Text style={[styles.productCell, styles.valueCell, profit >= 0 ? styles.positive : styles.negative]}>
-                        {formatMoney(profit)}
-                      </Text>
-                      <View style={[styles.productCell, styles.actionsCell]}>
-                        {category.categoryId === 'uncategorized' && (
-                          <TouchableOpacity
-                            style={styles.categoryButton}
-                            onPress={() => {
-                              setProductToCategorize(product);
-                              setShowCategoryModal(true);
-                            }}
-                          >
-                            <Edit2 size={16} color="#4CAF50" />
-                          </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                          style={styles.deleteButton}
-                          onPress={() => {
-                            setSelectedProduct(product);
-                            setShowDeleteModal(true);
-                          }}
-                        >
-                          <Trash2 size={16} color="#F44336" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
+                        return (
+                          <StyledTableRow key={product.id}>
+                            <StyledTableCell>{product.code}</StyledTableCell>
+                            <StyledTableCell>
+                              <Tooltip title={product.name}>
+                                <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
+                              </Tooltip>
+                            </StyledTableCell>
+                            <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
+                            <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
+                              {formatCurrency(profit)}
+                            </StyledTableCell>
+                            <StyledTableCell align="center">
+                              {category.categoryId === 'uncategorized' && (
+                                <Tooltip title="Attribuer une catégorie">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      setProductToCategorize(product);
+                                      setCategoryDialogOpen(true);
+                                    }}
+                                  >
+                                    <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              <Tooltip title="Supprimer">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => {
+                                    setSelectedProduct(product);
+                                    setDeleteDialogOpen(true);
+                                  }}
+                                >
+                                  <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
+                                </IconButton>
+                              </Tooltip>
+                            </StyledTableCell>
+                          </StyledTableRow>
+                        );
+                      })}
 
-                <View style={[styles.productRow, styles.categoryTotalRow]}>
-                  <Text style={[styles.productCell, styles.codeCell]}></Text>
-                  <Text style={[styles.productCell, styles.nameCell, styles.totalText]}>
-                    Totaux {category.categoryName}
-                  </Text>
-                  <Text style={[styles.productCell, styles.qtyCell, styles.totalText]}>
-                    {category.totalQuantity}
-                  </Text>
-                  <Text style={[styles.productCell, styles.priceCell]}></Text>
-                  <Text style={[styles.productCell, styles.priceCell]}></Text>
-                  <Text style={[styles.productCell, styles.valueCell, styles.totalText]}>
-                    {formatMoney(category.totalPurchaseValue)}
-                  </Text>
-                  <Text style={[styles.productCell, styles.valueCell, styles.totalText]}>
-                    {formatMoney(category.totalSellingValue)}
-                  </Text>
-                  <Text style={[styles.productCell, styles.valueCell, styles.totalText, styles.positive]}>
-                    {formatMoney(category.totalProfit)}
-                  </Text>
-                  <Text style={[styles.productCell, styles.actionsCell]}></Text>
-                </View>
-              </View>
-            )}
-          </View>
+                      {/* Category Total Row */}
+                      <StyledTableRow sx={{ bgcolor: '#F5F5F5' }}>
+                        <StyledTableCell colSpan={5}>
+                          <Typography sx={{ fontWeight: 'bold' }}>Totaux {category.categoryName}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right">
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalPurchaseValue)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right">
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalSellingValue)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right" sx={{ color: '#4CAF50' }}>
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalProfit)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell />
+                      </StyledTableRow>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            </Collapse>
+          </Paper>
         ))}
+      </Box>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            📅 Rapport généré le {new Date().toLocaleString('fr-FR')}
-          </Text>
-          <Text style={styles.footerText}>
-            👤 {user?.nom_complet || user?.email}
-          </Text>
-        </View>
-      </ScrollView>
+      {/* Footer */}
+      <Paper sx={{ p: 2, textAlign: 'center', bgcolor: '#FAFAFA' }}>
+        <Typography variant="caption" color="textSecondary" component="div">
+          📅 Rapport généré le {new Date().toLocaleString('fr-FR')}
+        </Typography>
+        <Typography variant="caption" color="textSecondary" component="div">
+          👤 {user?.nom_complet || user?.email}
+        </Typography>
+      </Paper>
 
-      {/* Modal de suppression */}
-      <Modal
-        visible={showDeleteModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowDeleteModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>🗑️ Supprimer le produit</Text>
-            <Text style={styles.modalSubtitle}>
-              {selectedProduct?.name} ({selectedProduct?.code})
-            </Text>
-            
-            <Text style={styles.inputLabel}>Raison de la suppression (optionnel)</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="Ex: Produit périmé, fin de série..."
-              value={deletionReason}
-              onChangeText={setDeletionReason}
-              multiline
-            />
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setShowDeleteModal(false);
-                  setSelectedProduct(null);
-                  setDeletionReason('');
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={handleDeleteProduct}
-              >
-                <Text style={styles.confirmButtonText}>Supprimer</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>🗑️ Supprimer le produit</DialogTitle>
+        <DialogContent>
+          <Typography variant="subtitle2" color="primary" gutterBottom>
+            {selectedProduct?.name} ({selectedProduct?.code})
+          </Typography>
+          <TextField
+            fullWidth
+            label="Raison de la suppression (optionnel)"
+            value={deletionReason}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDeletionReason(e.target.value)}
+            multiline
+            rows={3}
+            margin="normal"
+            placeholder="Ex: Produit périmé, fin de série..."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleDeleteProduct} color="error" variant="contained">
+            Supprimer
+          </Button>
+        </DialogActions>
+      </Dialog>
 
-      {/* Modal d'attribution de catégorie */}
-      <Modal
-        visible={showCategoryModal}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setShowCategoryModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>🏷️ Attribuer une catégorie</Text>
-            <Text style={styles.modalSubtitle}>
-              {productToCategorize?.name}
-            </Text>
-            
-            <Text style={styles.inputLabel}>Sélectionner une catégorie</Text>
-            <View style={styles.pickerContainerFull}>
-              <Picker
-                selectedValue={selectedCategoryId}
-                onValueChange={(value: string) => setSelectedCategoryId(value)}
-              >
-                <Picker.Item label="-- Choisir une catégorie --" value="" />
-                {categories.map(cat => (
-                  <Picker.Item key={cat.id} label={cat.name} value={cat.id} />
-                ))}
-              </Picker>
-            </View>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setShowCategoryModal(false);
-                  setProductToCategorize(null);
-                  setSelectedCategoryId('');
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={handleUpdateCategory}
-                disabled={!selectedCategoryId}
-              >
-                <Text style={styles.confirmButtonText}>Valider</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
+      {/* Category Dialog */}
+      <Dialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>🏷️ Attribuer une catégorie</DialogTitle>
+        <DialogContent>
+          <Typography variant="subtitle2" color="primary" gutterBottom>
+            {productToCategorize?.name}
+          </Typography>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Catégorie</InputLabel>
+            <Select
+              value={selectedCategoryId}
+              onChange={(e: SelectChangeEvent) => setSelectedCategoryId(e.target.value)}
+              label="Catégorie"
+            >
+              <MenuItem value="">-- Choisir une catégorie --</MenuItem>
+              {categories.map(cat => (
+                <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCategoryDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleUpdateCategory} variant="contained" disabled={!selectedCategoryId}>
+            Valider
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 16,
-    color: '#666',
-  },
-  header: {
-    backgroundColor: '#2196F3',
-    padding: 20,
-    paddingTop: 50,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#fff',
-    opacity: 0.9,
-    marginTop: 5,
-  },
-  toolbar: {
-    backgroundColor: '#fff',
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-  },
-  searchInput: {
-    flex: 1,
-    height: 44,
-    fontSize: 16,
-  },
-  clearButton: {
-    padding: 8,
-  },
-  filters: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  pickerContainer: {
-    flex: 2,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    height: 44,
-    justifyContent: 'center',
-  },
-  pickerContainerSmall: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    height: 44,
-    justifyContent: 'center',
-  },
-  pickerContainerFull: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    height: 44,
-    justifyContent: 'center',
-    marginBottom: 20,
-    width: '100%',
-  },
-  picker: {
-    height: 44,
-  },
-  sortOrderButton: {
-    width: 44,
-    height: 44,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sortOrderText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  exportButton: {
-    flexDirection: 'row',
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 16,
-    height: 44,
-    borderRadius: 8,
-    alignItems: 'center',
-    gap: 8,
-  },
-  exportButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  globalSummary: {
-    backgroundColor: '#fff',
-    margin: 12,
-    padding: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  globalSummaryTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  globalSummaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  summaryCard: {
-    flex: 1,
-    minWidth: 100,
-    backgroundColor: '#f5f5f5',
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  profitCard: {
-    backgroundColor: '#e8f5e9',
-  },
-  summaryLabel: {
-    fontSize: 11,
-    color: '#666',
-    marginBottom: 4,
-  },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  summaryProfit: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-  },
-  categoriesList: {
-    flex: 1,
-  },
-  categoryCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 12,
-    marginBottom: 12,
-    borderRadius: 12,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  categoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    backgroundColor: '#fafafa',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  categoryHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  categoryHeaderIcon: {
-    fontSize: 20,
-  },
-  categoryName: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  warningBadge: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF3E0',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    alignItems: 'center',
-    gap: 4,
-  },
-  warningText: {
-    fontSize: 10,
-    color: '#FF9800',
-  },
-  categoryStatsRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  categoryStat: {
-    fontSize: 12,
-    color: '#666',
-  },
-  profitText: {
-    color: '#4CAF50',
-    fontWeight: '600',
-  },
-  expandIcon: {
-    fontSize: 12,
-    color: '#666',
-  },
-  productsList: {
-    padding: 12,
-  },
-  productRow: {
-    flexDirection: 'row',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  productHeader: {
-    backgroundColor: '#f5f5f5',
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  productCell: {
-    fontSize: 12,
-    paddingHorizontal: 4,
-  },
-  codeCell: {
-    width: '12%',
-  },
-  nameCell: {
-    width: '25%',
-  },
-  qtyCell: {
-    width: '8%',
-    textAlign: 'right',
-  },
-  priceCell: {
-    width: '10%',
-    textAlign: 'right',
-  },
-  valueCell: {
-    width: '12%',
-    textAlign: 'right',
-  },
-  actionsCell: {
-    width: '11%',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-  },
-  categoryButton: {
-    padding: 4,
-  },
-  deleteButton: {
-    padding: 4,
-  },
-  categoryTotalRow: {
-    backgroundColor: '#f9f9f9',
-    marginTop: 8,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  totalText: {
-    fontWeight: 'bold',
-  },
-  positive: {
-    color: '#4CAF50',
-  },
-  negative: {
-    color: '#F44336',
-  },
-  footer: {
-    padding: 20,
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-  },
-  footerText: {
-    fontSize: 11,
-    color: '#999',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 20,
-    width: '90%',
-    maxWidth: 400,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 20,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 8,
-    color: '#333',
-  },
-  modalInput: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 20,
-    textAlignVertical: 'top',
-    minHeight: 80,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#f5f5f5',
-  },
-  confirmButton: {
-    backgroundColor: '#F44336',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontWeight: '500',
-  },
-  confirmButtonText: {
-    color: '#fff',
-    fontWeight: '500',
-  },
-});

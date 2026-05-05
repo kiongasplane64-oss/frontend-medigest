@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import type { Plugin } from 'vite'
-import react from '@vitejs/plugin-react'
-import path from 'path'
+import { defineConfig, type Plugin } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+import svgr from 'vite-plugin-svgr';
 
 // Fonction de debug pour afficher la mémoire
 function logMemoryUsage(step: string): void {
@@ -44,7 +44,16 @@ function memoryMonitorPlugin(): Plugin {
 export default defineConfig({
   plugins: [
     react(),
-    memoryMonitorPlugin()  // Plugin de debug mémoire
+    memoryMonitorPlugin(), // Plugin de debug mémoire
+    svgr({
+      svgrOptions: {
+        exportType: 'named',
+        ref: true,
+        svgo: false,
+        titleProp: true,
+      },
+      include: '**/*.svg',
+    })
   ],
   
   resolve: {
@@ -132,4 +141,4 @@ export default defineConfig({
   
   // Option pour limiter l'usage mémoire
   cacheDir: 'node_modules/.vite-debug',  // Dossier cache séparé pour debug
-})
+});

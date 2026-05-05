@@ -222,6 +222,36 @@ interface ExpenseConfig {
   require_receipt_threshold: number;
 }
 
+interface BranchReportItem {
+  branch_name: string;
+  total_amount: number;
+  count: number;
+}
+
+interface UserReportItem {
+  user_id: string;
+  user_name: string;
+  branch_name: string | null;
+  count: number;
+  total_amount: number;
+  average_amount: number;
+}
+
+// Type pour les données du graphique en camembert
+interface PieChartData {
+  name: string;
+  value: number;
+  count: number;
+}
+
+interface ApiError {
+  response?: {
+    data?: {
+      detail?: string | { errors?: Array<{ field: string; message: string }> };
+    };
+  };
+}
+
 const EXPENSE_TYPES = [
   { value: 'rent', label: 'Loyer', icon: '🏢' },
   { value: 'utilities', label: 'Électricité/Eau', icon: '💡' },
@@ -238,7 +268,7 @@ const EXPENSE_TYPES = [
   { value: 'other', label: 'Autre', icon: '📌' },
 ];
 
-const STATUS_CONFIG = {
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ComponentType<{ className?: string }> }> = {
   pending: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400', icon: Clock },
   approved: { label: 'Approuvé', color: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400', icon: CheckCircle },
   rejected: { label: 'Rejeté', color: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400', icon: XCircle },
@@ -254,6 +284,8 @@ const PERIODS = [
   { value: 'year', label: 'Cette année' },
   { value: 'custom', label: 'Personnalisé' },
 ];
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
 
 // ============================================================================
 // API SERVICES
@@ -297,10 +329,10 @@ const expenseApi = {
     }),
 
   getByBranch: (start_date: string, end_date: string) =>
-    api.get<any[]>('/expenses/reports/by-branch', { params: { start_date, end_date } }),
+    api.get<BranchReportItem[]>('/expenses/reports/by-branch', { params: { start_date, end_date } }),
 
   getByUser: (start_date: string, end_date: string) =>
-    api.get<any[]>('/expenses/reports/by-user', { params: { start_date, end_date } }),
+    api.get<UserReportItem[]>('/expenses/reports/by-user', { params: { start_date, end_date } }),
 
   getExpenseDetails: (id: string) => api.get(`/expenses/${id}/details`),
 };
@@ -309,9 +341,9 @@ const configApi = {
   getPharmacyConfig: (pharmacyId: string) =>
     api.get(`/pharmacies/${pharmacyId}/config`),
   getBranches: (pharmacyId: string) =>
-    api.get(`/pharmacies/${pharmacyId}/branches`),
+    api.get<Branch[]>(`/pharmacies/${pharmacyId}/branches`),
   getUsers: (branchId?: string) =>
-    api.get('/users', { params: { branch_id: branchId } }),
+    api.get<User[]>('/users', { params: { branch_id: branchId } }),
 };
 
 // ============================================================================
@@ -387,6 +419,21 @@ const Expense: React.FC = () => {
     };
     loadActivePharmacy();
   }, []);
+
+  // Appliquer le filtre de branche
+  useEffect(() => {
+    if (selectedBranchId === 'null') {
+      setFilters(prev => ({ ...prev, branch_id: 'null' }));
+    } else if (selectedBranchId) {
+      setFilters(prev => ({ ...prev, branch_id: selectedBranchId }));
+    } else {
+      setFilters(prev => {
+        const { branch_id, ...rest } = prev;
+        return rest;
+      });
+    }
+    setPage(1);
+  }, [selectedBranchId]);
 
   // Charger les données de la pharmacie
   const loadPharmacyData = async (id: string) => {
@@ -472,13 +519,13 @@ const Expense: React.FC = () => {
     isLoading: expensesLoading,
     refetch: refetchExpenses,
   } = useQuery({
-    queryKey: ['expenses', filters, page, perPage],
+    queryKey: ['expenses', filters, page, perPage, selectedPeriod, customStartDate, customEndDate],
     queryFn: () =>
       expenseApi.getExpenses({
         page,
         per_page: perPage,
         ...filters,
-        ...(filters.start_date ? {} : getPeriodDates()),
+        ...getPeriodDates(),
       }),
     enabled: !!pharmacyId,
   });
@@ -534,16 +581,18 @@ const Expense: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['expense-summary'] });
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       const detail = error.response?.data?.detail;
-      if (typeof detail === 'object' && detail.errors) {
+      if (detail && typeof detail === 'object' && 'errors' in detail && detail.errors) {
         const errors: Record<string, string> = {};
-        detail.errors.forEach((err: any) => {
+        detail.errors.forEach((err: { field: string; message: string }) => {
           errors[err.field] = err.message;
         });
         setFormErrors(errors);
+      } else if (typeof detail === 'string') {
+        toast.error(detail);
       } else {
-        toast.error(detail || "Erreur lors de la création");
+        toast.error("Erreur lors de la création");
       }
     },
   });
@@ -557,8 +606,9 @@ const Expense: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['expense-summary'] });
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Erreur lors de la modification");
+    onError: (error: ApiError) => {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : "Erreur lors de la modification");
     },
   });
 
@@ -570,8 +620,9 @@ const Expense: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['expense-summary'] });
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Erreur lors de la suppression");
+    onError: (error: ApiError) => {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : "Erreur lors de la suppression");
     },
   });
 
@@ -585,8 +636,9 @@ const Expense: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
       queryClient.invalidateQueries({ queryKey: ['expense-summary'] });
     },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.detail || "Erreur lors de l'approbation");
+    onError: (error: ApiError) => {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : "Erreur lors de l'approbation");
     },
   });
 
@@ -716,27 +768,26 @@ const Expense: React.FC = () => {
   // Préparer les données pour les graphiques
   const chartData = useMemo(() => {
     if (!summaryData?.daily_trend) return [];
-    return summaryData.daily_trend.map((item) => ({
+    return summaryData.daily_trend.map((item: { date: string; total: number; count: number }) => ({
       date: format(parseISO(item.date), 'dd/MM', { locale: fr }),
       total: item.total,
       count: item.count,
     }));
   }, [summaryData]);
 
-  const typeChartData = useMemo(() => {
+  // Correction du type pour les données du camembert
+  const typeChartData: PieChartData[] = useMemo(() => {
     if (!summaryData?.by_type) return [];
     return Object.entries(summaryData.by_type).map(([type, data]) => ({
       name: EXPENSE_TYPES.find(t => t.value === type)?.label || type,
-      value: data.total,
-      count: data.count,
+      value: (data as { total: number; count: number }).total,
+      count: (data as { total: number; count: number }).count,
     }));
   }, [summaryData]);
 
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
-
   // Rendu du badge de statut
   const renderStatusBadge = (status: string) => {
-    const config = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG];
+    const config = STATUS_CONFIG[status];
     if (!config) return <Badge variant="outline">{status}</Badge>;
     const Icon = config.icon;
     return (
@@ -747,9 +798,15 @@ const Expense: React.FC = () => {
     );
   };
 
+  // Formateur personnalisé pour le tooltip
+  const currencyFormatter = (value: number | undefined) => {
+    if (value === undefined) return `${0} ${primaryCurrency}`;
+    return `${value.toLocaleString()} ${primaryCurrency}`;
+  };
+
   // Rendu du filtre par période
   const renderPeriodFilter = () => (
-    <div className="flex flex-wrap gap-3 items-center">
+    <div className="flex flex-wrap gap-3 items-center mb-6">
       <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
         <SelectTrigger className="w-44">
           <SelectValue placeholder="Période" />
@@ -768,14 +825,14 @@ const Expense: React.FC = () => {
           <Input
             type="date"
             value={customStartDate}
-            onChange={(e) => setCustomStartDate(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomStartDate(e.target.value)}
             className="w-36"
           />
           <span>→</span>
           <Input
             type="date"
             value={customEndDate}
-            onChange={(e) => setCustomEndDate(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomEndDate(e.target.value)}
             className="w-36"
           />
         </div>
@@ -888,72 +945,6 @@ const Expense: React.FC = () => {
     </div>
   );
 
-  // Rendu des graphiques
-  const renderCharts = () => (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Évolution quotidienne</CardTitle>
-          <CardDescription>Tendance des dépenses sur la période</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis yAxisId="left" />
-              <YAxis yAxisId="right" orientation="right" />
-              <Tooltip />
-              <Legend />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="total"
-                stroke="#8884d8"
-                name={`Montant (${primaryCurrency})`}
-              />
-              <Line
-                yAxisId="right"
-                type="monotone"
-                dataKey="count"
-                stroke="#82ca9d"
-                name="Nombre"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Répartition par type</CardTitle>
-          <CardDescription>Ventilation des dépenses par catégorie</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <RePieChart>
-              <Pie
-                data={typeChartData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {typeChartData.map((_, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(value) => `${value?.toLocaleString()} ${primaryCurrency}`} />
-            </RePieChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
   // Rendu du tableau des dépenses
   const renderExpensesTable = () => (
     <Card>
@@ -971,7 +962,7 @@ const Expense: React.FC = () => {
               <Input
                 placeholder="Rechercher..."
                 value={filters.search || ''}
-                onChange={(e) => {
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   setFilters({ ...filters, search: e.target.value });
                   setPage(1);
                 }}
@@ -997,7 +988,7 @@ const Expense: React.FC = () => {
                     <Label>Description *</Label>
                     <Input
                       value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })}
                       placeholder="Ex: Achat de médicaments"
                     />
                     {formErrors.description && (
@@ -1013,7 +1004,7 @@ const Expense: React.FC = () => {
                           type="number"
                           step="0.01"
                           value={formData.amount || ''}
-                          onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
                           placeholder="0.00"
                           className="flex-1"
                         />
@@ -1030,7 +1021,7 @@ const Expense: React.FC = () => {
                       <Label>Type de dépense *</Label>
                       <Select
                         value={formData.expense_type}
-                        onValueChange={(value) => setFormData({ ...formData, expense_type: value })}
+                        onValueChange={(value: string) => setFormData({ ...formData, expense_type: value })}
                       >
                         <SelectTrigger>
                           <SelectValue />
@@ -1055,7 +1046,7 @@ const Expense: React.FC = () => {
                       <Input
                         type="date"
                         value={formData.expense_date}
-                        onChange={(e) => setFormData({ ...formData, expense_date: e.target.value })}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, expense_date: e.target.value })}
                       />
                       {formErrors.expense_date && (
                         <p className="text-sm text-red-500 mt-1">{formErrors.expense_date}</p>
@@ -1066,7 +1057,7 @@ const Expense: React.FC = () => {
                       <Label>Branche</Label>
                       <Select
                         value={formData.branch_id || ''}
-                        onValueChange={(value) => setFormData({ ...formData, branch_id: value || undefined })}
+                        onValueChange={(value: string) => setFormData({ ...formData, branch_id: value || undefined })}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Sélectionner (optionnel)" />
@@ -1087,7 +1078,7 @@ const Expense: React.FC = () => {
                     <Label>Notes (optionnel)</Label>
                     <Textarea
                       value={formData.notes}
-                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, notes: e.target.value })}
                       placeholder="Informations complémentaires..."
                       rows={3}
                     />
@@ -1109,7 +1100,7 @@ const Expense: React.FC = () => {
                         type="file"
                         accept="image/*,.pdf"
                         className="hidden"
-                        onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setReceiptFile(e.target.files?.[0] || null)}
                       />
                       {receiptFile && (
                         <span className="text-sm text-muted-foreground">
@@ -1163,7 +1154,7 @@ const Expense: React.FC = () => {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {expensesData?.items.map((expense) => (
+                {expensesData?.items.map((expense: Expense) => (
                   <TableRow key={expense.id}>
                     <TableCell className="whitespace-nowrap">
                       {format(parseISO(expense.expense_date), 'dd/MM/yyyy')}
@@ -1234,7 +1225,7 @@ const Expense: React.FC = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    onClick={() => setPage((p: number) => Math.max(1, p - 1))}
                     disabled={page === 1}
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -1245,7 +1236,7 @@ const Expense: React.FC = () => {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setPage(p => Math.min(expensesData.total_pages, p + 1))}
+                    onClick={() => setPage((p: number) => Math.min(expensesData.total_pages, p + 1))}
                     disabled={page === expensesData.total_pages}
                   >
                     <ChevronRight className="h-4 w-4" />
@@ -1268,7 +1259,7 @@ const Expense: React.FC = () => {
             <Label>Type de dépense</Label>
             <Select
               value={filters.expense_type || ''}
-              onValueChange={(value) => {
+              onValueChange={(value: string) => {
                 setFilters({ ...filters, expense_type: value || undefined });
                 setPage(1);
               }}
@@ -1291,7 +1282,7 @@ const Expense: React.FC = () => {
             <Label>Statut</Label>
             <Select
               value={filters.approval_status || ''}
-              onValueChange={(value) => {
+              onValueChange={(value: string) => {
                 setFilters({ ...filters, approval_status: value || undefined });
                 setPage(1);
               }}
@@ -1312,7 +1303,7 @@ const Expense: React.FC = () => {
             <Label>Branche</Label>
             <Select
               value={filters.branch_id || ''}
-              onValueChange={(value) => {
+              onValueChange={(value: string) => {
                 setFilters({ ...filters, branch_id: value || undefined });
                 setPage(1);
               }}
@@ -1322,7 +1313,6 @@ const Expense: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="">Toutes les branches</SelectItem>
-                <SelectItem value="null">Siège</SelectItem>
                 {branches.map((branch) => (
                   <SelectItem key={branch.id} value={branch.id}>
                     {branch.name}
@@ -1336,7 +1326,7 @@ const Expense: React.FC = () => {
             <Label>Utilisateur</Label>
             <Select
               value={filters.user_id || ''}
-              onValueChange={(value) => {
+              onValueChange={(value: string) => {
                 setFilters({ ...filters, user_id: value || undefined });
                 setPage(1);
               }}
@@ -1346,7 +1336,7 @@ const Expense: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="">Tous les utilisateurs</SelectItem>
-                {users.map((u) => (
+                {users.map((u: User) => (
                   <SelectItem key={u.id} value={u.id}>
                     {u.nom_complet}
                   </SelectItem>
@@ -1467,7 +1457,7 @@ const Expense: React.FC = () => {
               <Label>Description</Label>
               <Input
                 value={editFormData.description || ''}
-                onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditFormData({ ...editFormData, description: e.target.value })}
               />
             </div>
             <div>
@@ -1476,14 +1466,14 @@ const Expense: React.FC = () => {
                 type="number"
                 step="0.01"
                 value={editFormData.amount || ''}
-                onChange={(e) => setEditFormData({ ...editFormData, amount: parseFloat(e.target.value) || 0 })}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditFormData({ ...editFormData, amount: parseFloat(e.target.value) || 0 })}
               />
             </div>
             <div>
               <Label>Type</Label>
               <Select
                 value={editFormData.expense_type}
-                onValueChange={(value) => setEditFormData({ ...editFormData, expense_type: value })}
+                onValueChange={(value: string) => setEditFormData({ ...editFormData, expense_type: value })}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1502,14 +1492,14 @@ const Expense: React.FC = () => {
               <Input
                 type="date"
                 value={editFormData.expense_date}
-                onChange={(e) => setEditFormData({ ...editFormData, expense_date: e.target.value })}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditFormData({ ...editFormData, expense_date: e.target.value })}
               />
             </div>
             <div>
               <Label>Notes</Label>
               <Textarea
                 value={editFormData.notes || ''}
-                onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditFormData({ ...editFormData, notes: e.target.value })}
                 rows={3}
               />
             </div>
@@ -1559,7 +1549,7 @@ const Expense: React.FC = () => {
               <Label>Motif du rejet (si rejet)</Label>
               <Textarea
                 value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setRejectionReason(e.target.value)}
                 placeholder="Expliquez pourquoi cette dépense est rejetée..."
                 rows={3}
               />
@@ -1593,6 +1583,72 @@ const Expense: React.FC = () => {
     </>
   );
 
+  // Rendu des graphiques
+  const renderCharts = () => (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Évolution quotidienne</CardTitle>
+          <CardDescription>Tendance des dépenses sur la période</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis yAxisId="left" />
+              <YAxis yAxisId="right" orientation="right" />
+              <Tooltip formatter={currencyFormatter} />
+              <Legend />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="total"
+                stroke="#8884d8"
+                name={`Montant (${primaryCurrency})`}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="count"
+                stroke="#82ca9d"
+                name="Nombre"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Répartition par type</CardTitle>
+          <CardDescription>Ventilation des dépenses par catégorie</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <RePieChart>
+              <Pie
+                data={typeChartData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, percent }: { name: string; percent: number }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {typeChartData.map((_: PieChartData, index: number) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={currencyFormatter} />
+            </RePieChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+
   // Rendu du rapport par branche
   const renderBranchReport = () => (
     <Card>
@@ -1606,7 +1662,7 @@ const Expense: React.FC = () => {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="branch_name" />
             <YAxis />
-            <Tooltip formatter={(value) => `${value?.toLocaleString()} ${primaryCurrency}`} />
+            <Tooltip formatter={currencyFormatter} />
             <Legend />
             <Bar dataKey="total_amount" name={`Total (${primaryCurrency})`} fill="#8884d8" />
             <Bar dataKey="count" name="Nombre de dépenses" fill="#82ca9d" />
@@ -1635,7 +1691,7 @@ const Expense: React.FC = () => {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(userReportData || []).map((report: any) => (
+            {(userReportData || []).map((report: UserReportItem) => (
               <TableRow key={report.user_id}>
                 <TableCell className="font-medium">{report.user_name}</TableCell>
                 <TableCell>{report.branch_name || 'Siège'}</TableCell>
@@ -1701,7 +1757,10 @@ const Expense: React.FC = () => {
           <Building2 className="h-5 w-5 text-muted-foreground" />
           <span className="font-medium">Branche:</span>
         </div>
-        <Select value={selectedBranchId || 'all'} onValueChange={setSelectedBranchId}>
+        <Select 
+          value={selectedBranchId || 'all'} 
+          onValueChange={(value: string) => setSelectedBranchId(value === 'all' ? null : value === 'null' ? 'null' : value)}
+        >
           <SelectTrigger className="w-64">
             <SelectValue placeholder="Sélectionner une branche" />
           </SelectTrigger>

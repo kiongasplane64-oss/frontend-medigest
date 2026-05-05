@@ -1,17 +1,51 @@
-// pages/CorbeillePage.tsx
-import { useState, useEffect, useCallback } from 'react';
+// src/pages/CorbeillePage.tsx
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
+  Box,
+  Typography,
+  Paper,
+  TextField,
+  Button,
+  IconButton,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  CircularProgress,
+  Tooltip,
+  InputAdornment,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  Pagination,
+  Stack,
   Alert,
-  Modal,
-  TextInput,
-} from 'react-native';
-import { Trash2, RotateCcw, X, Search, Filter, AlertTriangle } from 'lucide-react-native';
+  useTheme,
+} from '@mui/material';
+import {
+  Delete as DeleteIcon,
+  Restore as RestoreIcon,
+  Search as SearchIcon,
+  Close as CloseIcon,
+  FilterList as FilterIcon,
+  CleaningServices as CleanIcon,
+  Info as InfoIcon,
+  Inventory as ProductIcon,
+  AttachMoney as SaleIcon,
+  Person as CustomerIcon,
+  Description as OtherIcon,
+  Warning as WarningIcon,
+} from '@mui/icons-material';
+import { useSnackbar } from 'notistack';
+import api from '@/api/client';
 
 interface TrashItem {
   id: string;
@@ -28,6 +62,11 @@ interface TrashItem {
   data?: any;
 }
 
+interface TrashStats {
+  total_items: number;
+  items_by_type: Array<{ type: string; count: number }>;
+}
+
 const apiService = {
   async getTrashItems(params?: { page?: number; limit?: number; item_type?: string; search?: string }): Promise<{ items: TrashItem[]; total: number }> {
     const queryParams = new URLSearchParams();
@@ -36,59 +75,105 @@ const apiService = {
     if (params?.item_type) queryParams.append('item_type', params.item_type);
     if (params?.search) queryParams.append('search', params.search);
     
-    const response = await fetch(`/api/trash/?${queryParams.toString()}`);
-    const data = await response.json();
-    return { items: data.items || [], total: data.total || 0 };
+    const response = await api.get(`/trash/?${queryParams.toString()}`);
+    return { items: response.data.items || [], total: response.data.total || 0 };
   },
 
   async restoreTrashItem(trashId: string): Promise<{ message: string }> {
-    const response = await fetch(`/api/trash/${trashId}/restore`, { method: 'POST' });
-    return response.json();
+    const response = await api.post(`/trash/${trashId}/restore`);
+    return response.data;
   },
 
   async deleteTrashItemPermanently(trashId: string): Promise<{ message: string }> {
-    const response = await fetch(`/api/trash/${trashId}`, { method: 'DELETE' });
-    return response.json();
+    const response = await api.delete(`/trash/${trashId}`);
+    return response.data;
   },
 
   async cleanupExpiredTrash(): Promise<{ deleted_count: number }> {
-    const response = await fetch('/api/trash/cleanup/expired', { method: 'DELETE' });
-    return response.json();
+    const response = await api.delete('/trash/cleanup/expired');
+    return response.data;
   },
 
-  async getTrashStats(): Promise<{ total_items: number; items_by_type: Array<{ type: string; count: number }> }> {
-    const response = await fetch('/api/trash/stats/overview');
-    return response.json();
+  async getTrashStats(): Promise<TrashStats> {
+    const response = await api.get('/trash/stats/overview');
+    return response.data;
   },
 };
 
+const getItemTypeIcon = (type: string) => {
+  switch (type) {
+    case 'product': return <ProductIcon sx={{ color: '#4CAF50' }} />;
+    case 'sale': return <SaleIcon sx={{ color: '#2196F3' }} />;
+    case 'customer': return <CustomerIcon sx={{ color: '#FF9800' }} />;
+    default: return <OtherIcon sx={{ color: '#9E9E9E' }} />;
+  }
+};
+
+const getItemTypeLabel = (type: string) => {
+  switch (type) {
+    case 'product': return 'Produit';
+    case 'sale': return 'Vente';
+    case 'customer': return 'Client';
+    default: return type;
+  }
+};
+
+const getItemTypeColor = (type: string) => {
+  switch (type) {
+    case 'product': return 'success';
+    case 'sale': return 'primary';
+    case 'customer': return 'warning';
+    default: return 'default';
+  }
+};
+
+const formatDate = (dateStr: string) => {
+  return new Date(dateStr).toLocaleString('fr-FR');
+};
+
 export default function CorbeillePage() {
+  const { enqueueSnackbar } = useSnackbar();
+  const theme = useTheme();
+
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<TrashItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('');
-  const [stats, setStats] = useState<{ total_items: number; items_by_type: Array<{ type: string; count: number }> } | null>(null);
-  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [stats, setStats] = useState<TrashStats | null>(null);
+  const [filterAnchorEl, setFilterAnchorEl] = useState<null | HTMLElement>(null);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<TrashItem | null>(null);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [detailsItem, setDetailsItem] = useState<TrashItem | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [cleanupDialogOpen, setCleanupDialogOpen] = useState(false);
+
+  const limit = 20;
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [trashData, statsData] = await Promise.all([
-        apiService.getTrashItems({ page: 1, limit: 20, item_type: selectedType || undefined, search: searchQuery || undefined }),
+        apiService.getTrashItems({ 
+          page, 
+          limit, 
+          item_type: selectedType || undefined, 
+          search: searchQuery || undefined 
+        }),
         apiService.getTrashStats(),
       ]);
       setItems(trashData.items);
+      setTotal(trashData.total);
       setStats(statsData);
     } catch (error) {
       console.error('Erreur chargement corbeille:', error);
-      Alert.alert('Erreur', 'Impossible de charger la corbeille');
+      enqueueSnackbar('Impossible de charger la corbeille', { variant: 'error' });
     } finally {
       setLoading(false);
     }
-  }, [selectedType, searchQuery]);
+  }, [page, selectedType, searchQuery, enqueueSnackbar]);
 
   useEffect(() => {
     loadData();
@@ -99,574 +184,443 @@ export default function CorbeillePage() {
     
     try {
       const result = await apiService.restoreTrashItem(selectedItem.id);
-      Alert.alert('Succès', result.message);
-      setShowRestoreModal(false);
+      enqueueSnackbar(result.message, { variant: 'success' });
+      setRestoreDialogOpen(false);
       setSelectedItem(null);
       loadData();
     } catch (error) {
       console.error('Erreur restauration:', error);
-      Alert.alert('Erreur', 'Impossible de restaurer l\'élément');
+      enqueueSnackbar('Impossible de restaurer l\'élément', { variant: 'error' });
     }
   };
 
-  const handlePermanentDelete = async (item: TrashItem) => {
-    Alert.alert(
-      'Suppression définitive',
-      `Êtes-vous sûr de vouloir supprimer définitivement "${item.original_name}" ? Cette action est irréversible.`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const result = await apiService.deleteTrashItemPermanently(item.id);
-              Alert.alert('Succès', result.message);
-              loadData();
-            } catch (error) {
-              Alert.alert('Erreur', 'Impossible de supprimer l\'élément');
-            }
-          },
-        },
-      ]
-    );
+  const handlePermanentDelete = async () => {
+    if (!selectedItem) return;
+    
+    try {
+      const result = await apiService.deleteTrashItemPermanently(selectedItem.id);
+      enqueueSnackbar(result.message, { variant: 'success' });
+      setDeleteDialogOpen(false);
+      setSelectedItem(null);
+      loadData();
+    } catch (error) {
+      console.error('Erreur suppression définitive:', error);
+      enqueueSnackbar('Impossible de supprimer l\'élément', { variant: 'error' });
+    }
   };
 
   const handleCleanupExpired = async () => {
-    Alert.alert(
-      'Nettoyage automatique',
-      'Cette action supprimera définitivement tous les éléments expirés de la corbeille.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Nettoyer',
-          onPress: async () => {
-            try {
-              const result = await apiService.cleanupExpiredTrash();
-              Alert.alert('Succès', `${result.deleted_count} éléments supprimés`);
-              loadData();
-            } catch (error) {
-              Alert.alert('Erreur', 'Impossible de nettoyer la corbeille');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString('fr-FR');
-  };
-
-  const getItemTypeIcon = (type: string) => {
-    switch (type) {
-      case 'product': return '📦';
-      case 'sale': return '💰';
-      case 'customer': return '👤';
-      default: return '📄';
+    try {
+      const result = await apiService.cleanupExpiredTrash();
+      enqueueSnackbar(`${result.deleted_count} éléments supprimés`, { variant: 'success' });
+      setCleanupDialogOpen(false);
+      loadData();
+    } catch (error) {
+      console.error('Erreur nettoyage:', error);
+      enqueueSnackbar('Impossible de nettoyer la corbeille', { variant: 'error' });
     }
   };
 
-  const getItemTypeLabel = (type: string) => {
-    switch (type) {
-      case 'product': return 'Produit';
-      case 'sale': return 'Vente';
-      case 'customer': return 'Client';
-      default: return type;
-    }
+  const openDeleteDialog = (item: TrashItem) => {
+    setSelectedItem(item);
+    setDeleteDialogOpen(true);
+  };
+
+  const openRestoreDialog = (item: TrashItem) => {
+    setSelectedItem(item);
+    setRestoreDialogOpen(true);
+  };
+
+  const openDetailsDialog = (item: TrashItem) => {
+    setDetailsItem(item);
+    setDetailsDialogOpen(true);
+  };
+
+  const handleFilterClick = (event: React.MouseEvent<HTMLElement>) => {
+    setFilterAnchorEl(event.currentTarget);
+  };
+
+  const handleFilterClose = () => {
+    setFilterAnchorEl(null);
+  };
+
+  const handleFilterSelect = (type: string) => {
+    setSelectedType(type);
+    setPage(1);
+    handleFilterClose();
+  };
+
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(event.target.value);
+    setPage(1);
+  };
+
+  const handlePageChange = (_event: React.ChangeEvent<unknown>, value: number) => {
+    setPage(value);
   };
 
   if (loading && items.length === 0) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
-        <Text style={styles.loadingText}>Chargement...</Text>
-      </View>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
+        <CircularProgress />
+        <Typography sx={{ ml: 2 }}>Chargement...</Typography>
+      </Box>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>🗑️ Corbeille</Text>
-        <TouchableOpacity style={styles.cleanupButton} onPress={handleCleanupExpired}>
-          <Text style={styles.cleanupButtonText}>Nettoyer</Text>
-        </TouchableOpacity>
-      </View>
+    <Box sx={{ p: 2, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+      {/* Header */}
+      <Paper sx={{ p: 3, mb: 2, bgcolor: theme.palette.primary.main, color: '#fff' }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+          <Typography variant="h4" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+            🗑️ Corbeille
+          </Typography>
+          <Button
+            variant="contained"
+            startIcon={<CleanIcon />}
+            onClick={() => setCleanupDialogOpen(true)}
+            sx={{ bgcolor: '#FF9800', '&:hover': { bgcolor: '#F57C00' } }}
+          >
+            Nettoyer les éléments expirés
+          </Button>
+        </Box>
+      </Paper>
 
+      {/* Stats Bar */}
       {stats && (
-        <View style={styles.statsBar}>
-          <Text style={styles.statsText}>Total: {stats.total_items} éléments</Text>
-          <View style={styles.statsTypes}>
-            {stats.items_by_type.slice(0, 4).map(type => (
-              <Text key={type.type} style={styles.statsType}>
-                {getItemTypeIcon(type.type)} {type.count}
-              </Text>
+        <Paper sx={{ p: 2, mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+          <Typography variant="body2" color="textSecondary">
+            Total: <strong>{stats.total_items}</strong> éléments
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+            {stats.items_by_type.slice(0, 5).map(type => (
+              <Chip
+                key={type.type}
+                icon={getItemTypeIcon(type.type)}
+                label={`${getItemTypeLabel(type.type)}: ${type.count}`}
+                size="small"
+                variant="outlined"
+              />
             ))}
-          </View>
-        </View>
+          </Box>
+        </Paper>
       )}
 
-      <View style={styles.toolbar}>
-        <View style={styles.searchContainer}>
-          <Search size={18} color="#999" />
-          <TextInput
-            style={styles.searchInput}
+      {/* Toolbar */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+          <TextField
+            size="small"
             placeholder="Rechercher..."
             value={searchQuery}
-            onChangeText={setSearchQuery}
+            onChange={handleSearchChange}
+            sx={{ flex: 1, minWidth: 200 }}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon />
+                  </InputAdornment>
+                ),
+                endAdornment: searchQuery && (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearchQuery('')}>
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
           />
-          {searchQuery !== '' && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <X size={16} color="#999" />
-            </TouchableOpacity>
-          )}
-        </View>
+          
+          <Button
+            variant="outlined"
+            startIcon={<FilterIcon />}
+            onClick={handleFilterClick}
+          >
+            Filtrer {selectedType && `(${getItemTypeLabel(selectedType)})`}
+          </Button>
+          
+          <Menu
+            anchorEl={filterAnchorEl}
+            open={Boolean(filterAnchorEl)}
+            onClose={handleFilterClose}
+          >
+            <MenuItem onClick={() => handleFilterSelect('')}>
+              <ListItemIcon>
+                <OtherIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Tous</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={() => handleFilterSelect('product')}>
+              <ListItemIcon>
+                <ProductIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+              </ListItemIcon>
+              <ListItemText>Produits</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={() => handleFilterSelect('sale')}>
+              <ListItemIcon>
+                <SaleIcon fontSize="small" sx={{ color: '#2196F3' }} />
+              </ListItemIcon>
+              <ListItemText>Ventes</ListItemText>
+            </MenuItem>
+            <MenuItem onClick={() => handleFilterSelect('customer')}>
+              <ListItemIcon>
+                <CustomerIcon fontSize="small" sx={{ color: '#FF9800' }} />
+              </ListItemIcon>
+              <ListItemText>Clients</ListItemText>
+            </MenuItem>
+          </Menu>
+        </Box>
+      </Paper>
 
-        <TouchableOpacity style={styles.filterButton} onPress={() => {
-          Alert.alert('Filtrer par type', 'Choisissez un type', [
-            { text: 'Tous', onPress: () => setSelectedType('') },
-            { text: 'Produits', onPress: () => setSelectedType('product') },
-            { text: 'Ventes', onPress: () => setSelectedType('sale') },
-            { text: 'Clients', onPress: () => setSelectedType('customer') },
-            { text: 'Annuler', style: 'cancel' },
-          ]);
-        }}>
-          <Filter size={18} color="#666" />
-        </TouchableOpacity>
-      </View>
+      {/* Items Table */}
+      {items.length === 0 ? (
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <DeleteIcon sx={{ fontSize: 48, color: '#ccc', mb: 2 }} />
+          <Typography color="textSecondary">La corbeille est vide</Typography>
+        </Paper>
+      ) : (
+        <>
+          <TableContainer component={Paper}>
+            <Table size="medium">
+              <TableHead>
+                <TableRow sx={{ bgcolor: '#fafafa' }}>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Nom/Référence</TableCell>
+                  <TableCell>Supprimé par</TableCell>
+                  <TableCell>Date suppression</TableCell>
+                  <TableCell>Suppression auto</TableCell>
+                  <TableCell align="center">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id} hover>
+                    <TableCell>
+                      <Chip
+                        icon={getItemTypeIcon(item.item_type)}
+                        label={getItemTypeLabel(item.item_type)}
+                        size="small"
+                        color={getItemTypeColor(item.item_type)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Box>
+                        <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                          {item.original_name}
+                        </Typography>
+                        {item.original_reference && (
+                          <Typography variant="caption" color="textSecondary">
+                            {item.original_reference}
+                          </Typography>
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">
+                        {item.deleted_by_name || 'Inconnu'}
+                      </Typography>
+                      <Typography variant="caption" color="textSecondary">
+                        {item.deleted_by_email}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">
+                        {formatDate(item.deleted_at)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      {item.auto_delete_at ? (
+                        <Typography variant="body2" color="error">
+                          {formatDate(item.auto_delete_at)}
+                        </Typography>
+                      ) : (
+                        <Typography variant="body2" color="textSecondary">-</Typography>
+                      )}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                        <Tooltip title="Voir les détails">
+                          <IconButton
+                            size="small"
+                            onClick={() => openDetailsDialog(item)}
+                            sx={{ color: theme.palette.info.main }}
+                          >
+                            <InfoIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Restaurer">
+                          <IconButton
+                            size="small"
+                            onClick={() => openRestoreDialog(item)}
+                            sx={{ color: theme.palette.success.main }}
+                          >
+                            <RestoreIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Supprimer définitivement">
+                          <IconButton
+                            size="small"
+                            onClick={() => openDeleteDialog(item)}
+                            sx={{ color: theme.palette.error.main }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
 
-      <ScrollView style={styles.itemsList}>
-        {items.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Trash2 size={48} color="#ccc" />
-            <Text style={styles.emptyText}>La corbeille est vide</Text>
-          </View>
-        ) : (
-          items.map(item => (
-            <TouchableOpacity
-              key={item.id}
-              style={styles.itemCard}
-              onPress={() => {
-                setDetailsItem(item);
-                setShowDetailsModal(true);
-              }}
-            >
-              <View style={styles.itemHeader}>
-                <Text style={styles.itemIcon}>{getItemTypeIcon(item.item_type)}</Text>
-                <View style={styles.itemInfo}>
-                  <Text style={styles.itemName}>{item.original_name}</Text>
-                  <Text style={styles.itemRef}>{item.original_reference}</Text>
-                </View>
-                <Text style={styles.itemType}>{getItemTypeLabel(item.item_type)}</Text>
-              </View>
-              
-              <View style={styles.itemDetails}>
-                <Text style={styles.itemDetail}>
-                  🗑️ Supprimé par {item.deleted_by_name || 'Inconnu'} le {formatDate(item.deleted_at)}
-                </Text>
-                {item.deletion_reason && (
-                  <Text style={styles.itemReason}>📝 {item.deletion_reason}</Text>
-                )}
-                {item.auto_delete_at && (
-                  <Text style={styles.itemAutoDelete}>
-                    ⏰ Suppression auto: {formatDate(item.auto_delete_at)}
-                  </Text>
-                )}
-              </View>
-              
-              <View style={styles.itemActions}>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.restoreButton]}
-                  onPress={() => {
-                    setSelectedItem(item);
-                    setShowRestoreModal(true);
-                  }}
-                >
-                  <RotateCcw size={16} color="#fff" />
-                  <Text style={styles.actionButtonText}>Restaurer</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.deleteButton]}
-                  onPress={() => handlePermanentDelete(item)}
-                >
-                  <Trash2 size={16} color="#fff" />
-                  <Text style={styles.actionButtonText}>Supprimer</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          ))
-        )}
-      </ScrollView>
+          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+            <Pagination
+              count={Math.ceil(total / limit)}
+              page={page}
+              onChange={handlePageChange}
+              color="primary"
+              size="large"
+            />
+          </Box>
+        </>
+      )}
 
-      {/* Modal de restauration */}
-      <Modal
-        visible={showRestoreModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowRestoreModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <AlertTriangle size={40} color="#FF9800" />
-            <Text style={styles.modalTitle}>Restaurer l'élément</Text>
-            <Text style={styles.modalMessage}>
-              Voulez-vous restaurer "{selectedItem?.original_name}" ?
-              Il sera remis dans sa catégorie d'origine.
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelModalButton]}
-                onPress={() => setShowRestoreModal(false)}
-              >
-                <Text style={styles.cancelModalButtonText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmModalButton]}
-                onPress={handleRestore}
-              >
-                <Text style={styles.confirmModalButtonText}>Restaurer</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Restore Dialog */}
+      <Dialog open={restoreDialogOpen} onClose={() => setRestoreDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <WarningIcon sx={{ color: '#FF9800' }} />
+          Restaurer l'élément
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Voulez-vous restaurer <strong>{selectedItem?.original_name}</strong> ?
+            Il sera remis dans sa catégorie d'origine.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRestoreDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleRestore} variant="contained" color="success">
+            Restaurer
+          </Button>
+        </DialogActions>
+      </Dialog>
 
-      {/* Modal des détails */}
-      <Modal
-        visible={showDetailsModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowDetailsModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, styles.detailsModal]}>
-            <View style={styles.detailsHeader}>
-              <Text style={styles.detailsTitle}>
-                {getItemTypeIcon(detailsItem?.item_type || '')} Détails
-              </Text>
-              <TouchableOpacity onPress={() => setShowDetailsModal(false)}>
-                <X size={24} color="#666" />
-              </TouchableOpacity>
-            </View>
-            
-            {detailsItem && (
-              <ScrollView style={styles.detailsContent}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Nom:</Text>
-                  <Text style={styles.detailValue}>{detailsItem.original_name}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Référence:</Text>
-                  <Text style={styles.detailValue}>{detailsItem.original_reference || 'N/A'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Type:</Text>
-                  <Text style={styles.detailValue}>{getItemTypeLabel(detailsItem.item_type)}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Supprimé par:</Text>
-                  <Text style={styles.detailValue}>{detailsItem.deleted_by_name} ({detailsItem.deleted_by_email})</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Date suppression:</Text>
-                  <Text style={styles.detailValue}>{formatDate(detailsItem.deleted_at)}</Text>
-                </View>
-                {detailsItem.deletion_reason && (
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Raison:</Text>
-                    <Text style={styles.detailValue}>{detailsItem.deletion_reason}</Text>
-                  </View>
-                )}
-                {detailsItem.auto_delete_at && (
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Suppression auto:</Text>
-                    <Text style={styles.detailValue}>{formatDate(detailsItem.auto_delete_at)}</Text>
-                  </View>
-                )}
-                
-                {detailsItem.data && (
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Données:</Text>
-                    <Text style={[styles.detailValue, styles.jsonData]}>
+      {/* Permanent Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <WarningIcon sx={{ color: '#F44336' }} />
+          Suppression définitive
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Êtes-vous sûr de vouloir supprimer définitivement <strong>{selectedItem?.original_name}</strong> ?
+          </Typography>
+          <Alert severity="error" sx={{ mt: 2 }}>
+            Cette action est irréversible !
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handlePermanentDelete} variant="contained" color="error">
+            Supprimer définitivement
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Cleanup Dialog */}
+      <Dialog open={cleanupDialogOpen} onClose={() => setCleanupDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CleanIcon sx={{ color: '#FF9800' }} />
+          Nettoyage automatique
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            Cette action supprimera définitivement tous les éléments expirés de la corbeille.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCleanupDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleCleanupExpired} variant="contained" color="warning">
+            Nettoyer
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Details Dialog */}
+      <Dialog open={detailsDialogOpen} onClose={() => setDetailsDialogOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {detailsItem && getItemTypeIcon(detailsItem.item_type)}
+              Détails de l'élément
+            </Typography>
+            <IconButton onClick={() => setDetailsDialogOpen(false)}>
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {detailsItem && (
+            <Stack spacing={2}>
+              <Box>
+                <Typography variant="subtitle2" color="textSecondary">Nom</Typography>
+                <Typography variant="body1">{detailsItem.original_name}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="textSecondary">Référence</Typography>
+                <Typography variant="body1">{detailsItem.original_reference || 'N/A'}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="textSecondary">Type</Typography>
+                <Chip 
+                  icon={getItemTypeIcon(detailsItem.item_type)}
+                  label={getItemTypeLabel(detailsItem.item_type)} 
+                  size="small"
+                />
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="textSecondary">Supprimé par</Typography>
+                <Typography variant="body1">
+                  {detailsItem.deleted_by_name} ({detailsItem.deleted_by_email})
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="textSecondary">Date de suppression</Typography>
+                <Typography variant="body1">{formatDate(detailsItem.deleted_at)}</Typography>
+              </Box>
+              {detailsItem.deletion_reason && (
+                <Box>
+                  <Typography variant="subtitle2" color="textSecondary">Raison</Typography>
+                  <Typography variant="body1">{detailsItem.deletion_reason}</Typography>
+                </Box>
+              )}
+              {detailsItem.auto_delete_at && (
+                <Box>
+                  <Typography variant="subtitle2" color="textSecondary">Suppression automatique</Typography>
+                  <Typography variant="body1" color="error">{formatDate(detailsItem.auto_delete_at)}</Typography>
+                </Box>
+              )}
+              {detailsItem.data && (
+                <Box>
+                  <Typography variant="subtitle2" color="textSecondary">Données</Typography>
+                  <Paper sx={{ p: 2, bgcolor: '#f5f5f5', overflow: 'auto', maxHeight: 300 }}>
+                    <pre style={{ margin: 0, fontSize: 11, fontFamily: 'monospace' }}>
                       {JSON.stringify(detailsItem.data, null, 2)}
-                    </Text>
-                  </View>
-                )}
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
-    </View>
+                    </pre>
+                  </Paper>
+                </Box>
+              )}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDetailsDialogOpen(false)}>Fermer</Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 10,
-    color: '#666',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    paddingTop: 50,
-    backgroundColor: '#2196F3',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  cleanupButton: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  cleanupButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  statsBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  statsText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  statsTypes: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statsType: {
-    fontSize: 11,
-    color: '#888',
-  },
-  toolbar: {
-    flexDirection: 'row',
-    padding: 12,
-    backgroundColor: '#fff',
-    gap: 8,
-  },
-  searchContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 40,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 14,
-  },
-  filterButton: {
-    width: 40,
-    height: 40,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  itemsList: {
-    flex: 1,
-    padding: 12,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyText: {
-    marginTop: 12,
-    color: '#999',
-  },
-  itemCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  itemHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  itemIcon: {
-    fontSize: 24,
-    marginRight: 12,
-  },
-  itemInfo: {
-    flex: 1,
-  },
-  itemName: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  itemRef: {
-    fontSize: 12,
-    color: '#999',
-  },
-  itemType: {
-    fontSize: 11,
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    color: '#666',
-  },
-  itemDetails: {
-    marginBottom: 12,
-  },
-  itemDetail: {
-    fontSize: 11,
-    color: '#888',
-    marginBottom: 4,
-  },
-  itemReason: {
-    fontSize: 11,
-    color: '#FF9800',
-    fontStyle: 'italic',
-    marginBottom: 4,
-  },
-  itemAutoDelete: {
-    fontSize: 10,
-    color: '#F44336',
-  },
-  itemActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 6,
-  },
-  restoreButton: {
-    backgroundColor: '#4CAF50',
-  },
-  deleteButton: {
-    backgroundColor: '#F44336',
-  },
-  actionButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 20,
-    width: '85%',
-    alignItems: 'center',
-  },
-  detailsModal: {
-    width: '90%',
-    maxHeight: '80%',
-    alignItems: 'stretch',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginTop: 12,
-    marginBottom: 8,
-  },
-  modalMessage: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    width: '100%',
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelModalButton: {
-    backgroundColor: '#f5f5f5',
-  },
-  confirmModalButton: {
-    backgroundColor: '#4CAF50',
-  },
-  cancelModalButtonText: {
-    color: '#666',
-  },
-  confirmModalButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  detailsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  detailsTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  detailsContent: {
-    maxHeight: 500,
-  },
-  detailRow: {
-    marginBottom: 12,
-  },
-  detailLabel: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 4,
-  },
-  detailValue: {
-    fontSize: 14,
-    color: '#333',
-  },
-  jsonData: {
-    fontSize: 10,
-    fontFamily: 'monospace',
-    backgroundColor: '#f5f5f5',
-    padding: 8,
-    borderRadius: 8,
-  },
-});

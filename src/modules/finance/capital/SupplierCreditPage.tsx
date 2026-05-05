@@ -79,7 +79,6 @@ import { formatCurrency, formatDate, formatDateTime } from '@/utils/formatters';
 // TYPES COMPLETS BASÉS SUR LES SCHÉMAS BACKEND
 // ==============================================
 
-// Types pour les fournisseurs (de cost.py)
 interface Supplier {
   id: string;
   tenant_id: string;
@@ -111,7 +110,6 @@ interface Supplier {
   updated_at?: string;
 }
 
-// Types pour la configuration de crédit fournisseur
 interface SupplierCreditConfig {
   id: string;
   supplier_id: string;
@@ -128,7 +126,6 @@ interface SupplierCreditConfig {
   created_by?: string;
 }
 
-// Types pour les achats à crédit
 interface PurchaseCredit {
   id: string;
   purchase_id?: string;
@@ -153,7 +150,6 @@ interface PurchaseCredit {
   paid_amount?: number;
 }
 
-// Types pour la balance fournisseur
 interface SupplierBalance {
   supplier_id: string;
   supplier_name: string;
@@ -170,7 +166,6 @@ interface SupplierBalance {
   config?: SupplierCreditConfig;
 }
 
-// Types pour le capital ajusté
 interface AdjustedCapital {
   id?: string;
   tenant_id?: string;
@@ -183,7 +178,6 @@ interface AdjustedCapital {
   formula?: string;
 }
 
-// Types pour le bénéfice réel
 interface RealProfitResponse {
   start_date: string;
   end_date: string;
@@ -194,7 +188,6 @@ interface RealProfitResponse {
   closing_debt?: number;
 }
 
-// Types pour les transactions de crédit
 interface SupplierCreditTransaction {
   id: string;
   debtor_id?: string;
@@ -212,7 +205,6 @@ interface SupplierCreditTransaction {
   created_by?: string;
 }
 
-// Types pour le tableau de bord
 interface DashboardStats {
   summary: {
     total_supplier_debt: number;
@@ -234,7 +226,6 @@ interface DashboardStats {
   top_debt_suppliers?: Array<{ supplier_name: string; current_debt: number }>;
 }
 
-// Types pour les coûts (de cost.py)
 interface Cost {
   id: string;
   reference: string;
@@ -270,7 +261,6 @@ interface Cost {
   approval_date?: string;
 }
 
-// Types pour les budgets
 interface Budget {
   id: string;
   name: string;
@@ -293,7 +283,6 @@ interface Budget {
   created_at: string;
 }
 
-// Types pour les requêtes
 interface ManualRepaymentRequest {
   supplier_id: string;
   amount: number;
@@ -335,17 +324,16 @@ interface SupplierCreditConfigCreate {
   repayment_percentage_of_sale?: number;
 }
 
-/// Composant Avatar manquant
-const Avatar = styled(Box)(() => ({
-  display: 'flex',
-  alignItems: 'center', 
-  justifyContent: 'center',
-  borderRadius: '50%',
-})) as React.ComponentType<{ sx?: any; children?: React.ReactNode }>;
-
 // ==============================================
 // STYLES PERSONNALISÉS
 // ==============================================
+
+const Avatar = styled(Box)(() => ({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: '50%',
+}));
 
 const SearchInput = styled('div')(({ theme }) => ({
   position: 'relative',
@@ -392,7 +380,7 @@ const StyledInputBase = styled(InputBase)(({ theme }) => ({
 
 const SupplierCreditPage: React.FC = () => {
   const { enqueueSnackbar } = useSnackbar();
-  
+
   // États principaux
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(0);
@@ -404,22 +392,22 @@ const SupplierCreditPage: React.FC = () => {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [configs, setConfigs] = useState<SupplierCreditConfig[]>([]);
   const [transactions, setTransactions] = useState<SupplierCreditTransaction[]>([]);
-  
+
   // États pour la pagination
   const [supplierPage, setSupplierPage] = useState(0);
   const [supplierRowsPerPage, setSupplierRowsPerPage] = useState(10);
-  
+
   // États pour les filtres
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
-  
+
   // États pour les dialogues
   const [repaymentDialogOpen, setRepaymentDialogOpen] = useState(false);
   const [repaymentAmount, setRepaymentAmount] = useState('');
   const [repaymentReference, setRepaymentReference] = useState('');
   const [repaymentNotes, setRepaymentNotes] = useState('');
-  
+
   const [supplierDialogOpen, setSupplierDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [supplierForm, setSupplierForm] = useState<SupplierCreateRequest>({
@@ -445,7 +433,7 @@ const SupplierCreditPage: React.FC = () => {
     contact_person: '',
     notes: '',
   });
-  
+
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<SupplierCreditConfig | null>(null);
   const [selectedSupplierForConfig, setSelectedSupplierForConfig] = useState<string>('');
@@ -457,21 +445,21 @@ const SupplierCreditPage: React.FC = () => {
     payment_frequency: 'monthly',
     repayment_percentage_of_sale: '0',
   });
-  
+
   const [profitPeriod, setProfitPeriod] = useState<{ start: Date | null; end: Date | null }>({
     start: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
     end: new Date(),
   });
   const [realProfit, setRealProfit] = useState<RealProfitResponse | null>(null);
-  
+
   const [viewTransactionDialogOpen, setViewTransactionDialogOpen] = useState(false);
-  
+
   const [loadingBalance, setLoadingBalance] = useState(false);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
-  
+
   const [supplierDetailDialogOpen, setSupplierDetailDialogOpen] = useState(false);
   const [selectedSupplierDetail, setSelectedSupplierDetail] = useState<Supplier | null>(null);
-  
+
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<() => void>(() => {});
   const [confirmTitle, setConfirmTitle] = useState('');
@@ -481,7 +469,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS DE CHARGEMENT DES DONNÉES
   // ==============================================
 
-  // Charger le tableau de bord
   const loadDashboard = useCallback(async () => {
     try {
       const dashboardRes = await api.get('/supplier-credit/dashboard');
@@ -492,7 +479,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, [enqueueSnackbar]);
 
-  // Charger tous les fournisseurs avec leurs balances
   const loadAllSuppliersBalances = useCallback(async () => {
     setLoadingBalance(true);
     try {
@@ -506,7 +492,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, [enqueueSnackbar]);
 
-  // Charger la liste des fournisseurs (depuis cost.py)
   const loadSuppliers = useCallback(async () => {
     try {
       const response = await api.get('/costs/suppliers', {
@@ -519,10 +504,8 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, [enqueueSnackbar]);
 
-  // Charger les configurations de crédit
   const loadConfigs = useCallback(async () => {
     try {
-      // Récupérer les configurations pour chaque fournisseur
       const configPromises = suppliersList.map(supplier =>
         api.get(`/supplier-credit/config/${supplier.id}`).catch(() => ({ data: null }))
       );
@@ -536,13 +519,12 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, [suppliersList]);
 
-  // Charger les coûts
   const loadCosts = useCallback(async () => {
     try {
       const params: any = { limit: 100 };
       if (filterCategory !== 'all') params.category = filterCategory;
       if (filterStatus !== 'all') params.status = filterStatus;
-      
+
       const response = await api.get('/costs/', { params });
       setCosts(response.data);
     } catch (error) {
@@ -550,7 +532,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, [filterCategory, filterStatus]);
 
-  // Charger les budgets
   const loadBudgets = useCallback(async () => {
     try {
       const response = await api.get('/costs/budgets', {
@@ -562,7 +543,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, []);
 
-  // Charger les transactions pour un fournisseur
   const loadSupplierTransactions = useCallback(async (supplierId: string) => {
     setLoadingTransactions(true);
     try {
@@ -577,7 +557,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   }, []);
 
-  // Charger tous les fournisseurs pour le dialogue de configuration
   const loadAllData = useCallback(async () => {
     setLoading(true);
     await Promise.all([
@@ -619,7 +598,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS FOURNISSEURS
   // ==============================================
 
-  // Créer un fournisseur
   const handleCreateSupplier = async () => {
     if (!supplierForm.name.trim()) {
       enqueueSnackbar('Le nom du fournisseur est requis', { variant: 'warning' });
@@ -628,11 +606,9 @@ const SupplierCreditPage: React.FC = () => {
 
     try {
       if (editingSupplier) {
-        // Mise à jour
         await api.put(`/costs/suppliers/${editingSupplier.id}`, supplierForm);
         enqueueSnackbar('Fournisseur mis à jour avec succès', { variant: 'success' });
       } else {
-        // Création
         await api.post('/costs/suppliers', supplierForm);
         enqueueSnackbar('Fournisseur créé avec succès', { variant: 'success' });
       }
@@ -646,7 +622,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Modifier un fournisseur
   const handleEditSupplier = (supplier: Supplier) => {
     setEditingSupplier(supplier);
     setSupplierForm({
@@ -675,7 +650,6 @@ const SupplierCreditPage: React.FC = () => {
     setSupplierDialogOpen(true);
   };
 
-  // Voir les détails d'un fournisseur
   const handleViewSupplierDetail = async (supplier: Supplier) => {
     try {
       const response = await api.get(`/costs/suppliers/${supplier.id}`);
@@ -687,7 +661,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Réinitialiser le formulaire fournisseur
   const resetSupplierForm = () => {
     setEditingSupplier(null);
     setSupplierForm({
@@ -719,7 +692,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS CONFIGURATION CRÉDIT
   // ==============================================
 
-  // Créer une configuration
   const handleCreateConfig = async () => {
     if (!selectedSupplierForConfig) {
       enqueueSnackbar('Veuillez sélectionner un fournisseur', { variant: 'warning' });
@@ -756,7 +728,7 @@ const SupplierCreditPage: React.FC = () => {
         await api.post('/supplier-credit/config', configData);
         enqueueSnackbar('Configuration créée avec succès', { variant: 'success' });
       }
-      
+
       setConfigDialogOpen(false);
       resetConfigForm();
       await loadConfigs();
@@ -767,7 +739,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Modifier une configuration
   const handleEditConfig = (config: SupplierCreditConfig) => {
     setEditingConfig(config);
     setSelectedSupplierForConfig(config.supplier_id);
@@ -782,7 +753,6 @@ const SupplierCreditPage: React.FC = () => {
     setConfigDialogOpen(true);
   };
 
-  // Supprimer une configuration
   const handleDeleteConfig = async (config: SupplierCreditConfig) => {
     setConfirmTitle('Supprimer la configuration');
     setConfirmMessage(`Êtes-vous sûr de vouloir supprimer la configuration de crédit pour ${config.supplier_name} ?`);
@@ -801,7 +771,6 @@ const SupplierCreditPage: React.FC = () => {
     setConfirmDialogOpen(true);
   };
 
-  // Réinitialiser le formulaire de configuration
   const resetConfigForm = () => {
     setEditingConfig(null);
     setSelectedSupplierForConfig('');
@@ -819,7 +788,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS REMBOURSEMENT ET CRÉDIT
   // ==============================================
 
-  // Remboursement manuel
   const handleManualRepayment = async () => {
     if (!selectedSupplier) return;
     const amount = parseFloat(repaymentAmount);
@@ -840,7 +808,7 @@ const SupplierCreditPage: React.FC = () => {
         payment_reference: repaymentReference || `REP_${Date.now()}`,
         notes: repaymentNotes,
       };
-      
+
       await api.post('/supplier-credit/manual-repayment', request);
 
       enqueueSnackbar(`Remboursement de ${formatCurrency(amount)} enregistré`, { variant: 'success' });
@@ -848,10 +816,10 @@ const SupplierCreditPage: React.FC = () => {
       setRepaymentAmount('');
       setRepaymentReference('');
       setRepaymentNotes('');
-      
+
       await loadAllSuppliersBalances();
       await loadDashboard();
-      
+
       const updatedSupplier = suppliersBalances.find(s => s.supplier_id === selectedSupplier.supplier_id);
       if (updatedSupplier) {
         setSelectedSupplier(updatedSupplier);
@@ -862,10 +830,9 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Achat à crédit (transformer un achat)
   const handleCreatePurchaseCredit = async (purchaseId: string, configId?: string) => {
     try {
-      const url = configId 
+      const url = configId
         ? `/supplier-credit/purchase-credit/${purchaseId}?config_id=${configId}`
         : `/supplier-credit/purchase-credit/${purchaseId}`;
       await api.post(url);
@@ -882,7 +849,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS BÉNÉFICE RÉEL
   // ==============================================
 
-  // Calculer le bénéfice réel
   const handleCalculateRealProfit = async () => {
     if (!profitPeriod.start || !profitPeriod.end) {
       enqueueSnackbar('Veuillez sélectionner une période', { variant: 'warning' });
@@ -906,7 +872,6 @@ const SupplierCreditPage: React.FC = () => {
   // FONCTIONS UTILITAIRES
   // ==============================================
 
-  // Obtenir la couleur du statut
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active':
@@ -924,7 +889,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Obtenir le label du statut
   const getStatusLabel = (status: string) => {
     switch (status) {
       case 'active':
@@ -942,7 +906,6 @@ const SupplierCreditPage: React.FC = () => {
     }
   };
 
-  // Sélectionner un fournisseur
   const handleSelectSupplier = async (supplier: SupplierBalance) => {
     setLoadingBalance(true);
     setSelectedSupplier(supplier);
@@ -950,12 +913,10 @@ const SupplierCreditPage: React.FC = () => {
     setLoadingBalance(false);
   };
 
-  // Voir les transactions
   const handleViewTransactions = () => {
     setViewTransactionDialogOpen(true);
   };
 
-  // Recharger toutes les données
   const handleRefresh = async () => {
     setLoading(true);
     await Promise.all([
@@ -970,17 +931,14 @@ const SupplierCreditPage: React.FC = () => {
     enqueueSnackbar('Données actualisées', { variant: 'success' });
   };
 
-  // Filtrer les fournisseurs
   const filteredSuppliers = suppliersBalances.filter(supplier =>
     supplier.supplier_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Filtrer les configurations
   const filteredConfigs = configs.filter(config =>
     config.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Pagination
   const paginatedSuppliers = filteredSuppliers.slice(
     supplierPage * supplierRowsPerPage,
     supplierPage * supplierRowsPerPage + supplierRowsPerPage
@@ -1035,9 +993,9 @@ const SupplierCreditPage: React.FC = () => {
         </Box>
 
         {/* Onglets */}
-        <Tabs 
-          value={activeTab} 
-          onChange={(_, v) => setActiveTab(v)} 
+        <Tabs
+          value={activeTab}
+          onChange={(_event: React.SyntheticEvent, v: number) => setActiveTab(v)}
           sx={{ mb: 3, borderBottom: 1, borderColor: 'divider' }}
           variant="scrollable"
           scrollButtons="auto"
@@ -1302,7 +1260,6 @@ const SupplierCreditPage: React.FC = () => {
         {activeTab === 1 && (
           <Fade in>
             <Grid container spacing={3}>
-              {/* Liste des fournisseurs */}
               <Grid size={{ xs: 12, md: 4 }}>
                 <Card>
                   <CardContent>
@@ -1316,7 +1273,6 @@ const SupplierCreditPage: React.FC = () => {
                       </Button>
                     </Box>
                     
-                    {/* Barre de recherche */}
                     <SearchInput sx={{ mb: 2 }}>
                       <SearchIconWrapper>
                         <SearchIcon />
@@ -1393,15 +1349,14 @@ const SupplierCreditPage: React.FC = () => {
                           </Box>
                         ))}
                         
-                        {/* Pagination */}
                         <TablePagination
                           component="div"
                           count={filteredSuppliers.length}
                           page={supplierPage}
-                          onPageChange={(_, newPage) => setSupplierPage(newPage)}
+                          onPageChange={(_event: React.MouseEvent<HTMLButtonElement> | null, newPage: number) => setSupplierPage(newPage)}
                           rowsPerPage={supplierRowsPerPage}
-                          onRowsPerPageChange={(e) => {
-                            setSupplierRowsPerPage(parseInt(e.target.value, 10));
+                          onRowsPerPageChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+                            setSupplierRowsPerPage(parseInt(event.target.value, 10));
                             setSupplierPage(0);
                           }}
                           labelRowsPerPage="Lignes par page"
@@ -1413,7 +1368,6 @@ const SupplierCreditPage: React.FC = () => {
                 </Card>
               </Grid>
 
-              {/* Détails du fournisseur sélectionné */}
               <Grid size={{ xs: 12, md: 8 }}>
                 {selectedSupplier ? (
                   <Card>
@@ -1454,7 +1408,6 @@ const SupplierCreditPage: React.FC = () => {
                         </Box>
                       </Box>
 
-                      {/* Cartes de résumé */}
                       <Grid container spacing={2} sx={{ mb: 3 }}>
                         <Grid size={{ xs: 4 }}>
                           <Paper variant="outlined" sx={{ p: 2, textAlign: 'center' }}>
@@ -1488,7 +1441,6 @@ const SupplierCreditPage: React.FC = () => {
                         </Grid>
                       </Grid>
 
-                      {/* Configuration du crédit */}
                       {selectedSupplier.config && (
                         <Alert severity="info" sx={{ mb: 3 }}>
                           <Typography variant="subtitle2">Configuration de crédit</Typography>
@@ -1500,7 +1452,6 @@ const SupplierCreditPage: React.FC = () => {
                         </Alert>
                       )}
 
-                      {/* Historique des crédits */}
                       <Typography variant="subtitle2" gutterBottom>
                         Historique des crédits
                       </Typography>
@@ -1595,7 +1546,6 @@ const SupplierCreditPage: React.FC = () => {
                   </Button>
                 </Box>
 
-                {/* Barre de recherche */}
                 <SearchInput sx={{ mb: 2, width: '100%', maxWidth: 300 }}>
                   <SearchIconWrapper>
                     <SearchIcon />
@@ -1678,7 +1628,6 @@ const SupplierCreditPage: React.FC = () => {
                   </Table>
                 </TableContainer>
 
-                {/* Fournisseurs sans configuration */}
                 <Box sx={{ mt: 3 }}>
                   <Typography variant="subtitle2" gutterBottom>
                     Fournisseurs sans configuration
@@ -1746,7 +1695,7 @@ const SupplierCreditPage: React.FC = () => {
                       <DatePicker
                         label="Date début"
                         value={profitPeriod.start}
-                        onChange={(date) => setProfitPeriod({ ...profitPeriod, start: date })}
+                        onChange={(date: Date | null) => setProfitPeriod({ ...profitPeriod, start: date })}
                         sx={{ width: '100%' }}
                       />
                     </Grid>
@@ -1754,7 +1703,7 @@ const SupplierCreditPage: React.FC = () => {
                       <DatePicker
                         label="Date fin"
                         value={profitPeriod.end}
-                        onChange={(date) => setProfitPeriod({ ...profitPeriod, end: date })}
+                        onChange={(date: Date | null) => setProfitPeriod({ ...profitPeriod, end: date })}
                         sx={{ width: '100%' }}
                       />
                     </Grid>
@@ -1860,7 +1809,7 @@ const SupplierCreditPage: React.FC = () => {
                       <InputLabel>Catégorie</InputLabel>
                       <Select
                         value={filterCategory}
-                        onChange={(e) => setFilterCategory(e.target.value)}
+                        onChange={(e: SelectChangeEvent) => setFilterCategory(e.target.value)}
                         label="Catégorie"
                       >
                         <MenuItem value="all">Toutes</MenuItem>
@@ -1877,7 +1826,7 @@ const SupplierCreditPage: React.FC = () => {
                       <InputLabel>Statut</InputLabel>
                       <Select
                         value={filterStatus}
-                        onChange={(e) => setFilterStatus(e.target.value)}
+                        onChange={(e: SelectChangeEvent) => setFilterStatus(e.target.value)}
                         label="Statut"
                       >
                         <MenuItem value="all">Tous</MenuItem>
@@ -2061,8 +2010,10 @@ const SupplierCreditPage: React.FC = () => {
         )}
 
         {/* ============================================== */}
-        {/* DIALOGUE: AJOUT/MODIFICATION FOURNISSEUR */}
+        {/* DIALOGUES */}
         {/* ============================================== */}
+        
+        {/* Dialogue Ajout/Modification fournisseur */}
         <Dialog open={supplierDialogOpen} onClose={() => setSupplierDialogOpen(false)} maxWidth="md" fullWidth>
           <DialogTitle>
             {editingSupplier ? 'Modifier le fournisseur' : 'Nouveau fournisseur'}
@@ -2074,7 +2025,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Nom *"
                   value={supplierForm.name}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, name: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, name: e.target.value })}
                   margin="normal"
                   required
                 />
@@ -2084,7 +2035,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Nom de l'entreprise"
                   value={supplierForm.company_name}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, company_name: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, company_name: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2093,7 +2044,7 @@ const SupplierCreditPage: React.FC = () => {
                   <InputLabel>Type de fournisseur</InputLabel>
                   <Select
                     value={supplierForm.type_supplier}
-                    onChange={(e) => setSupplierForm({ ...supplierForm, type_supplier: e.target.value })}
+                    onChange={(e: SelectChangeEvent) => setSupplierForm({ ...supplierForm, type_supplier: e.target.value })}
                     label="Type de fournisseur"
                   >
                     <MenuItem value="regular">Régulier</MenuItem>
@@ -2108,7 +2059,7 @@ const SupplierCreditPage: React.FC = () => {
                   label="Email"
                   type="email"
                   value={supplierForm.email}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, email: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, email: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2117,7 +2068,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Téléphone"
                   value={supplierForm.phone}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, phone: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, phone: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2126,7 +2077,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Téléphone secondaire"
                   value={supplierForm.phone_secondary}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, phone_secondary: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, phone_secondary: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2135,7 +2086,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Adresse"
                   value={supplierForm.address}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, address: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, address: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2144,7 +2095,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Ville"
                   value={supplierForm.city}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, city: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, city: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2153,7 +2104,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Province"
                   value={supplierForm.province}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, province: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, province: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2162,7 +2113,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Pays"
                   value={supplierForm.country}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, country: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, country: e.target.value })}
                   margin="normal"
                 />
               </Grid>
@@ -2171,7 +2122,7 @@ const SupplierCreditPage: React.FC = () => {
                   fullWidth
                   label="Notes"
                   value={supplierForm.notes}
-                  onChange={(e) => setSupplierForm({ ...supplierForm, notes: e.target.value })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSupplierForm({ ...supplierForm, notes: e.target.value })}
                   margin="normal"
                   multiline
                   rows={2}
@@ -2187,9 +2138,7 @@ const SupplierCreditPage: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* ============================================== */}
-        {/* DIALOGUE: REMBOURSEMENT */}
-        {/* ============================================== */}
+        {/* Dialogue Remboursement */}
         <Dialog open={repaymentDialogOpen} onClose={() => setRepaymentDialogOpen(false)} maxWidth="sm" fullWidth>
           <DialogTitle>
             Remboursement fournisseur
@@ -2205,7 +2154,7 @@ const SupplierCreditPage: React.FC = () => {
               label="Montant à rembourser"
               type="number"
               value={repaymentAmount}
-              onChange={(e) => setRepaymentAmount(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRepaymentAmount(e.target.value)}
               margin="normal"
               slotProps={{
                 input: {
@@ -2217,7 +2166,7 @@ const SupplierCreditPage: React.FC = () => {
               fullWidth
               label="Référence de paiement"
               value={repaymentReference}
-              onChange={(e) => setRepaymentReference(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRepaymentReference(e.target.value)}
               margin="normal"
               placeholder="Facture #, Réf bancaire..."
             />
@@ -2225,7 +2174,7 @@ const SupplierCreditPage: React.FC = () => {
               fullWidth
               label="Notes (optionnel)"
               value={repaymentNotes}
-              onChange={(e) => setRepaymentNotes(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setRepaymentNotes(e.target.value)}
               margin="normal"
               multiline
               rows={2}
@@ -2243,9 +2192,7 @@ const SupplierCreditPage: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* ============================================== */}
-        {/* DIALOGUE: CONFIGURATION CRÉDIT */}
-        {/* ============================================== */}
+        {/* Dialogue Configuration crédit */}
         <Dialog open={configDialogOpen} onClose={() => setConfigDialogOpen(false)} maxWidth="sm" fullWidth>
           <DialogTitle>
             {editingConfig ? 'Modifier la configuration' : 'Configuration crédit fournisseur'}
@@ -2271,7 +2218,7 @@ const SupplierCreditPage: React.FC = () => {
               label="Limite de crédit"
               type="number"
               value={configForm.credit_limit}
-              onChange={(e) => setConfigForm({ ...configForm, credit_limit: e.target.value })}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfigForm({ ...configForm, credit_limit: e.target.value })}
               margin="normal"
               slotProps={{
                 input: {
@@ -2301,7 +2248,7 @@ const SupplierCreditPage: React.FC = () => {
               label="Taux d'intérêt (%)"
               type="number"
               value={configForm.interest_rate}
-              onChange={(e) => setConfigForm({ ...configForm, interest_rate: e.target.value })}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfigForm({ ...configForm, interest_rate: e.target.value })}
               margin="normal"
               slotProps={{
                 input: {
@@ -2331,7 +2278,7 @@ const SupplierCreditPage: React.FC = () => {
               label="Pourcentage de remboursement sur vente (%)"
               type="number"
               value={configForm.repayment_percentage_of_sale}
-              onChange={(e) => setConfigForm({ ...configForm, repayment_percentage_of_sale: e.target.value })}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfigForm({ ...configForm, repayment_percentage_of_sale: e.target.value })}
               margin="normal"
               helperText="Pourcentage de chaque vente utilisé pour rembourser la dette"
               slotProps={{
@@ -2345,7 +2292,7 @@ const SupplierCreditPage: React.FC = () => {
               control={
                 <Switch
                   checked={configForm.auto_approve}
-                  onChange={(e) => setConfigForm({ ...configForm, auto_approve: e.target.checked })}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfigForm({ ...configForm, auto_approve: e.target.checked })}
                 />
               }
               label="Auto-approbation des achats à crédit"
@@ -2360,9 +2307,7 @@ const SupplierCreditPage: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* ============================================== */}
-        {/* DIALOGUE: TRANSACTIONS */}
-        {/* ============================================== */}
+        {/* Dialogue Transactions */}
         <Dialog open={viewTransactionDialogOpen} onClose={() => setViewTransactionDialogOpen(false)} maxWidth="md" fullWidth>
           <DialogTitle>
             Transactions
@@ -2428,9 +2373,7 @@ const SupplierCreditPage: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* ============================================== */}
-        {/* DIALOGUE: DÉTAILS FOURNISSEUR */}
-        {/* ============================================== */}
+        {/* Dialogue Détails fournisseur */}
         <Dialog open={supplierDetailDialogOpen} onClose={() => setSupplierDetailDialogOpen(false)} maxWidth="md" fullWidth>
           <DialogTitle>
             Détails du fournisseur
@@ -2521,9 +2464,7 @@ const SupplierCreditPage: React.FC = () => {
           </DialogActions>
         </Dialog>
 
-        {/* ============================================== */}
-        {/* DIALOGUE: CONFIRMATION */}
-        {/* ============================================== */}
+        {/* Dialogue Confirmation */}
         <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
           <DialogTitle>{confirmTitle}</DialogTitle>
           <DialogContent>
