@@ -12,13 +12,23 @@ import {
   ChevronRight,
   Loader2,
   Calendar,
-  Filter,
-  X,
 } from 'lucide-react';
-import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/hooks/useToast';
 import api from '@/api/client';
-import type { SaleResponse, SaleItemResponse } from '@/services/saleService';
+import type { SaleResponse } from '@/services/saleService';
+
+// Extension du type SaleItemResponse pour inclure category_id
+interface ExtendedSaleItem {
+  id?: string;
+  sale_id: string;
+  product_id: string;
+  product_name: string;
+  product_code?: string;
+  quantity: number;
+  unit_price: number;
+  total?: number;
+  category_id?: string; // Ajout de la propriété category_id
+}
 
 interface CategoryStat {
   categoryId: string;
@@ -38,11 +48,6 @@ interface CategoryStat {
   }>;
 }
 
-interface DateRange {
-  startDate: string;
-  endDate: string;
-}
-
 const formatPrice = (price: number): string => {
   return price.toFixed(2) + ' FC';
 };
@@ -60,7 +65,6 @@ type PeriodType = 'today' | 'week' | 'month' | 'year' | 'custom';
 const MONTHS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 
 export default function CategoriesSoldPage() {
-  const { user, tenantId } = useAuthStore();
   const { toast } = useToast();
   
   const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([]);
@@ -159,80 +163,64 @@ export default function CategoriesSoldPage() {
     }
   };
 
-  // Associer les produits aux catégories
-  const productCategories = useMemo(() => {
-    const map = new Map<string, string>();
-    // Simuler l'association produit -> catégorie
-    // Dans une vraie implémentation, cela viendrait de l'API des produits
-    return map;
-  }, []);
-
   // Statistiques par catégorie
   const categoryStats = useMemo((): CategoryStat[] => {
     const categoryMap = new Map<string, CategoryStat>();
     let totalAmountAll = 0;
-    const productCategoryMap = new Map<string, string>();
-    
-    // Construire l'association produit-catégorie à partir des ventes si disponible
-    sales.forEach(sale => {
-      sale.items.forEach(item => {
-        if (item.category_id) {
-          productCategoryMap.set(item.product_id, item.category_id);
-        }
-      });
-    });
     
     // Agrégation par catégorie
     sales.forEach(sale => {
-      sale.items.forEach(item => {
-        let categoryId = item.category_id || 'uncategorized';
-        let categoryName = 'Non catégorisé';
-        
-        // Chercher le nom de la catégorie dans la liste
-        const foundCategory = categories.find(c => c.id === categoryId);
-        if (foundCategory) {
-          categoryName = foundCategory.name;
-        } else if (categoryId === 'uncategorized') {
-          categoryName = 'Non catégorisé';
-        }
-        
-        if (!categoryMap.has(categoryId)) {
-          categoryMap.set(categoryId, {
-            categoryId,
-            categoryName,
-            totalAmount: 0,
-            quantitySold: 0,
-            saleCount: 0,
-            percentage: 0,
-            productCount: 0,
-            products: new Map(),
-          });
-        }
-        
-        const stats = categoryMap.get(categoryId)!;
-        const itemTotal = item.total || (item.unit_price * item.quantity);
-        stats.totalAmount += itemTotal;
-        stats.quantitySold += item.quantity;
-        stats.saleCount++;
-        totalAmountAll += itemTotal;
-        
-        // Agrégation par produit dans la catégorie
-        const productKey = item.product_id;
-        if (!stats.products.has(productKey)) {
-          stats.products.set(productKey, {
-            productId: item.product_id,
-            productName: item.product_name,
-            productCode: item.product_code || '',
-            quantity: 0,
-            amount: 0,
-            percentage: 0,
-          });
-          stats.productCount++;
-        }
-        const productStat = stats.products.get(productKey)!;
-        productStat.quantity += item.quantity;
-        productStat.amount += itemTotal;
-      });
+      if (sale.items && Array.isArray(sale.items)) {
+        sale.items.forEach((item: ExtendedSaleItem) => {
+          let categoryId = item.category_id || 'uncategorized';
+          let categoryName = 'Non catégorisé';
+          
+          // Chercher le nom de la catégorie dans la liste
+          const foundCategory = categories.find(c => c.id === categoryId);
+          if (foundCategory) {
+            categoryName = foundCategory.name;
+          } else if (categoryId === 'uncategorized') {
+            categoryName = 'Non catégorisé';
+          }
+          
+          if (!categoryMap.has(categoryId)) {
+            categoryMap.set(categoryId, {
+              categoryId,
+              categoryName,
+              totalAmount: 0,
+              quantitySold: 0,
+              saleCount: 0,
+              percentage: 0,
+              productCount: 0,
+              products: new Map(),
+            });
+          }
+          
+          const stats = categoryMap.get(categoryId)!;
+          const itemTotal = item.total || (item.unit_price * item.quantity);
+          stats.totalAmount += itemTotal;
+          stats.quantitySold += item.quantity;
+          stats.saleCount++;
+          totalAmountAll += itemTotal;
+          
+          // Agrégation par produit dans la catégorie
+          const productKey = item.product_id;
+          if (!stats.products.has(productKey)) {
+            stats.products.set(productKey, {
+              productId: item.product_id,
+              productName: item.product_name,
+              productCode: item.product_code || '',
+              quantity: 0,
+              amount: 0,
+              percentage: 0,
+            });
+            stats.productCount++;
+          }
+          const productStat = stats.products.get(productKey)!;
+          productStat.quantity += item.quantity;
+          productStat.amount += itemTotal;
+        });
+      }
     });
     
     // Calculer les pourcentages
@@ -573,10 +561,10 @@ export default function CategoriesSoldPage() {
                           </td>
                           <td className="px-4 py-4 text-right text-slate-600">
                             {category.productCount}
-                          </td>
+                           </td>
                           <td className="px-4 py-4 text-right text-slate-600">
                             {category.saleCount}
-                          </td>
+                           </td>
                           <td className="px-4 py-4 text-center">
                             <button
                               onClick={() => setExpandedCategory(expandedCategory === category.categoryId ? null : category.categoryId)}
@@ -584,7 +572,7 @@ export default function CategoriesSoldPage() {
                             >
                               {expandedCategory === category.categoryId ? '▲ Réduire' : '▼ Détail'}
                             </button>
-                          </td>
+                           </td>
                         </tr>
                       ))}
                     </tbody>

@@ -10,10 +10,7 @@ import {
   CreditCard,
   Clock,
   Package,
-  TrendingUp,
-  Receipt,
-  Loader2,
-  Eye,
+  Loader2
 } from 'lucide-react';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/hooks/useToast';
@@ -100,15 +97,6 @@ const getStatusLabel = (status: string): string => {
   }
 };
 
-const getStatusColor = (status: string): string => {
-  switch (status) {
-    case 'completed': return 'bg-green-100 text-green-700';
-    case 'pending': return 'bg-yellow-100 text-yellow-700';
-    case 'cancelled': return 'bg-red-100 text-red-700';
-    default: return 'bg-slate-100 text-slate-700';
-  }
-};
-
 export default function SaleDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuthStore();
@@ -117,7 +105,7 @@ export default function SaleDetailPage() {
   const [sale, setSale] = useState<SaleDetailWithProfit | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [productsCost, setProductsCost] = useState<Map<string, number>>(new Map());
+  const [, setProductsCost] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     if (id) {
@@ -133,6 +121,11 @@ export default function SaleDetailPage() {
       // Récupérer la vente
       const response = await api.get(`/sales/${id}`);
       const saleData = response.data as SaleResponse;
+      
+      // Vérifier que saleData.items existe
+      if (!saleData.items || !Array.isArray(saleData.items)) {
+        throw new Error('Les détails des produits sont manquants');
+      }
       
       // Récupérer les prix d'achat des produits
       const productIds = saleData.items.map(item => item.product_id).filter(Boolean);
@@ -201,6 +194,8 @@ export default function SaleDetailPage() {
   };
 
   const printSale = () => {
+    if (!sale) return;
+    
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) return;
 
@@ -229,7 +224,11 @@ export default function SaleDetailPage() {
         <body>
           <div class="container">
             <div class="header">
+<<<<<<< HEAD
               <h1>GoApp Pharmacie</h1>
+=======
+              <h1>MEDIGEST PRO</h1>
+>>>>>>> reprise_facture_me
               <h2>Facture #${sale?.reference || id}</h2>
               <p>${sale ? formatDateTime(sale.created_at) : ''}</p>
             </div>
@@ -246,14 +245,14 @@ export default function SaleDetailPage() {
                 <tr><th>Produit</th><th>Qté</th><th>Prix unitaire</th><th>Total</th></tr>
               </thead>
               <tbody>
-                ${sale?.items.map(item => `
+                ${sale?.items?.map(item => `
                   <tr>
                     <td>${item.product_name}</td>
                     <td>${item.quantity}</td>
                     <td>${formatPrice(item.unit_price)}</td>
                     <td>${formatPrice(item.total)}</td>
                   </tr>
-                `).join('')}
+                `).join('') || ''}
               </tbody>
             </table>
             

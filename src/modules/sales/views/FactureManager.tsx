@@ -98,6 +98,7 @@ interface SaleDetailResponse {
   tenant_id: string;
   pharmacy_id: string;
   pharmacy_name: string;
+  branch_id: string;
   reference: string;
   customer_id?: string;
   customer_name: string;
@@ -173,35 +174,72 @@ interface RefundData {
   refund_amount: number;
 }
 
+interface FacturePrinterSaleData {
+  id: string;
+  receiptNumber: string;
+  items: Array<{
+    id: string;
+    name: string;
+    price: number;
+    quantity: number;
+    code?: string;
+    discount_percent?: number;
+    discount_amount?: number;
+  }>;
+  subtotal: number;
+  total: number;
+  discount_percent: number;
+  discount_amount: number;
+  paymentMethod: string;
+  timestamp: number;
+  cashierName: string;
+  cashierId?: string;
+  posName: string;
+  branchId?: string;
+  branchName?: string;
+  sessionNumber: string;
+  customerName?: string;
+  pharmacy_id?: string;  
+}
+
 // Helper pour convertir une vente au format attendu par FacturePrinter
-const convertToFacturePrinterSale = (sale: Sale | SaleDetailResponse): Sale => {
+const convertToFacturePrinterSale = (sale: Sale | SaleDetailResponse): FacturePrinterSaleData => {
   const timestamp = typeof sale.created_at === 'string' 
     ? new Date(sale.created_at).getTime() 
     : Date.now();
   
+  const items = (sale.items || []).map(item => ({
+    id: item.id,
+    name: item.product_name,
+    price: item.unit_price,
+    quantity: item.quantity,
+    code: item.product_code,
+    discount_percent: item.discount_percent,
+    discount_amount: item.discount_amount
+  }));
+  
+  const subtotal = sale.subtotal;
+  const discountAmount = sale.total_discount;
+  const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+  
   return {
     id: sale.id,
-    reference: sale.reference,
-    invoice_number: sale.invoice_number,
-    customer_name: sale.customer_name,
-    customer_phone: sale.customer_phone,
-    seller_name: sale.seller_name,
-    payment_method: sale.payment_method,
-    subtotal: sale.subtotal,
-    total_discount: sale.total_discount,
-    total_tva: sale.total_tva,
-    total_amount: sale.total_amount,
-    status: sale.status === 'completed' || sale.status === 'pending' || sale.status === 'cancelled' 
-      ? sale.status 
-      : 'completed',
-    created_at: sale.created_at,
-    items: sale.items || [],
-    pharmacy_name: sale.pharmacy_name,
     receiptNumber: sale.invoice_number || sale.reference,
+    items: items,
+    subtotal: subtotal,
+    total: sale.total_amount,
+    discount_percent: discountPercent,
+    discount_amount: discountAmount,
+    paymentMethod: sale.payment_method,
+    timestamp: timestamp,
     cashierName: sale.seller_name,
+    cashierId: sale.created_by,
     posName: sale.pharmacy_name || 'Caisse Principale',
+    branchId: sale.branch_id,
+    branchName: sale.pharmacy_name,
     sessionNumber: `SESS-${new Date(timestamp).toISOString().slice(0, 10)}`,
-    timestamp
+    customerName: sale.customer_name,
+    pharmacy_id: sale.pharmacy_id  
   };
 };
 
@@ -235,7 +273,7 @@ const FactureManager: React.FC = () => {
   const [selectedSale, setSelectedSale] = useState<SaleDetailResponse | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showPrintModal, setShowPrintModal] = useState(false);
-  const [saleToPrint, setSaleToPrint] = useState<Sale | null>(null);
+  const [saleToPrint, setSaleToPrint] = useState<FacturePrinterSaleData | null>(null);
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundData, setRefundData] = useState<RefundData | null>(null);
   const [refundProcessing, setRefundProcessing] = useState(false);
@@ -582,6 +620,7 @@ const FactureManager: React.FC = () => {
       tenant_id: '',
       pharmacy_id: sale.pharmacy_id || '',
       pharmacy_name: sale.pharmacy_name || '',
+      branch_id: sale.branch_id || '',
       reference: sale.reference,
       customer_name: sale.customer_name,
       customer_phone: sale.customer_phone,
@@ -615,15 +654,77 @@ const FactureManager: React.FC = () => {
 
   // ==================== FONCTIONS D'EXPORT (fallback si pas de FacturePrinter) ====================
 
-  const exportToPDF = async (sale: Sale) => {
+  const exportToPDF = async (sale: Sale | FacturePrinterSaleData) => {
     try {
-      let items = sale.items;
-      let saleData = sale;
+      let items: SaleItem[] = [];
+      let saleData: any = sale;
       
-      if (!items || items.length === 0) {
+      // Si c'est un FacturePrinterSaleData, construire les données
+      if ('receiptNumber' in sale && !('created_at' in sale)) {
+        // C'est un FacturePrinterSaleData
+        const element = document.createElement('div');
+        element.className = 'p-6 font-mono';
+        element.style.backgroundColor = 'white';
+        element.style.width = '300px';
+        
+        element.innerHTML = `
+          <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
+            <p>Branche: ${userBranch?.code || ''}</p>
+            <p>N° ${sale.receiptNumber}</p>
+            <p>${formatDateTime(sale.timestamp)}</p>
+          </div>
+          <div style="margin-bottom: 10px;">
+            <p>Client: ${sale.customerName || 'Passager'}</p>
+            <p>Vendeur: ${sale.cashierName}</p>
+            <p>Paiement: ${sale.paymentMethod === 'cash' ? 'Espèces' : 
+              sale.paymentMethod === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
+          </div>
+          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+          <div style="margin-bottom: 10px;">
+            ${sale.items.map((item: any) => `
+              <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                <span>${item.name} x${item.quantity}</span>
+                <span>${(item.price * item.quantity).toFixed(2)} FC</span>
+              </div>
+              ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
+            `).join('')}
+          </div>
+          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+          <div style="display: flex; justify-content: space-between; font-weight: bold;">
+            <span>TOTAL</span>
+            <span>${sale.total.toFixed(2)} FC</span>
+          </div>
+          <div style="text-align: center; margin-top: 20px; font-size: 10px;">
+            <p>Merci de votre visite !</p>
+          </div>
+        `;
+        
+        document.body.appendChild(element);
+        const canvas = await html2canvas(element, { scale: 2 });
+        document.body.removeChild(element);
+        
+        const pdf = new jsPDF({
+          unit: 'mm',
+          format: [80, canvas.height * 80 / canvas.width],
+          orientation: 'portrait'
+        });
+        
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
+        pdf.save(`facture-${sale.receiptNumber}.pdf`);
+        
+        toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
+        return;
+      }
+      
+      // Sinon, c'est un Sale normal
+      if (!sale.items || sale.items.length === 0) {
         const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${sale.id}`);
         items = detailsResponse.data.items || [];
         saleData = { ...sale, ...detailsResponse.data, items };
+      } else {
+        items = sale.items;
       }
       
       const element = document.createElement('div');
@@ -646,7 +747,7 @@ const FactureManager: React.FC = () => {
         </div>
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="margin-bottom: 10px;">
-          ${items?.map((item: SaleItem) => `
+          ${items.map((item: SaleItem) => `
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
               <span>${item.product_name} x${item.quantity}</span>
               <span>${item.total.toFixed(2)} FC</span>
@@ -1298,20 +1399,20 @@ const FactureManager: React.FC = () => {
 
       {/* Modal d'impression avec FacturePrinter */}
       {showPrintModal && saleToPrint && (
-        <FacturePrinter
-          sale={saleToPrint}
-          pharmacyId={userBranch?.parent_pharmacy_id || saleToPrint.pharmacy_id}
-          onClose={() => {
-            setShowPrintModal(false);
-            setSaleToPrint(null);
-          }}
-          onPrint={() => {
-            setShowPrintModal(false);
-            setSaleToPrint(null);
-            toast({ title: "Succès", description: "Impression lancée", variant: "success" });
-          }}
-        />
-      )}
+      <FacturePrinter
+        sale={saleToPrint}
+        pharmacyId={userBranch?.parent_pharmacy_id || saleToPrint.pharmacy_id}  // ✅ utilise pharmacy_id au lieu de pharmacyId
+        onClose={() => {
+          setShowPrintModal(false);
+          setSaleToPrint(null);
+        }}
+        onPrint={() => {
+          setShowPrintModal(false);
+          setSaleToPrint(null);
+          toast({ title: "Succès", description: "Impression lancée", variant: "success" });
+        }}
+      />
+    )}
 
       {/* Modal Remboursement */}
       {showRefundModal && selectedSale && refundData && (

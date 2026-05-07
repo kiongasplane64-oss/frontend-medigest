@@ -761,7 +761,7 @@ export default function Historique() {
         <body>
           <div class="receipt">
             <div class="header">
-              <h2>GoApp Pharmacie</h2>
+              <h2>MEDIGEST PRO</h2>
               <div class="meta">Vente #${getSaleNumber(sale)}</div>
               <div class="meta">${formatDateTime(sale.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(sale)}</div>

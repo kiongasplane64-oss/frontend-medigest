@@ -56,6 +56,18 @@ export interface PrinterSale {
   branchName?: string;
   sessionNumber: string;
   customerName?: string;
+  reference?: string;
+  invoice_number?: string;
+  customer_name?: string;
+  seller_name?: string;
+  created_by?: string;
+  created_at?: string;
+  status?: string;
+  total_amount?: number;
+  total_discount?: number;
+  total_tva?: number;
+  payment_method?: string;
+  pharmacy_name?: string;
 }
 
 // Helper pour convertir un article SaleItem en PrinterProduct
