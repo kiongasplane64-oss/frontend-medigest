@@ -22,6 +22,7 @@ import {
   Store,
   User,
   BarChart3,
+  FolderTree,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -29,6 +30,7 @@ import { useOnline } from '@/hooks/useOnline';
 import { useToast } from '@/hooks/useToast';
 import { useSaleStore, type LocalSale } from '@/store/saleStore';
 import { type SaleResponse, type SaleItemResponse } from '@/services/saleService';
+import api from '@/api/client';
 
 // Types
 interface SaleItem {
@@ -38,6 +40,8 @@ interface SaleItem {
   price: number;
   quantity: number;
   code?: string;
+  category?: string;
+  categoryId?: string;
 }
 
 interface Sale {
@@ -57,6 +61,16 @@ interface Sale {
   status?: 'completed' | 'pending' | 'cancelled';
   synced?: boolean;
   isLocal?: boolean;
+}
+
+interface CategorySaleStats {
+  categoryId: string;
+  categoryName: string;
+  totalAmount: number;
+  quantitySold: number;
+  saleCount: number;
+  percentage: number;
+  products: Map<string, { productName: string; quantity: number; amount: number }>;
 }
 
 interface UserStats {
@@ -104,7 +118,7 @@ interface MonthlyStats {
   byBranch: Map<string, { branchName: string; amount: number; count: number }>;
 }
 
-type ViewMode = 'sales' | 'users' | 'branches' | 'analytics';
+type ViewMode = 'sales' | 'users' | 'branches' | 'analytics' | 'categories';
 type PeriodType = 'today' | 'week' | 'month' | 'year' | 'custom';
 
 const MONTHS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -137,9 +151,26 @@ export default function Historique() {
   const [selectedUserId, setSelectedUserId] = useState<string>('all');
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([]);
 
   const itemsPerPage = 20;
   const pendingCount = getPendingCount();
+
+  // Charger les catégories depuis l'API
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const response = await api.get('/categories');
+        const categoriesData = response.data?.data || response.data || [];
+        if (Array.isArray(categoriesData)) {
+          setCategories(categoriesData.map((cat: any) => ({ id: cat.id, name: cat.name })));
+        }
+      } catch (error) {
+        console.error('Erreur chargement catégories:', error);
+      }
+    };
+    loadCategories();
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -198,82 +229,71 @@ export default function Historique() {
     return price.toFixed(2) + ' FC';
   };
 
-  // Historique.tsx - Remplacer les fonctions normalizeApiSale et normalizeLocalSale
-
-function normalizeApiSale(sale: SaleResponse): Sale {
-  // S'assurer que les items ont un nom correct - VERSION CORRIGÉE
-  const items = (sale.items || []).map((item: SaleItemResponse) => {
-    // Log de débogage pour voir ce qui est reçu
-    console.log('Item reçu de l\'API:', {
-      product_name: item.product_name,
-      product_id: item.product_id,
-      name_from_item: (item as any).name
+  function normalizeApiSale(sale: SaleResponse): Sale {
+    const items = (sale.items || []).map((item: SaleItemResponse) => {
+      return {
+        id: item.product_id,
+        name: item.product_name || (item as any).name || `Produit ${item.product_id?.slice(-6) || 'inconnu'}`,
+        price: item.unit_price || 0,
+        quantity: item.quantity || 0,
+        code: item.product_code,
+        productId: item.product_id,
+        category: (item as any).category_name,
+        categoryId: (item as any).category_id,
+      };
     });
-    
+
     return {
-      id: item.product_id,
-      // PRIORITÉ: product_name (champ standard), puis name (fallback), puis ID
-      name: item.product_name || (item as any).name || `Produit ${item.product_id?.slice(-6) || 'inconnu'}`,
-      price: item.unit_price || 0,
-      quantity: item.quantity || 0,
-      code: item.product_code,
-      productId: item.product_id,
+      id: sale.id,
+      items,
+      total: getTotalAmount(sale),
+      paymentMethod: sale.payment_method || 'cash',
+      timestamp: new Date(sale.created_at).getTime(),
+      cashierName: sale.seller_name,
+      cashierId: sale.created_by,
+      posName: sale.pharmacy_id,
+      branchId: sale.pharmacy_id,
+      branchName: sale.pharmacy_id ? `Branche ${sale.pharmacy_id.slice(-4)}` : 'Branche Principale',
+      sessionNumber: sale.reference?.slice(0, 8),
+      receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
+      customerName: sale.customer_name || 'Passager',
+      status: sale.status as 'completed' | 'pending' | 'cancelled',
+      synced: true,
+      isLocal: false,
     };
-  });
+  }
 
-  return {
-    id: sale.id,
-    items,
-    total: getTotalAmount(sale),
-    paymentMethod: sale.payment_method || 'cash',
-    timestamp: new Date(sale.created_at).getTime(),
-    cashierName: sale.seller_name,
-    cashierId: sale.created_by,
-    posName: sale.pharmacy_id,
-    branchId: sale.pharmacy_id,
-    branchName: sale.pharmacy_id ? `Branche ${sale.pharmacy_id.slice(-4)}` : 'Branche Principale',
-    sessionNumber: sale.reference?.slice(0, 8),
-    receiptNumber: sale.receipt_number || sale.invoice_number || sale.reference,
-    customerName: sale.customer_name || 'Passager',
-    status: sale.status as 'completed' | 'pending' | 'cancelled',
-    synced: true,
-    isLocal: false,
-  };
-}
-
-function normalizeLocalSale(sale: LocalSale): Sale {
-  // VERSION CORRIGÉE - S'assurer que chaque item a un nom
-  const items = sale.items.map(item => {
-    console.log('Item local:', item);
-    return {
+  function normalizeLocalSale(sale: LocalSale): Sale {
+    const items = sale.items.map(item => ({
       id: item.id,
       name: item.name || item.product_name || `Produit ${item.id?.slice(-6) || 'inconnu'}`,
       price: item.price || 0,
       quantity: item.quantity || 0,
       code: item.code || item.product_code,
       productId: item.productId || item.id,
-    };
-  });
+      category: item.category,
+      categoryId: item.categoryId,
+    }));
 
-  return {
-    id: sale.id,
-    items,
-    total: getTotalAmount(sale),
-    paymentMethod: sale.paymentMethod,
-    timestamp: sale.timestamp,
-    cashierName: sale.cashierName,
-    cashierId: sale.cashierId || 'unknown',
-    posName: sale.posName,
-    branchId: sale.branchId || 'main',
-    branchName: sale.branchName || 'Branche Principale',
-    sessionNumber: sale.sessionNumber,
-    receiptNumber: sale.receiptNumber,
-    customerName: sale.customerName || 'Passager',
-    status: sale.status,
-    synced: sale.synced,
-    isLocal: true,
-  };
-}
+    return {
+      id: sale.id,
+      items,
+      total: getTotalAmount(sale),
+      paymentMethod: sale.paymentMethod,
+      timestamp: sale.timestamp,
+      cashierName: sale.cashierName,
+      cashierId: sale.cashierId || 'unknown',
+      posName: sale.posName,
+      branchId: sale.branchId || 'main',
+      branchName: sale.branchName || 'Branche Principale',
+      sessionNumber: sale.sessionNumber,
+      receiptNumber: sale.receiptNumber,
+      customerName: sale.customerName || 'Passager',
+      status: sale.status,
+      synced: sale.synced,
+      isLocal: true,
+    };
+  }
 
   const allSales = useMemo(() => {
     const apiNormalized = apiSales.map(normalizeApiSale);
@@ -367,6 +387,67 @@ function normalizeLocalSale(sale: LocalSale): Sale {
       totalPages: Math.max(1, Math.ceil(filteredSales.length / itemsPerPage)),
     };
   }, [filteredSales, currentPage]);
+
+  // Statistiques par catégorie
+  const categoryStats = useMemo((): CategorySaleStats[] => {
+    const categoryMap = new Map<string, CategorySaleStats>();
+    const totalAmount = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
+    
+    filteredSales.forEach(sale => {
+      sale.items.forEach(item => {
+        // Essayer de déterminer la catégorie depuis l'API ou utiliser "Non catégorisé"
+        let categoryId = item.categoryId || 'uncategorized';
+        let categoryName = item.category || 'Non catégorisé';
+        
+        // Chercher la catégorie dans la liste des catégories connues
+        if (categories.length > 0 && item.categoryId) {
+          const found = categories.find(c => c.id === item.categoryId);
+          if (found) {
+            categoryName = found.name;
+          }
+        }
+        
+        if (!categoryMap.has(categoryId)) {
+          categoryMap.set(categoryId, {
+            categoryId,
+            categoryName,
+            totalAmount: 0,
+            quantitySold: 0,
+            saleCount: 0,
+            percentage: 0,
+            products: new Map(),
+          });
+        }
+        
+        const stats = categoryMap.get(categoryId)!;
+        const itemTotal = (item.price || 0) * (item.quantity || 0);
+        stats.totalAmount += itemTotal;
+        stats.quantitySold += item.quantity || 0;
+        stats.saleCount++;
+        
+        // Agrégation par produit dans la catégorie
+        const productKey = item.productId || item.id || item.name;
+        if (!stats.products.has(productKey)) {
+          stats.products.set(productKey, {
+            productName: item.name,
+            quantity: 0,
+            amount: 0,
+          });
+        }
+        const productStats = stats.products.get(productKey)!;
+        productStats.quantity += item.quantity || 0;
+        productStats.amount += itemTotal;
+      });
+    });
+    
+    // Calculer les pourcentages
+    const result = Array.from(categoryMap.values());
+    result.forEach(stats => {
+      stats.percentage = totalAmount > 0 ? (stats.totalAmount / totalAmount) * 100 : 0;
+    });
+    
+    return result.sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredSales, categories]);
 
   const userStats = useMemo((): UserStats[] => {
     const userMap = new Map<string, UserStats>();
@@ -680,7 +761,7 @@ function normalizeLocalSale(sale: LocalSale): Sale {
         <body>
           <div class="receipt">
             <div class="header">
-              <h2>GoApp Pharmacie</h2>
+              <h2>MEDIGEST PRO</h2>
               <div class="meta">Vente #${getSaleNumber(sale)}</div>
               <div class="meta">${formatDateTime(sale.timestamp)}</div>
               <div class="meta">Caissier: ${getCashierName(sale)}</div>
@@ -771,7 +852,7 @@ function normalizeLocalSale(sale: LocalSale): Sale {
             </Link>
             <div>
               <h1 className="text-xl font-black text-slate-800 md:text-2xl">Historique des ventes</h1>
-              <p className="text-sm text-slate-400">Statistiques par utilisateur, branche et période</p>
+              <p className="text-sm text-slate-400">Statistiques par utilisateur, branche, catégorie et période</p>
             </div>
           </div>
 
@@ -891,6 +972,9 @@ function normalizeLocalSale(sale: LocalSale): Sale {
           </button>
           <button onClick={() => setViewMode('branches')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'branches' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
             🏪 Par Branche
+          </button>
+          <button onClick={() => setViewMode('categories')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'categories' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+            📁 Par Catégorie
           </button>
           <button onClick={() => setViewMode('analytics')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'analytics' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
             📊 Analyses
@@ -1040,6 +1124,103 @@ function normalizeLocalSale(sale: LocalSale): Sale {
           </section>
         )}
 
+        {/* Vue Catégories */}
+        {viewMode === 'categories' && (
+          <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
+            <div className="border-b border-slate-100 p-4 md:p-5">
+              <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
+                <FolderTree size={20} className="text-blue-600" /> 
+                Ventes par catégorie
+              </h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Total des ventes: <span className="font-bold text-blue-600">{formatPrice(globalStats.totalAmount)}</span>
+              </p>
+            </div>
+            
+            {categoryStats.length === 0 ? (
+              <div className="p-10 text-center text-slate-400">Aucune donnée de catégorie disponible</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {categoryStats.map((category) => (
+                  <div key={category.categoryId} className="p-4 md:p-5">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100">
+                          <FolderTree size={18} className="text-indigo-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-lg">{category.categoryName}</h3>
+                          <p className="text-xs text-slate-400">
+                            {category.quantitySold} articles vendus · {category.saleCount} ventes concernées
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold text-emerald-600">{formatPrice(category.totalAmount)}</p>
+                        <p className="text-xs text-slate-500">{category.percentage.toFixed(1)}% du CA total</p>
+                      </div>
+                    </div>
+                    
+                    {/* Barre de progression */}
+                    <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div 
+                        className="h-full rounded-full bg-linear-to-r from-blue-500 to-indigo-600 transition-all duration-500"
+                        style={{ width: `${category.percentage}%` }}
+                      />
+                    </div>
+                    
+                    {/* Produits de la catégorie */}
+                    {category.products.size > 0 && (
+                      <div className="mt-3 rounded-xl bg-slate-50 p-3">
+                        <p className="mb-2 text-sm font-semibold text-slate-600">📦 Produits les plus vendus</p>
+                        <div className="space-y-2">
+                          {Array.from(category.products.entries())
+                            .sort((a, b) => b[1].amount - a[1].amount)
+                            .slice(0, 5)
+                            .map(([productId, product]) => (
+                              <div key={productId} className="flex items-center justify-between border-b border-slate-200 pb-2 last:border-0">
+                                <div>
+                                  <p className="font-medium text-slate-700">{product.productName}</p>
+                                  <p className="text-xs text-slate-400">Quantité: {product.quantity}</p>
+                                </div>
+                                <p className="font-semibold text-emerald-600">{formatPrice(product.amount)}</p>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                
+                {/* Résumé des catégories */}
+                <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-4 md:p-5">
+                  <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-slate-500">Nombre de catégories</p>
+                      <p className="text-xl font-bold text-slate-800">{categoryStats.length}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Catégorie principale</p>
+                      <p className="font-bold text-blue-600">{categoryStats[0]?.categoryName || '-'}</p>
+                      <p className="text-xs text-slate-500">{categoryStats[0]?.percentage.toFixed(1)}% du CA</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Articles vendus</p>
+                      <p className="text-xl font-bold text-slate-800">
+                        {categoryStats.reduce((sum, cat) => sum + cat.quantitySold, 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">CA total</p>
+                      <p className="text-xl font-bold text-emerald-600">{formatPrice(globalStats.totalAmount)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Vue Analyses */}
         {viewMode === 'analytics' && (
           <div className="space-y-6">
@@ -1155,9 +1336,6 @@ function normalizeLocalSale(sale: LocalSale): Sale {
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-semibold text-slate-800">
-                            {item.quantity} × {(item.price || 0).toFixed(2)} FC
-                          </p>
                           <p className="text-sm font-bold text-blue-600">
                             {((item.price || 0) * (item.quantity || 0)).toFixed(2)} FC
                           </p>

@@ -1,405 +1,805 @@
-// modules/inventory/views/ReportStockView.tsx
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
-import { fr } from 'date-fns/locale';
-import { Download, Printer, Package, TrendingUp, TrendingDown, AlertTriangle, DollarSign, Building2 } from 'lucide-react';
-import { inventoryService } from '@/services/inventoryService';
-import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
-import type { ExpiryAlert, StockStats, StockTurnover, StockValuation } from '@/types/inventory.types';
+// src/modules/inventory/views/ReportStockView.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Box,
+  Typography,
+  Paper,
+  TextField,
+  Button,
+  IconButton,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Grid,
+  Card,
+  CardContent,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  CircularProgress,
+  Tooltip,
+  Collapse,
+  InputAdornment,
+  useTheme,
+  alpha,
+  styled,
+  SelectChangeEvent,
+} from '@mui/material';
+import {
+  Search as SearchIcon,
+  Close as CloseIcon,
+  Delete as DeleteIcon,
+  Edit as EditIcon,
+  ExpandMore as ExpandMoreIcon,
+  ExpandLess as ExpandLessIcon,
+  Warning as WarningIcon,
+  Inventory as InventoryIcon,
+  AttachMoney as MoneyIcon,
+  TrendingUp as TrendingUpIcon,
+  PictureAsPdf as PdfIcon,
+  Folder as FolderIcon,
+} from '@mui/icons-material';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useSnackbar } from 'notistack';
+import api from '@/api/client';
+import { formatCurrency } from '@/utils/formatters';
 
-interface ReportStockViewProps {
-  pharmacyId?: string;
-  branchId?: string;
+// Types
+interface Category {
+  id: string;
+  name: string;
+  description?: string;
+  parent_id?: string;
+  is_active: boolean;
 }
 
-type ReportType = 'summary' | 'turnover' | 'valuation' | 'expiry' | 'movements';
+interface Product {
+  id: string;
+  name: string;
+  code: string;
+  barcode?: string;
+  quantity: number;
+  purchase_price: number;
+  selling_price: number;
+  category_id?: string;
+  category?: Category;
+  expired?: boolean;
+  expiry_date?: string;
+  stock_status?: string;
+}
 
-export default function ReportStockView({ pharmacyId, branchId }: ReportStockViewProps) {
-  const { formatPrice, primaryCurrency } = usePharmacyConfig(pharmacyId);
-  const [activeReport, setActiveReport] = useState<ReportType>('summary');
+interface CategoryStats {
+  categoryId: string;
+  categoryName: string;
+  totalQuantity: number;
+  totalPurchaseValue: number;
+  totalSellingValue: number;
+  totalProfit: number;
+  productCount: number;
+  products: Product[];
+}
 
-  // Récupérer les statistiques
-  const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ['stock-stats', pharmacyId, branchId],
-    queryFn: () => inventoryService.getStats(),
-  });
+interface PharmacyInfo {
+  id: string;
+  name: string;
+  address: string;
+  phone: string;
+  email: string;
+  licenseNumber: string;
+  logo?: string;
+}
 
-  // Récupérer le taux de rotation
-  const { data: turnover, isLoading: turnoverLoading } = useQuery({
-    queryKey: ['stock-turnover', pharmacyId, branchId],
-    queryFn: () => inventoryService.getStockTurnover(365, pharmacyId),
-  });
+interface ReportData {
+  pharmacy: PharmacyInfo;
+  user: {
+    name: string;
+    email: string;
+    role: string;
+  };
+  date: string;
+  categories: CategoryStats[];
+  uncategorized: CategoryStats;
+  globalTotals: {
+    totalQuantity: number;
+    totalPurchaseValue: number;
+    totalSellingValue: number;
+    totalProfit: number;
+    productCount: number;
+  };
+}
 
-  // Récupérer la valorisation du stock
-  const { data: valuation, isLoading: valuationLoading } = useQuery({
-    queryKey: ['stock-valuation', pharmacyId, branchId],
-    queryFn: () => inventoryService.getStockValuation('purchase', pharmacyId),
-  });
+const StyledTableCell = styled(TableCell)(({ theme }) => ({
+  fontSize: '0.75rem',
+  padding: '8px 4px',
+  [theme.breakpoints.up('sm')]: {
+    padding: '8px 12px',
+    fontSize: '0.8125rem',
+  },
+}));
 
-  // Récupérer les alertes d'expiration
-  const { data: expiryAlerts, isLoading: expiryLoading } = useQuery({
-    queryKey: ['expiry-alerts', pharmacyId, branchId],
-    queryFn: () => inventoryService.getExpiryAlerts(90),
-  });
+const StyledTableRow = styled(TableRow)(({ theme }) => ({
+  '&:nth-of-type(odd)': {
+    backgroundColor: theme.palette.action.hover,
+  },
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.primary.main, 0.04),
+  },
+}));
 
-  const isLoading = statsLoading || turnoverLoading || valuationLoading || expiryLoading;
+const apiService = {
+  async getCategories(): Promise<Category[]> {
+    const response = await api.get('/stock/categories/simple');
+    return response.data;
+  },
 
-  const handleExportPDF = () => {
-    // Implémentation de l'export PDF
-    console.log('Export PDF pour', { pharmacyId, branchId });
+  async getProducts(params?: { category_id?: string; get_all?: boolean }): Promise<Product[]> {
+    const queryParams = new URLSearchParams();
+    if (params?.category_id) queryParams.append('category_id', params.category_id);
+    if (params?.get_all) queryParams.append('get_all', 'true');
+
+    const response = await api.get(`/stock/?${queryParams.toString()}`);
+    return response.data.products || [];
+  },
+
+  async deleteProduct(productId: string, reason?: string): Promise<{ success: boolean; message: string; trash_id?: string }> {
+    const response = await api.delete(`/stock/${productId}`, {
+      params: { deletion_reason: reason || 'Suppression depuis rapport' }
+    });
+    return response.data;
+  },
+
+  async updateProduct(productId: string, data: Partial<Product>): Promise<Product> {
+    const response = await api.put(`/stock/${productId}`, data);
+    return response.data;
+  },
+
+  async getPharmacyInfo(): Promise<PharmacyInfo> {
+    const response = await api.get('/pharmacies/current');
+    return response.data;
+  },
+};
+
+export default function ReportStockView() {
+  const { user } = useAuthStore();
+  const { enqueueSnackbar } = useSnackbar();
+  const theme = useTheme();
+
+  const [loading, setLoading] = useState(true);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [deletionReason, setDeletionReason] = useState('');
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [productToCategorize, setProductToCategorize] = useState<Product | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'profit'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [exporting, setExporting] = useState(false);
+  const [currentPharmacy, setCurrentPharmacy] = useState<PharmacyInfo | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+
+      const [categoriesData, productsData, pharmacyData] = await Promise.all([
+        apiService.getCategories(),
+        apiService.getProducts({ get_all: true }),
+        apiService.getPharmacyInfo(),
+      ]);
+
+      setCategories(categoriesData);
+      setAllProducts(productsData);
+      setCurrentPharmacy(pharmacyData);
+
+      const stats = calculateStatsByCategory(productsData, categoriesData, pharmacyData, user);
+      setReportData(stats);
+    } catch (error) {
+      console.error('Erreur chargement données:', error);
+      enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }, [user, enqueueSnackbar]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const calculateStatsByCategory = (
+    productsListData: Product[],
+    categoriesList: Category[],
+    pharmacy: PharmacyInfo | null,
+    currentUser: any
+  ): ReportData => {
+    const categoryMap = new Map<string, CategoryStats>();
+
+    categoriesList.forEach(cat => {
+      categoryMap.set(cat.id, {
+        categoryId: cat.id,
+        categoryName: cat.name,
+        totalQuantity: 0,
+        totalPurchaseValue: 0,
+        totalSellingValue: 0,
+        totalProfit: 0,
+        productCount: 0,
+        products: [],
+      });
+    });
+
+    const uncategorized: CategoryStats = {
+      categoryId: 'uncategorized',
+      categoryName: 'Sans catégorie',
+      totalQuantity: 0,
+      totalPurchaseValue: 0,
+      totalSellingValue: 0,
+      totalProfit: 0,
+      productCount: 0,
+      products: [],
+    };
+
+    let globalTotals = {
+      totalQuantity: 0,
+      totalPurchaseValue: 0,
+      totalSellingValue: 0,
+      totalProfit: 0,
+      productCount: 0,
+    };
+
+    productsListData.forEach(product => {
+      const quantity = product.quantity || 0;
+      const purchaseValue = quantity * (product.purchase_price || 0);
+      const sellingValue = quantity * (product.selling_price || 0);
+      const profit = sellingValue - purchaseValue;
+
+      const productWithStats = { ...product };
+
+      globalTotals.totalQuantity += quantity;
+      globalTotals.totalPurchaseValue += purchaseValue;
+      globalTotals.totalSellingValue += sellingValue;
+      globalTotals.totalProfit += profit;
+      globalTotals.productCount += 1;
+
+      if (product.category_id && categoryMap.has(product.category_id)) {
+        const stats = categoryMap.get(product.category_id)!;
+        stats.totalQuantity += quantity;
+        stats.totalPurchaseValue += purchaseValue;
+        stats.totalSellingValue += sellingValue;
+        stats.totalProfit += profit;
+        stats.productCount += 1;
+        stats.products.push(productWithStats);
+        categoryMap.set(product.category_id, stats);
+      } else {
+        uncategorized.totalQuantity += quantity;
+        uncategorized.totalPurchaseValue += purchaseValue;
+        uncategorized.totalSellingValue += sellingValue;
+        uncategorized.totalProfit += profit;
+        uncategorized.productCount += 1;
+        uncategorized.products.push(productWithStats);
+      }
+    });
+
+    const categoriesArray = Array.from(categoryMap.values())
+      .filter(cat => cat.productCount > 0)
+      .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+
+    return {
+      pharmacy: pharmacy || {
+        id: '',
+        name: 'Pharmacie',
+        address: '',
+        phone: '',
+        email: '',
+        licenseNumber: '',
+      },
+      user: {
+        name: currentUser?.nom_complet || currentUser?.email || 'Utilisateur',
+        email: currentUser?.email || '',
+        role: currentUser?.role || '',
+      },
+      date: new Date().toLocaleDateString('fr-FR'),
+      categories: categoriesArray,
+      uncategorized,
+      globalTotals,
+    };
   };
 
-  const handlePrint = () => {
-    window.print();
+  const getFilteredProducts = (productsListData: Product[]): Product[] => {
+    let filtered = [...productsListData];
+
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        p.code.toLowerCase().includes(query) ||
+        (p.barcode && p.barcode.toLowerCase().includes(query))
+      );
+    }
+
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'quantity':
+          comparison = (a.quantity || 0) - (b.quantity || 0);
+          break;
+        case 'profit':
+          const profitA = (a.quantity || 0) * ((a.selling_price || 0) - (a.purchase_price || 0));
+          const profitB = (b.quantity || 0) * ((b.selling_price || 0) - (b.purchase_price || 0));
+          comparison = profitA - profitB;
+          break;
+      }
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+
+    return filtered;
   };
 
-  if (isLoading) {
+  const handleDeleteProduct = async () => {
+    if (!selectedProduct) return;
+
+    try {
+      const result = await apiService.deleteProduct(selectedProduct.id, deletionReason);
+
+      if (result.success) {
+        enqueueSnackbar(result.message, { variant: 'success' });
+        setDeleteDialogOpen(false);
+        setSelectedProduct(null);
+        setDeletionReason('');
+        loadData();
+      } else {
+        enqueueSnackbar(result.message, { variant: 'error' });
+      }
+    } catch (error) {
+      console.error('Erreur suppression:', error);
+      enqueueSnackbar('Impossible de supprimer le produit', { variant: 'error' });
+    }
+  };
+
+  const handleUpdateCategory = async () => {
+    if (!productToCategorize || !selectedCategoryId) return;
+
+    try {
+      await apiService.updateProduct(productToCategorize.id, { category_id: selectedCategoryId });
+      enqueueSnackbar('Catégorie mise à jour avec succès', { variant: 'success' });
+      setCategoryDialogOpen(false);
+      setProductToCategorize(null);
+      setSelectedCategoryId('');
+      loadData();
+    } catch (error) {
+      console.error('Erreur mise à jour catégorie:', error);
+      enqueueSnackbar('Impossible de mettre à jour la catégorie', { variant: 'error' });
+    }
+  };
+
+  const exportToPDF = async () => {
+    if (!reportData) return;
+    setExporting(true);
+
+    try {
+      const response = await api.post('/reports/stock-pdf', reportData, {
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `rapport_stock_${new Date().toISOString().split('T')[0]}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      enqueueSnackbar('PDF généré avec succès', { variant: 'success' });
+    } catch (error) {
+      console.error('Erreur export PDF:', error);
+      enqueueSnackbar('Impossible de générer le PDF', { variant: 'error' });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const toggleCategory = (categoryId: string) => {
+    setExpandedCategories(prev => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) {
+        next.delete(categoryId);
+      } else {
+        next.add(categoryId);
+      }
+      return next;
+    });
+  };
+
+  const totalProductsCount = allProducts.length;
+  const pharmacyName = currentPharmacy?.name || 'Pharmacie';
+
+  const filteredCategories = reportData?.categories.filter(cat => {
+    if (selectedCategory === 'all') return true;
+    if (selectedCategory === 'uncategorized') return cat.categoryId === 'uncategorized';
+    return cat.categoryId === selectedCategory;
+  }) || [];
+
+  if (loading) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-medical"></div>
-      </div>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
+        <CircularProgress />
+        <Typography sx={{ ml: 2 }}>Chargement du rapport...</Typography>
+      </Box>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* En-tête avec infos pharmacie/branche */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white rounded-xl p-4 border border-slate-200">
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Building2 size={16} />
-          <span>Pharmacie: {pharmacyId || 'Non définie'}</span>
-          {branchId && (
-            <>
-              <span className="text-slate-300">|</span>
-              <span>Branche: {branchId}</span>
-            </>
-          )}
-        </div>
-        <div className="text-xs text-slate-400">
-          Devise: {primaryCurrency}
-        </div>
-      </div>
+    <Box sx={{ p: 2, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+      {/* Header */}
+      <Paper sx={{ p: 3, mb: 2, bgcolor: theme.palette.primary.main, color: '#fff' }}>
+        <Typography variant="h4" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <InventoryIcon fontSize="large" />
+          Rapport de Stock - {pharmacyName}
+        </Typography>
+        <Typography variant="subtitle1" sx={{ opacity: 0.9, mt: 1 }}>
+          par catégorie | Total produits: {totalProductsCount}
+        </Typography>
+      </Paper>
 
-      {/* En-tête des rapports */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800">Rapports de stock</h2>
-          <p className="text-sm text-slate-500">
-            Analyse et rapports sur l'état de votre stock
-            {branchId && ` pour la branche ${branchId}`}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleExportPDF}
-            className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-          >
-            <Download size={18} />
-            Exporter PDF
-          </button>
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-          >
-            <Printer size={18} />
-            Imprimer
-          </button>
-        </div>
-      </div>
+      {/* Toolbar */}
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, md: 4 }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Rechercher un produit..."
+              value={searchQuery}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchQuery && (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearchQuery('')}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+          </Grid>
 
-      {/* Onglets des rapports */}
-      <div className="flex flex-wrap gap-2 border-b border-slate-200">
-        {[
-          { id: 'summary', label: 'Résumé', icon: Package },
-          { id: 'turnover', label: 'Rotation', icon: TrendingUp },
-          { id: 'valuation', label: 'Valorisation', icon: DollarSign },
-          { id: 'expiry', label: 'Expiration', icon: AlertTriangle },
-        ].map((report) => (
-          <button
-            key={report.id}
-            onClick={() => setActiveReport(report.id as ReportType)}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors ${
-              activeReport === report.id
-                ? 'text-medical border-b-2 border-medical'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <report.icon size={16} />
-            {report.label}
-          </button>
+          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Catégorie</InputLabel>
+              <Select
+                value={selectedCategory}
+                onChange={(e: SelectChangeEvent) => setSelectedCategory(e.target.value)}
+                label="Catégorie"
+              >
+                <MenuItem value="all">Toutes les catégories</MenuItem>
+                {categories.map(cat => (
+                  <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+                ))}
+                <MenuItem value="uncategorized">⚠️ Sans catégorie</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Trier par</InputLabel>
+              <Select
+                value={sortBy}
+                onChange={(e: SelectChangeEvent) => setSortBy(e.target.value as any)}
+                label="Trier par"
+              >
+                <MenuItem value="name">Nom</MenuItem>
+                <MenuItem value="quantity">Quantité</MenuItem>
+                <MenuItem value="profit">Profit</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+
+          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+            <Button
+              fullWidth
+              variant="outlined"
+              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+            >
+              {sortOrder === 'asc' ? '↑ Croissant' : '↓ Décroissant'}
+            </Button>
+          </Grid>
+
+          <Grid size={{ xs: 12, md: 2 }}>
+            <Button
+              fullWidth
+              variant="contained"
+              color="success"
+              onClick={exportToPDF}
+              disabled={exporting}
+              startIcon={exporting ? <CircularProgress size={20} /> : <PdfIcon />}
+            >
+              PDF
+            </Button>
+          </Grid>
+        </Grid>
+      </Paper>
+
+      {/* Global Summary */}
+      {reportData && (
+        <Paper sx={{ p: 3, mb: 2 }}>
+          <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TrendingUpIcon color="primary" />
+            Résumé global
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E3F2FD' }}>
+                <CardContent>
+                  <InventoryIcon color="primary" />
+                  <Typography variant="caption" component="div">Produits</Typography>
+                  <Typography variant="h6">{reportData.globalTotals.productCount}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#FFF3E0' }}>
+                <CardContent>
+                  <InventoryIcon color="warning" />
+                  <Typography variant="caption" component="div">Unités</Typography>
+                  <Typography variant="h6">{reportData.globalTotals.totalQuantity}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E8F5E9' }}>
+                <CardContent>
+                  <MoneyIcon color="success" />
+                  <Typography variant="caption" component="div">Valeur achat</Typography>
+                  <Typography variant="body2">{formatCurrency(reportData.globalTotals.totalPurchaseValue)}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#E8EAF6' }}>
+                <CardContent>
+                  <MoneyIcon color="info" />
+                  <Typography variant="caption" component="div">Valeur vente</Typography>
+                  <Typography variant="body2">{formatCurrency(reportData.globalTotals.totalSellingValue)}</Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid size={{ xs: 12, sm: 8, md: 4 }}>
+              <Card sx={{ textAlign: 'center', bgcolor: '#C8E6C9' }}>
+                <CardContent>
+                  <TrendingUpIcon sx={{ color: '#2E7D32' }} />
+                  <Typography variant="caption" component="div">Profit potentiel</Typography>
+                  <Typography variant="h6" sx={{ color: '#2E7D32' }}>
+                    {formatCurrency(reportData.globalTotals.totalProfit)}
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Paper>
+      )}
+
+      {/* Categories List */}
+      <Box>
+        {filteredCategories.map(category => (
+          <Paper key={category.categoryId} sx={{ mb: 2, overflow: 'hidden' }}>
+            <Box
+              sx={{
+                p: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                cursor: 'pointer',
+                bgcolor: category.categoryId === 'uncategorized' ? '#FFF3E0' : '#FAFAFA',
+                '&:hover': { bgcolor: '#F0F0F0' },
+              }}
+              onClick={() => toggleCategory(category.categoryId)}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {category.categoryId === 'uncategorized' ? (
+                  <WarningIcon sx={{ color: '#FF9800' }} />
+                ) : (
+                  <FolderIcon color="primary" />
+                )}
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                  {category.categoryName}
+                </Typography>
+                {category.categoryId === 'uncategorized' && (
+                  <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
+                )}
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Typography variant="body2" color="textSecondary">
+                  {category.productCount} produits | {category.totalQuantity} unités
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
+                  Profit: {formatCurrency(category.totalProfit)}
+                </Typography>
+                {expandedCategories.has(category.categoryId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </Box>
+            </Box>
+
+            <Collapse in={expandedCategories.has(category.categoryId)}>
+              <Box sx={{ p: 2 }}>
+                <TableContainer>
+                  <Table size="small" stickyHeader>
+                    <TableHead>
+                      <StyledTableRow>
+                        <StyledTableCell>Code</StyledTableCell>
+                        <StyledTableCell>Produit</StyledTableCell>
+                        <StyledTableCell align="right">Qté</StyledTableCell>
+                        <StyledTableCell align="right">PA</StyledTableCell>
+                        <StyledTableCell align="right">PV</StyledTableCell>
+                        <StyledTableCell align="right">Val Achat</StyledTableCell>
+                        <StyledTableCell align="right">Val Vente</StyledTableCell>
+                        <StyledTableCell align="right">Profit</StyledTableCell>
+                        <StyledTableCell align="center">Actions</StyledTableCell>
+                      </StyledTableRow>
+                    </TableHead>
+                    <TableBody>
+                      {getFilteredProducts(category.products).map(product => {
+                        const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
+                        const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
+                        const profit = sellingValue - purchaseValue;
+
+                        return (
+                          <StyledTableRow key={product.id}>
+                            <StyledTableCell>{product.code}</StyledTableCell>
+                            <StyledTableCell>
+                              <Tooltip title={product.name}>
+                                <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
+                              </Tooltip>
+                            </StyledTableCell>
+                            <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
+                            <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
+                            <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
+                              {formatCurrency(profit)}
+                            </StyledTableCell>
+                            <StyledTableCell align="center">
+                              {category.categoryId === 'uncategorized' && (
+                                <Tooltip title="Attribuer une catégorie">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      setProductToCategorize(product);
+                                      setCategoryDialogOpen(true);
+                                    }}
+                                  >
+                                    <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              <Tooltip title="Supprimer">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => {
+                                    setSelectedProduct(product);
+                                    setDeleteDialogOpen(true);
+                                  }}
+                                >
+                                  <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
+                                </IconButton>
+                              </Tooltip>
+                            </StyledTableCell>
+                          </StyledTableRow>
+                        );
+                      })}
+
+                      {/* Category Total Row */}
+                      <StyledTableRow sx={{ bgcolor: '#F5F5F5' }}>
+                        <StyledTableCell colSpan={5}>
+                          <Typography sx={{ fontWeight: 'bold' }}>Totaux {category.categoryName}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right">
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalPurchaseValue)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right">
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalSellingValue)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell align="right" sx={{ color: '#4CAF50' }}>
+                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalProfit)}</Typography>
+                        </StyledTableCell>
+                        <StyledTableCell />
+                      </StyledTableRow>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Box>
+            </Collapse>
+          </Paper>
         ))}
-      </div>
+      </Box>
 
-      {/* Rapport Résumé */}
-      {activeReport === 'summary' && stats && (
-        <div className="space-y-6">
-          {/* Cartes KPI */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white rounded-xl p-4 border border-slate-200">
-              <div className="flex items-center justify-between">
-                <Package className="text-medical" size={24} />
-                <span className="text-2xl font-bold text-slate-800">{(stats as StockStats).total_products || 0}</span>
-              </div>
-              <p className="text-sm text-slate-500 mt-2">Produits en stock</p>
-            </div>
-            <div className="bg-white rounded-xl p-4 border border-slate-200">
-              <div className="flex items-center justify-between">
-                <DollarSign className="text-green-500" size={24} />
-                <span className="text-2xl font-bold text-slate-800">{formatPrice((stats as StockStats).total_selling_value || 0)}</span>
-              </div>
-              <p className="text-sm text-slate-500 mt-2">Valeur du stock</p>
-            </div>
-            <div className="bg-white rounded-xl p-4 border border-slate-200">
-              <div className="flex items-center justify-between">
-                <TrendingDown className="text-red-500" size={24} />
-                <span className="text-2xl font-bold text-slate-800">{(stats as StockStats).out_of_stock_count || 0}</span>
-              </div>
-              <p className="text-sm text-slate-500 mt-2">Ruptures de stock</p>
-            </div>
-            <div className="bg-white rounded-xl p-4 border border-slate-200">
-              <div className="flex items-center justify-between">
-                <AlertTriangle className="text-amber-500" size={24} />
-                <span className="text-2xl font-bold text-slate-800">{(stats as StockStats).low_stock_count || 0}</span>
-              </div>
-              <p className="text-sm text-slate-500 mt-2">Stock faible</p>
-            </div>
-          </div>
+      {/* Footer */}
+      <Paper sx={{ p: 2, textAlign: 'center', bgcolor: '#FAFAFA' }}>
+        <Typography variant="caption" color="textSecondary" component="div">
+          📅 Rapport généré le {new Date().toLocaleString('fr-FR')}
+        </Typography>
+        <Typography variant="caption" color="textSecondary" component="div">
+          👤 {user?.nom_complet || user?.email}
+        </Typography>
+      </Paper>
 
-          {/* Détails */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <h3 className="font-semibold text-slate-800 mb-3">Statut du stock</h3>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span>Stock normal</span>
-                    <span>{((stats as StockStats).total_products || 0) - ((stats as StockStats).low_stock_count || 0) - ((stats as StockStats).out_of_stock_count || 0)}</span>
-                  </div>
-                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-green-500 rounded-full"
-                      style={{
-                        width: `${(((stats as StockStats).total_products || 0) - ((stats as StockStats).low_stock_count || 0) - ((stats as StockStats).out_of_stock_count || 0)) / ((stats as StockStats).total_products || 1) * 100}%`
-                      }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span>Stock faible</span>
-                    <span>{(stats as StockStats).low_stock_count || 0}</span>
-                  </div>
-                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-amber-500 rounded-full"
-                      style={{ width: `${((stats as StockStats).low_stock_count || 0) / ((stats as StockStats).total_products || 1) * 100}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span>Rupture</span>
-                    <span>{(stats as StockStats).out_of_stock_count || 0}</span>
-                  </div>
-                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-red-500 rounded-full"
-                      style={{ width: `${((stats as StockStats).out_of_stock_count || 0) / ((stats as StockStats).total_products || 1) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+      {/* Delete Dialog */}
+      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>🗑️ Supprimer le produit</DialogTitle>
+        <DialogContent>
+          <Typography variant="subtitle2" color="primary" gutterBottom>
+            {selectedProduct?.name} ({selectedProduct?.code})
+          </Typography>
+          <TextField
+            fullWidth
+            label="Raison de la suppression (optionnel)"
+            value={deletionReason}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDeletionReason(e.target.value)}
+            multiline
+            rows={3}
+            margin="normal"
+            placeholder="Ex: Produit périmé, fin de série..."
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleDeleteProduct} color="error" variant="contained">
+            Supprimer
+          </Button>
+        </DialogActions>
+      </Dialog>
 
-            <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <h3 className="font-semibold text-slate-800 mb-3">Valeur par catégorie</h3>
-              {(stats as StockStats).category_breakdown && (stats as StockStats).category_breakdown!.length > 0 ? (
-                (stats as StockStats).category_breakdown!.slice(0, 5).map((cat, idx) => (
-                  <div key={idx} className="flex justify-between text-sm py-2 border-b border-slate-100 last:border-0">
-                    <span>{cat.category}</span>
-                    <span className="font-medium">{formatPrice(cat.total_selling_value)}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-slate-400 text-center py-4">Aucune donnée</p>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rapport Rotation */}
-      {activeReport === 'turnover' && turnover && (
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border border-slate-200 p-6">
-            <div className="text-center mb-6">
-              <h3 className="text-2xl font-bold text-medical">{(turnover as StockTurnover).average_turnover_rate}</h3>
-              <p className="text-sm text-slate-500">Taux de rotation moyen</p>
-              <p className="text-xs text-slate-400">Sur {(turnover as StockTurnover).period_days} jours</p>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Produit</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-500">Vendus</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-500">Stock moyen</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium text-slate-500">Rotation</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(turnover as StockTurnover).products.slice(0, 10).map((product) => (
-                    <tr key={product.product_id} className="border-b border-slate-100">
-                      <td className="px-4 py-2">
-                        <div className="font-medium text-sm">{product.product_name}</div>
-                        <div className="text-xs text-slate-400">{product.product_code}</div>
-                       </td>
-                      <td className="px-4 py-2 text-right">{product.total_sold}</td>
-                      <td className="px-4 py-2 text-right">{product.avg_inventory}</td>
-                      <td className="px-4 py-2 text-right font-medium">
-                        <span className={product.turnover_rate > 2 ? 'text-green-600' : product.turnover_rate > 1 ? 'text-amber-600' : 'text-red-600'}>
-                          {product.turnover_rate}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rapport Valorisation */}
-      {activeReport === 'valuation' && valuation && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
-              <p className="text-sm text-slate-500 mb-2">Valeur d'achat</p>
-              <p className="text-2xl font-bold text-slate-800">{formatPrice((valuation as StockValuation).total_purchase_value || 0)}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
-              <p className="text-sm text-slate-500 mb-2">Valeur de vente</p>
-              <p className="text-2xl font-bold text-green-600">{formatPrice((valuation as StockValuation).total_selling_value || 0)}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
-              <p className="text-sm text-slate-500 mb-2">Marge potentielle</p>
-              <p className="text-2xl font-bold text-medical">{formatPrice((valuation as StockValuation).total_profit || 0)}</p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 p-6">
-            <h3 className="font-semibold text-slate-800 mb-4">Détail par catégorie</h3>
-            <div className="h-64 flex items-center justify-center text-slate-400">
-              Graphique de valorisation (à implémenter avec Recharts)
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rapport Expiration */}
-      {activeReport === 'expiry' && expiryAlerts && (
-        <div className="space-y-6">
-          {/* Statistiques expiration */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-              <p className="text-sm text-slate-500">Expirés</p>
-              <p className="text-2xl font-bold text-red-600">{(expiryAlerts as any).counts?.expired || 0}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-              <p className="text-sm text-slate-500">Expiration critique (7j)</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {(expiryAlerts as any).expiring_soon?.filter((a: ExpiryAlert) => a.days_remaining <= 7).length || 0}
-              </p>
-            </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-4 text-center">
-              <p className="text-sm text-slate-500">Expiration proche (30j)</p>
-              <p className="text-2xl font-bold text-amber-600">
-                {(expiryAlerts as any).expiring_soon?.filter((a: ExpiryAlert) => a.days_remaining <= 30 && a.days_remaining > 7).length || 0}
-              </p>
-            </div>
-          </div>
-
-          {/* Produits expirés */}
-          {(expiryAlerts as any).expired && (expiryAlerts as any).expired.length > 0 && (
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="bg-red-50 px-4 py-3 border-b border-red-200">
-                <h3 className="font-semibold text-red-700">Produits expirés</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Produit</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Code</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Date expiration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(expiryAlerts as any).expired.map((alert: ExpiryAlert) => (
-                      <tr key={alert.product_id} className="border-b border-slate-100">
-                        <td className="px-4 py-2 text-sm">{alert.product_name}</td>
-                        <td className="px-4 py-2 text-sm text-slate-500">{alert.product_id}</td>
-                        <td className="px-4 py-2 text-sm text-red-600">
-                          {format(new Date(alert.expiry_date), 'dd/MM/yyyy', { locale: fr })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Produits expirant bientôt */}
-          {(expiryAlerts as any).expiring_soon && (expiryAlerts as any).expiring_soon.length > 0 && (
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="bg-amber-50 px-4 py-3 border-b border-amber-200">
-                <h3 className="font-semibold text-amber-700">Produits expirant bientôt</h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Produit</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Code</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-slate-500">Date expiration</th>
-                      <th className="px-4 py-2 text-right text-xs font-medium text-slate-500">Jours restants</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(expiryAlerts as any).expiring_soon.map((alert: ExpiryAlert) => (
-                      <tr key={alert.product_id} className="border-b border-slate-100">
-                        <td className="px-4 py-2 text-sm">{alert.product_name}</td>
-                        <td className="px-4 py-2 text-sm text-slate-500">{alert.product_id}</td>
-                        <td className="px-4 py-2 text-sm">
-                          {format(new Date(alert.expiry_date), 'dd/MM/yyyy', { locale: fr })}
-                        </td>
-                        <td className={`px-4 py-2 text-right font-medium ${
-                          alert.days_remaining <= 7 ? 'text-red-600' : 'text-amber-600'
-                        }`}>
-                          {alert.days_remaining} jours
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {(!(expiryAlerts as any).expired || (expiryAlerts as any).expired.length === 0) && 
-           (!(expiryAlerts as any).expiring_soon || (expiryAlerts as any).expiring_soon.length === 0) && (
-            <div className="bg-green-50 rounded-xl p-8 text-center">
-              <Package size={48} className="mx-auto mb-3 text-green-500 opacity-50" />
-              <p className="text-green-700">Aucun produit avec problème d'expiration</p>
-              <p className="text-sm text-green-600 mt-1">Tous les produits sont valides</p>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+      {/* Category Dialog */}
+      <Dialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>🏷️ Attribuer une catégorie</DialogTitle>
+        <DialogContent>
+          <Typography variant="subtitle2" color="primary" gutterBottom>
+            {productToCategorize?.name}
+          </Typography>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Catégorie</InputLabel>
+            <Select
+              value={selectedCategoryId}
+              onChange={(e: SelectChangeEvent) => setSelectedCategoryId(e.target.value)}
+              label="Catégorie"
+            >
+              <MenuItem value="">-- Choisir une catégorie --</MenuItem>
+              {categories.map(cat => (
+                <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCategoryDialogOpen(false)}>Annuler</Button>
+          <Button onClick={handleUpdateCategory} variant="contained" disabled={!selectedCategoryId}>
+            Valider
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }

@@ -1,4 +1,4 @@
-// modules/sales/FactureManager.tsx
+// modules/sales/views/FactureManager.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Search,
@@ -17,18 +17,20 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  Building2
+  Building2,
+  Receipt
 } from 'lucide-react';
-import { useAuthStore } from '@/store/useAuthStore';
 import { useToast } from '@/hooks/useToast';
 import { Toaster } from '@/components/ui/Toaster';
 import api from '@/api/client';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { formatDate, formatDateTime } from '@/utils/formatters';
+import { FacturePrinter } from './FacturePrinter';
 
-// Types
-interface SaleItem {
+// ==================== TYPES ====================
+
+export interface SaleItem {
   id: string;
   product_id: string;
   product_name: string;
@@ -36,41 +38,107 @@ interface SaleItem {
   quantity: number;
   unit_price: number;
   discount_percent: number;
-  subtotal: number;
   discount_amount: number;
+  subtotal: number;
   total: number;
+  tva_rate?: number;
+  tva_amount?: number;
+  batch_number?: string;
+  expiry_date?: string;
 }
 
-interface Sale {
+export interface Sale {
   id: string;
   reference: string;
-  receipt_number: string;
+  invoice_number: string;
   customer_name: string;
+  customer_phone?: string;
   seller_name: string;
-  seller_id: string;
+  created_by?: string;
   payment_method: string;
+  reference_payment?: string;
   subtotal: number;
   total_discount: number;
   total_tva: number;
   total_amount: number;
-  status: 'pending' | 'completed' | 'cancelled' | 'refunded';
+  status: 'pending' | 'completed' | 'cancelled';
   created_at: string;
+  updated_at?: string;
   items?: SaleItem[];
   branch_id?: string;
-  branch_name?: string;
+  pharmacy_id?: string;
+  pharmacy_name?: string;
+  is_credit?: boolean;
+  credit_due_date?: string;
+  notes?: string;
+  validated_by?: string;
+  validated_at?: string;
+  cancelled_at?: string;
+  cancelled_by?: string;
+  cancel_reason?: string;
+  receipt_path?: string;
+  receiptNumber?: string;
+  cashierName?: string;
+  posName?: string;
+  sessionNumber?: string;
+  timestamp?: number;
 }
 
-interface SalesResponse {
+interface SalesListResponse {
   items: Sale[];
   total: number;
   page: number;
   size: number;
   has_more: boolean;
+  page_size: number;
 }
 
 interface SaleDetailResponse {
-  sale: Sale;
+  id: string;
+  tenant_id: string;
+  pharmacy_id: string;
+  pharmacy_name: string;
+  branch_id: string;
+  reference: string;
+  customer_id?: string;
+  customer_name: string;
+  customer_phone?: string;
+  created_by: string;
+  seller_name: string;
+  created_at: string;
+  updated_at: string;
+  payment_method: string;
+  reference_payment?: string;
+  payment_date?: string;
+  is_credit: boolean;
+  credit_due_date?: string;
+  guarantee_deposit: number;
+  guarantor_name?: string;
+  guarantor_phone?: string;
+  global_discount: number;
+  notes?: string;
+  subtotal: number;
+  total_discount: number;
+  total_tva: number;
+  total_amount: number;
+  status: 'pending' | 'completed' | 'cancelled';
+  validated_by?: string;
+  validated_at?: string;
+  cancelled_at?: string;
+  cancelled_by?: string;
+  cancel_reason?: string;
+  invoice_number: string;
+  receipt_path?: string;
   items: SaleItem[];
+}
+
+interface Seller {
+  id: string;
+  email: string;
+  nom_complet?: string;
+  name?: string;
+  role: string;
+  is_active: boolean;
 }
 
 interface BranchInfo {
@@ -106,17 +174,88 @@ interface RefundData {
   refund_amount: number;
 }
 
+interface FacturePrinterSaleData {
+  id: string;
+  receiptNumber: string;
+  items: Array<{
+    id: string;
+    name: string;
+    price: number;
+    quantity: number;
+    code?: string;
+    discount_percent?: number;
+    discount_amount?: number;
+  }>;
+  subtotal: number;
+  total: number;
+  discount_percent: number;
+  discount_amount: number;
+  paymentMethod: string;
+  timestamp: number;
+  cashierName: string;
+  cashierId?: string;
+  posName: string;
+  branchId?: string;
+  branchName?: string;
+  sessionNumber: string;
+  customerName?: string;
+  pharmacy_id?: string;  
+}
+
+// Helper pour convertir une vente au format attendu par FacturePrinter
+const convertToFacturePrinterSale = (sale: Sale | SaleDetailResponse): FacturePrinterSaleData => {
+  const timestamp = typeof sale.created_at === 'string' 
+    ? new Date(sale.created_at).getTime() 
+    : Date.now();
+  
+  const items = (sale.items || []).map(item => ({
+    id: item.id,
+    name: item.product_name,
+    price: item.unit_price,
+    quantity: item.quantity,
+    code: item.product_code,
+    discount_percent: item.discount_percent,
+    discount_amount: item.discount_amount
+  }));
+  
+  const subtotal = sale.subtotal;
+  const discountAmount = sale.total_discount;
+  const discountPercent = subtotal > 0 ? (discountAmount / subtotal) * 100 : 0;
+  
+  return {
+    id: sale.id,
+    receiptNumber: sale.invoice_number || sale.reference,
+    items: items,
+    subtotal: subtotal,
+    total: sale.total_amount,
+    discount_percent: discountPercent,
+    discount_amount: discountAmount,
+    paymentMethod: sale.payment_method,
+    timestamp: timestamp,
+    cashierName: sale.seller_name,
+    cashierId: sale.created_by,
+    posName: sale.pharmacy_name || 'Caisse Principale',
+    branchId: sale.branch_id,
+    branchName: sale.pharmacy_name,
+    sessionNumber: `SESS-${new Date(timestamp).toISOString().slice(0, 10)}`,
+    customerName: sale.customer_name,
+    pharmacy_id: sale.pharmacy_id  
+  };
+};
+
+// ==================== COMPOSANT PRINCIPAL ====================
+
 const FactureManager: React.FC = () => {
-  const { user } = useAuthStore();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { toast } = useToast();
   
+  // États
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalSales, setTotalSales] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
   
-  // Branche de l'utilisateur connecté
   const [userBranch, setUserBranch] = useState<BranchInfo | null>(null);
   const [branchLoading, setBranchLoading] = useState(true);
   
@@ -131,36 +270,47 @@ const FactureManager: React.FC = () => {
     status: ''
   });
   
-  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-  const [saleDetails, setSaleDetails] = useState<SaleItem[]>([]);
+  const [selectedSale, setSelectedSale] = useState<SaleDetailResponse | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [saleToPrint, setSaleToPrint] = useState<FacturePrinterSaleData | null>(null);
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundData, setRefundData] = useState<RefundData | null>(null);
   const [refundProcessing, setRefundProcessing] = useState(false);
-  const [sellers, setSellers] = useState<{ id: string; name: string }[]>([]);
-  
+  const [sellers, setSellers] = useState<Seller[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Récupérer la branche de l'utilisateur connecté
+  // ==================== FONCTIONS D'APPEL API ====================
+
+  // Récupérer le profil de l'utilisateur connecté
+  const loadUserProfile = useCallback(async () => {
+    try {
+      const response = await api.get('/users/me/profile');
+      return response.data;
+    } catch (error) {
+      console.error('Erreur chargement profil:', error);
+      return null;
+    }
+  }, []);
+
+  // Récupérer la branche de l'utilisateur
   const loadUserBranch = useCallback(async () => {
     setBranchLoading(true);
     try {
-      const userId = user?.id;
-      if (!userId) {
-        console.error('Utilisateur non connecté');
+      const profile = await loadUserProfile();
+      
+      if (!profile) {
+        console.error('Impossible de charger le profil');
         setBranchLoading(false);
         return;
       }
-
-      // Récupérer les détails de l'utilisateur pour obtenir sa branche
-      const userResponse = await api.get(`/users/${userId}`);
-      const userData = userResponse.data;
       
-      const branchId = userData.branch_id || userData.current_branch_id;
+      const branchId = profile.active_branch_id || profile.branch_id || profile.current_branch_id;
       
       if (!branchId) {
+        console.warn('Aucune branche associée à cet utilisateur');
         toast({ 
-          title: "Erreur", 
+          title: "Attention", 
           description: "Aucune branche associée à votre compte", 
           variant: "destructive" 
         });
@@ -168,29 +318,32 @@ const FactureManager: React.FC = () => {
         return;
       }
       
-      // Récupérer les détails de la branche
       const branchResponse = await api.get(`/branches/${branchId}`);
       const branchData = branchResponse.data;
       
       setUserBranch({
         id: branchData.id,
         name: branchData.name,
-        code: branchData.code,
+        code: branchData.code || branchData.name.substring(0, 4).toUpperCase(),
         is_active: branchData.is_active,
         parent_pharmacy_id: branchData.parent_pharmacy_id
       });
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erreur chargement branche:', error);
+      let errorMessage = "Impossible de charger les informations de votre branche";
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      }
       toast({ 
         title: "Erreur", 
-        description: "Impossible de charger les informations de votre branche", 
+        description: errorMessage, 
         variant: "destructive" 
       });
     } finally {
       setBranchLoading(false);
     }
-  }, [user, toast]);
+  }, [toast, loadUserProfile]);
 
   // Calculer la plage de dates en fonction de la période
   const getDateRange = useCallback((): { startDate: string; endDate: string } => {
@@ -262,10 +415,11 @@ const FactureManager: React.FC = () => {
     }
   }, [filters]);
 
-  // Charger les ventes de la branche
+  // Charger les ventes (GET /sales)
   const loadSales = useCallback(async () => {
     if (!userBranch?.id) {
-      console.warn('Aucune branche disponible');
+      console.warn('⚠️ Aucune branche disponible');
+      setLoading(false);
       return;
     }
     
@@ -274,84 +428,146 @@ const FactureManager: React.FC = () => {
       const { startDate, endDate } = getDateRange();
       const branchId = userBranch.id;
       
-      const params: any = {
+      const params: Record<string, any> = {
         branch_id: branchId,
-        page: currentPage,
+        skip: (currentPage - 1) * pageSize,
         limit: pageSize,
         start_date: startDate,
         end_date: endDate,
+        sort_by: "created_at",
+        sort_order: "desc"
       };
       
-      if (filters.sellerId) params.seller_id = filters.sellerId;
+      if (filters.sellerId) params.user_id = filters.sellerId;
       if (filters.paymentMethod) params.payment_method = filters.paymentMethod;
       if (filters.status) params.status = filters.status;
       if (searchTerm) params.search = searchTerm;
       
-      const response = await api.get<SalesResponse>('/sales', { params });
+      console.log('📡 Requête GET /sales:', { params });
       
-      // Ajouter le nom de la branche aux ventes si nécessaire
-      const salesWithBranch = (response.data.items || []).map(sale => ({
+      const response = await api.get<SalesListResponse>('/sales', { params });
+      const data = response.data;
+      
+      let items: Sale[] = [];
+      let total = 0;
+      
+      if (data && data.items && Array.isArray(data.items)) {
+        items = data.items;
+        total = data.total || items.length;
+      } else if (Array.isArray(data)) {
+        items = data;
+        total = items.length;
+      } else {
+        console.warn('Format de réponse non reconnu:', data);
+      }
+      
+      // Correction: s'assurer que status est du bon type
+      const salesWithBranch: Sale[] = items.map(sale => ({
         ...sale,
-        branch_name: userBranch.name
+        branch_name: userBranch.name,
+        status: sale.status === 'pending' || sale.status === 'completed' || sale.status === 'cancelled'
+          ? sale.status
+          : 'completed' as const
       }));
       
-      setSales(salesWithBranch);
-      setTotalSales(response.data.total || 0);
+      console.log(`✅ ${salesWithBranch.length} ventes chargées (total: ${total})`);
       
-    } catch (error) {
-      console.error('Erreur chargement ventes:', error);
-      toast({ title: "Erreur", description: "Impossible de charger les ventes", variant: "destructive" });
+      setSales(salesWithBranch);
+      setTotalSales(total);
+      
+    } catch (error: any) {
+      console.error('❌ Erreur chargement ventes:', error);
+      
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        toast({ 
+          title: "Timeout", 
+          description: "Le serveur met trop de temps à répondre. Vérifiez votre connexion.", 
+          variant: "destructive" 
+        });
+      } else {
+        let errorMessage = "Impossible de charger les ventes";
+        if (error.response?.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.response?.data?.message) {
+          errorMessage = error.response.data.message;
+        }
+        
+        toast({ 
+          title: "Erreur", 
+          description: errorMessage, 
+          variant: "destructive" 
+        });
+      }
+      setSales([]);
+      setTotalSales(0);
     } finally {
       setLoading(false);
     }
   }, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
 
-  // Charger la liste des vendeurs de la branche
-
+  // Charger la liste des vendeurs (GET /users/sellers)
   const loadSellers = useCallback(async () => {
-      if (!userBranch?.id) return;
+    if (!userBranch?.id) return;
+    
+    try {
+      const branchId = userBranch.id;
+      const response = await api.get('/users/sellers', { 
+        params: { branch_id: branchId } 
+      });
       
-      try {
-          const branchId = userBranch.id;
-          // L'URL doit correspondre à l'endpoint que nous avons créé
-          const response = await api.get('/users/sellers', { 
-              params: { branch_id: branchId } 
-          });
-          // La réponse peut être dans response.data.users ou response.data.sellers
-          const sellersList = response.data.users || response.data.sellers || [];
-          setSellers(sellersList);
-      } catch (error) {
-          console.error('Erreur chargement vendeurs:', error);
-          // Ne pas bloquer l'affichage si les vendeurs ne chargent pas
+      let sellersList: Seller[] = [];
+      
+      if (response.data?.users && Array.isArray(response.data.users)) {
+        sellersList = response.data.users;
+      } else if (response.data?.sellers && Array.isArray(response.data.sellers)) {
+        sellersList = response.data.sellers;
+      } else if (Array.isArray(response.data)) {
+        sellersList = response.data;
+      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        sellersList = response.data.data;
       }
+      
+      setSellers(sellersList);
+      
+    } catch (error) {
+      console.error('Erreur chargement vendeurs:', error);
+    }
   }, [userBranch]);
 
-  // Charger les détails d'une vente
+  // Charger les détails d'une vente (GET /sales/{id})
   const loadSaleDetails = useCallback(async (saleId: string) => {
     try {
+      console.log('📡 Chargement détails vente:', saleId);
       const response = await api.get<SaleDetailResponse>(`/sales/${saleId}`);
       const data = response.data;
       
-      if (data.sale) {
-        setSelectedSale({
-          ...data.sale,
-          branch_name: userBranch?.name
-        });
-        setSaleDetails(data.items || []);
-      } else if (data.items) {
-        setSelectedSale({
-          ...(sales.find(s => s.id === saleId) || {}),
-          branch_name: userBranch?.name
-        } as Sale);
-        setSaleDetails(data.items);
-      }
+      // S'assurer que les items sont présents et que status est du bon type
+      const detailData: SaleDetailResponse = {
+        ...data,
+        items: data.items || [],
+        status: data.status === 'pending' || data.status === 'completed' || data.status === 'cancelled'
+          ? data.status
+          : 'completed'
+      };
       
+      setSelectedSale(detailData);
       setShowDetailModal(true);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erreur chargement détails:', error);
-      toast({ title: "Erreur", description: "Impossible de charger les détails de la vente", variant: "destructive" });
+      let errorMessage = "Impossible de charger les détails de la vente";
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      }
+      toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
     }
-  }, [sales, toast, userBranch]);
+  }, [toast]);
+
+  // Ouvrir le modal d'impression avec FacturePrinter
+  const openPrintModal = useCallback((sale: Sale) => {
+    const saleForPrint = convertToFacturePrinterSale(sale);
+    setSaleToPrint(saleForPrint);
+    setShowPrintModal(true);
+  }, []);
 
   // Annuler/Rembourser une vente
   const handleRefund = useCallback(async () => {
@@ -360,14 +576,16 @@ const FactureManager: React.FC = () => {
     setRefundProcessing(true);
     try {
       await api.post('/sales/refund', {
-        ...refundData,
+        sale_id: selectedSale.id,
         branch_id: userBranch.id,
-        sale_id: selectedSale.id
+        reason: refundData.reason,
+        refund_amount: refundData.refund_amount,
+        items: refundData.items
       });
       
       toast({
         title: "Succès",
-        description: `La vente ${selectedSale.receipt_number} a été annulée et le stock a été remis`,
+        description: `La vente ${selectedSale.invoice_number} a été annulée et le stock a été remis`,
         variant: "success"
       });
       
@@ -375,13 +593,19 @@ const FactureManager: React.FC = () => {
       setRefundData(null);
       setSelectedSale(null);
       
-      loadSales();
+      await loadSales();
       
     } catch (error: any) {
       console.error('Erreur remboursement:', error);
+      let errorMessage = "Impossible d'annuler la vente";
+      if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
       toast({
         title: "Erreur",
-        description: error.response?.data?.message || "Impossible d'annuler la vente",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
@@ -391,7 +615,34 @@ const FactureManager: React.FC = () => {
 
   // Ouvrir le modal de remboursement
   const openRefundModal = (sale: Sale) => {
-    setSelectedSale(sale);
+    const detailData: SaleDetailResponse = {
+      id: sale.id,
+      tenant_id: '',
+      pharmacy_id: sale.pharmacy_id || '',
+      pharmacy_name: sale.pharmacy_name || '',
+      branch_id: sale.branch_id || '',
+      reference: sale.reference,
+      customer_name: sale.customer_name,
+      customer_phone: sale.customer_phone,
+      created_by: sale.created_by || '',
+      seller_name: sale.seller_name,
+      created_at: sale.created_at,
+      updated_at: sale.updated_at || sale.created_at,
+      payment_method: sale.payment_method,
+      is_credit: sale.is_credit || false,
+      guarantee_deposit: 0,
+      global_discount: sale.total_discount,
+      subtotal: sale.subtotal,
+      total_discount: sale.total_discount,
+      total_tva: sale.total_tva,
+      total_amount: sale.total_amount,
+      status: sale.status,
+      invoice_number: sale.invoice_number,
+      items: sale.items || []
+    };
+    
+    setSelectedSale(detailData);
+    
     setRefundData({
       saleId: sale.id,
       items: [],
@@ -401,13 +652,79 @@ const FactureManager: React.FC = () => {
     setShowRefundModal(true);
   };
 
-  // Exporter en PDF
-  const exportToPDF = async (sale: Sale) => {
+  // ==================== FONCTIONS D'EXPORT (fallback si pas de FacturePrinter) ====================
+
+  const exportToPDF = async (sale: Sale | FacturePrinterSaleData) => {
     try {
-      let items = sale.items;
-      if (!items) {
+      let items: SaleItem[] = [];
+      let saleData: any = sale;
+      
+      // Si c'est un FacturePrinterSaleData, construire les données
+      if ('receiptNumber' in sale && !('created_at' in sale)) {
+        // C'est un FacturePrinterSaleData
+        const element = document.createElement('div');
+        element.className = 'p-6 font-mono';
+        element.style.backgroundColor = 'white';
+        element.style.width = '300px';
+        
+        element.innerHTML = `
+          <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
+            <p>Branche: ${userBranch?.code || ''}</p>
+            <p>N° ${sale.receiptNumber}</p>
+            <p>${formatDateTime(sale.timestamp)}</p>
+          </div>
+          <div style="margin-bottom: 10px;">
+            <p>Client: ${sale.customerName || 'Passager'}</p>
+            <p>Vendeur: ${sale.cashierName}</p>
+            <p>Paiement: ${sale.paymentMethod === 'cash' ? 'Espèces' : 
+              sale.paymentMethod === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
+          </div>
+          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+          <div style="margin-bottom: 10px;">
+            ${sale.items.map((item: any) => `
+              <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                <span>${item.name} x${item.quantity}</span>
+                <span>${(item.price * item.quantity).toFixed(2)} FC</span>
+              </div>
+              ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
+            `).join('')}
+          </div>
+          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+          <div style="display: flex; justify-content: space-between; font-weight: bold;">
+            <span>TOTAL</span>
+            <span>${sale.total.toFixed(2)} FC</span>
+          </div>
+          <div style="text-align: center; margin-top: 20px; font-size: 10px;">
+            <p>Merci de votre visite !</p>
+          </div>
+        `;
+        
+        document.body.appendChild(element);
+        const canvas = await html2canvas(element, { scale: 2 });
+        document.body.removeChild(element);
+        
+        const pdf = new jsPDF({
+          unit: 'mm',
+          format: [80, canvas.height * 80 / canvas.width],
+          orientation: 'portrait'
+        });
+        
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
+        pdf.save(`facture-${sale.receiptNumber}.pdf`);
+        
+        toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
+        return;
+      }
+      
+      // Sinon, c'est un Sale normal
+      if (!sale.items || sale.items.length === 0) {
         const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${sale.id}`);
         items = detailsResponse.data.items || [];
+        saleData = { ...sale, ...detailsResponse.data, items };
+      } else {
+        items = sale.items;
       }
       
       const element = document.createElement('div');
@@ -419,17 +736,18 @@ const FactureManager: React.FC = () => {
         <div style="text-align: center; margin-bottom: 20px;">
           <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
           <p>Branche: ${userBranch?.code || ''}</p>
-          <p>N° ${sale.receipt_number}</p>
-          <p>${formatDateTime(sale.created_at)}</p>
+          <p>N° ${saleData.invoice_number || saleData.reference}</p>
+          <p>${formatDateTime(saleData.created_at)}</p>
         </div>
         <div style="margin-bottom: 10px;">
-          <p>Client: ${sale.customer_name || 'Passager'}</p>
-          <p>Vendeur: ${sale.seller_name}</p>
-          <p>Paiement: ${sale.payment_method === 'cash' ? 'Espèces' : sale.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
+          <p>Client: ${saleData.customer_name || 'Passager'}</p>
+          <p>Vendeur: ${saleData.seller_name}</p>
+          <p>Paiement: ${saleData.payment_method === 'cash' ? 'Espèces' : 
+            saleData.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
         </div>
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="margin-bottom: 10px;">
-          ${items.map(item => `
+          ${items.map((item: SaleItem) => `
             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
               <span>${item.product_name} x${item.quantity}</span>
               <span>${item.total.toFixed(2)} FC</span>
@@ -440,7 +758,7 @@ const FactureManager: React.FC = () => {
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="display: flex; justify-content: space-between; font-weight: bold;">
           <span>TOTAL</span>
-          <span>${sale.total_amount.toFixed(2)} FC</span>
+          <span>${saleData.total_amount.toFixed(2)} FC</span>
         </div>
         <div style="text-align: center; margin-top: 20px; font-size: 10px;">
           <p>Merci de votre visite !</p>
@@ -459,7 +777,7 @@ const FactureManager: React.FC = () => {
       
       const imgData = canvas.toDataURL('image/png');
       pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
-      pdf.save(`facture-${sale.receipt_number}.pdf`);
+      pdf.save(`facture-${saleData.invoice_number || saleData.reference}.pdf`);
       
       toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
     } catch (error) {
@@ -468,70 +786,21 @@ const FactureManager: React.FC = () => {
     }
   };
 
-  // Imprimer
-  const handlePrint = (sale: Sale) => {
-    const printWindow = window.open('', '_blank', 'width=400,height=600');
-    if (!printWindow) return;
-    
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Facture #${sale.receipt_number}</title>
-          <style>
-            body { font-family: monospace; margin: 0; padding: 10px; width: 300px; }
-            .text-center { text-align: center; }
-            .border-dashed { border-top: 1px dashed #ccc; margin: 10px 0; }
-            .flex { display: flex; justify-content: space-between; }
-            .font-bold { font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="text-center">
-            <h2>${userBranch?.name || 'Pharmacie'}</h2>
-            <p>Branche: ${userBranch?.code || ''}</p>
-            <p>N° ${sale.receipt_number}</p>
-            <p>${formatDateTime(sale.created_at)}</p>
-          </div>
-          <div>
-            <p>Client: ${sale.customer_name || 'Passager'}</p>
-            <p>Vendeur: ${sale.seller_name}</p>
-          </div>
-          <div class="border-dashed"></div>
-          <div>
-            ${sale.items?.map(item => `
-              <div class="flex">
-                <span>${item.product_name} x${item.quantity}</span>
-                <span>${item.total.toFixed(2)} FC</span>
-              </div>
-            `).join('') || '<p>Chargement...</p>'}
-          </div>
-          <div class="border-dashed"></div>
-          <div class="flex font-bold">
-            <span>TOTAL</span>
-            <span>${sale.total_amount.toFixed(2)} FC</span>
-          </div>
-          <div class="text-center" style="margin-top: 20px;">
-            <p>Merci de votre visite !</p>
-          </div>
-        </body>
-      </html>
-    `);
-    
-    printWindow.document.close();
-    printWindow.print();
-  };
+  // ==================== STATISTIQUES ====================
 
-  // Statistiques par utilisateur
   const getUserStats = useMemo(() => {
     const stats: Record<string, { total: number; count: number; name: string }> = {};
     
     sales.forEach(sale => {
-      if (!stats[sale.seller_id]) {
-        stats[sale.seller_id] = { total: 0, count: 0, name: sale.seller_name };
+      const sellerId = sale.created_by || sale.seller_name;
+      const sellerName = sale.seller_name;
+      const key = sellerId || sellerName;
+      
+      if (!stats[key]) {
+        stats[key] = { total: 0, count: 0, name: sellerName };
       }
-      stats[sale.seller_id].total += sale.total_amount;
-      stats[sale.seller_id].count += 1;
+      stats[key].total += sale.total_amount;
+      stats[key].count += 1;
     });
     
     return Object.entries(stats).map(([id, data]) => ({
@@ -542,22 +811,21 @@ const FactureManager: React.FC = () => {
     }));
   }, [sales]);
 
-  // Statistiques globales
   const globalStats = useMemo(() => {
     const total = sales.reduce((sum, sale) => sum + sale.total_amount, 0);
     const average = sales.length > 0 ? total / sales.length : 0;
     const completed = sales.filter(s => s.status === 'completed').length;
-    const cancelled = sales.filter(s => s.status === 'cancelled' || s.status === 'refunded').length;
+    const cancelled = sales.filter(s => s.status === 'cancelled').length;
     
     return { total, average, completed, cancelled, count: sales.length };
   }, [sales]);
 
-  // Charger la branche au montage
+  // ==================== EFFETS ====================
+
   useEffect(() => {
     loadUserBranch();
   }, [loadUserBranch]);
 
-  // Charger les ventes et vendeurs quand la branche est disponible
   useEffect(() => {
     if (userBranch?.id) {
       loadSales();
@@ -565,12 +833,14 @@ const FactureManager: React.FC = () => {
     }
   }, [loadSales, loadSellers, userBranch]);
 
-  // Recharger quand les filtres changent
   useEffect(() => {
     if (userBranch?.id) {
       loadSales();
     }
-  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, filters.sellerId, filters.paymentMethod, filters.status, userBranch]);
+  }, [currentPage, filters.period, filters.selectedMonth, filters.selectedYear, 
+      filters.sellerId, filters.paymentMethod, filters.status, userBranch]);
+
+  // ==================== RENDU ====================
 
   const totalPages = Math.ceil(totalSales / pageSize);
 
@@ -580,14 +850,23 @@ const FactureManager: React.FC = () => {
         return <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700"><CheckCircle size={10} /> Complétée</span>;
       case 'cancelled':
         return <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"><X size={10} /> Annulée</span>;
-      case 'refunded':
-        return <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700"><ArrowLeftRight size={10} /> Remboursée</span>;
-      default:
+      case 'pending':
         return <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700"><Clock size={10} /> En attente</span>;
+      default:
+        return <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">{status}</span>;
     }
   };
 
-  // Affichage du chargement de la branche
+  const getPaymentMethodLabel = (method: string) => {
+    switch (method) {
+      case 'cash': return 'Espèces';
+      case 'mobile_money': return 'Mobile Money';
+      case 'bank_transfer': return 'Virement';
+      case 'check': return 'Chèque';
+      default: return method || 'N/A';
+    }
+  };
+
   if (branchLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center dark:bg-slate-900">
@@ -599,7 +878,6 @@ const FactureManager: React.FC = () => {
     );
   }
 
-  // Affichage si aucune branche
   if (!userBranch) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center dark:bg-slate-900">
@@ -618,7 +896,6 @@ const FactureManager: React.FC = () => {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">
       <Toaster />
       
-      {/* Header */}
       <header className="border-b border-slate-200 bg-white px-6 py-4 dark:border-slate-700 dark:bg-slate-800">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -634,8 +911,9 @@ const FactureManager: React.FC = () => {
             </div>
           </div>
           <button
-            onClick={loadSales}
+            onClick={() => loadSales()}
             className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300"
+            disabled={loading}
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             Actualiser
@@ -721,7 +999,9 @@ const FactureManager: React.FC = () => {
             >
               <option value="">Tous les vendeurs</option>
               {sellers.map(seller => (
-                <option key={seller.id} value={seller.id}>{seller.name}</option>
+                <option key={seller.id} value={seller.id}>
+                  {seller.nom_complet || seller.name || seller.email}
+                </option>
               ))}
             </select>
             
@@ -733,7 +1013,8 @@ const FactureManager: React.FC = () => {
               <option value="">Tous les modes</option>
               <option value="cash">Espèces</option>
               <option value="mobile_money">Mobile Money</option>
-              <option value="account">Compte</option>
+              <option value="bank_transfer">Virement</option>
+              <option value="check">Chèque</option>
             </select>
             
             <select
@@ -743,8 +1024,8 @@ const FactureManager: React.FC = () => {
             >
               <option value="">Tous les statuts</option>
               <option value="completed">Complétées</option>
+              <option value="pending">En attente</option>
               <option value="cancelled">Annulées</option>
-              <option value="refunded">Remboursées</option>
             </select>
             
             <div className="relative flex-1 min-w-50">
@@ -878,7 +1159,7 @@ const FactureManager: React.FC = () => {
                   sales.map((sale) => (
                     <tr key={sale.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                       <td className="px-4 py-3 text-sm font-medium text-slate-800 dark:text-slate-200">
-                        {sale.receipt_number || sale.reference}
+                        {sale.invoice_number || sale.reference}
                       </td>
                       <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">
                         {formatDate(sale.created_at)}
@@ -890,7 +1171,7 @@ const FactureManager: React.FC = () => {
                         {sale.seller_name}
                       </td>
                       <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">
-                        {sale.payment_method === 'cash' ? 'Espèces' : sale.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}
+                        {getPaymentMethodLabel(sale.payment_method)}
                       </td>
                       <td className="px-4 py-3 text-right text-sm font-semibold text-green-600">
                         {sale.total_amount.toLocaleString()} FC
@@ -906,18 +1187,18 @@ const FactureManager: React.FC = () => {
                             <Eye size={16} />
                           </button>
                           <button
-                            onClick={() => exportToPDF(sale)}
+                            onClick={() => openPrintModal(sale)}
                             className="rounded-lg p-1.5 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/30"
+                            title="Imprimer la facture"
+                          >
+                            <Printer size={16} />
+                          </button>
+                          <button
+                            onClick={() => exportToPDF(sale)}
+                            className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700"
                             title="Exporter PDF"
                           >
                             <Download size={16} />
-                          </button>
-                          <button
-                            onClick={() => handlePrint(sale)}
-                            className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700"
-                            title="Imprimer"
-                          >
-                            <Printer size={16} />
                           </button>
                           {sale.status === 'completed' && (
                             <button
@@ -937,7 +1218,6 @@ const FactureManager: React.FC = () => {
             </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 dark:border-slate-700">
               <button
@@ -962,13 +1242,13 @@ const FactureManager: React.FC = () => {
         </div>
       </main>
 
-      {/* Modal Détails */}
+      {/* Modal Détails avec impression via FacturePrinter */}
       {showDetailModal && selectedSale && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl dark:bg-slate-800">
             <div className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
               <h3 className="text-lg font-black text-slate-800 dark:text-slate-200">
-                Détails de la vente #{selectedSale.receipt_number}
+                Détails de la vente #{selectedSale.invoice_number || selectedSale.reference}
               </h3>
               <button
                 onClick={() => setShowDetailModal(false)}
@@ -982,7 +1262,7 @@ const FactureManager: React.FC = () => {
               <div className="bg-slate-50 rounded-xl p-3 dark:bg-slate-700/50">
                 <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
                   <Building2 size={14} />
-                  <span>Branche: {selectedSale.branch_name || userBranch.name}</span>
+                  <span>Pharmacie: {selectedSale.pharmacy_name || userBranch.name}</span>
                 </div>
               </div>
 
@@ -994,6 +1274,9 @@ const FactureManager: React.FC = () => {
                 <div>
                   <p className="text-xs text-slate-400">Client</p>
                   <p className="font-medium">{selectedSale.customer_name || 'Passager'}</p>
+                  {selectedSale.customer_phone && (
+                    <p className="text-xs text-slate-400">{selectedSale.customer_phone}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-xs text-slate-400">Vendeur</p>
@@ -1001,33 +1284,53 @@ const FactureManager: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400">Mode de paiement</p>
-                  <p className="font-medium">
-                    {selectedSale.payment_method === 'cash' ? 'Espèces' : 
-                     selectedSale.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}
-                  </p>
+                  <p className="font-medium">{getPaymentMethodLabel(selectedSale.payment_method)}</p>
+                  {selectedSale.reference_payment && (
+                    <p className="text-xs text-slate-400">Réf: {selectedSale.reference_payment}</p>
+                  )}
                 </div>
               </div>
+              
+              {selectedSale.is_credit && (
+                <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-900/20">
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    💳 Vente à crédit - Échéance: {selectedSale.credit_due_date ? formatDate(selectedSale.credit_due_date) : 'Non spécifiée'}
+                  </p>
+                  {selectedSale.guarantee_deposit > 0 && (
+                    <p className="text-xs text-amber-600">Acompte: {selectedSale.guarantee_deposit.toLocaleString()} FC</p>
+                  )}
+                </div>
+              )}
               
               <div className="border-t border-slate-100 dark:border-slate-700" />
               
               <div>
                 <h4 className="mb-3 text-sm font-bold text-slate-700 dark:text-slate-300">Produits vendus</h4>
                 <div className="space-y-2">
-                  {saleDetails.map((item) => (
-                    <div key={item.id} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
-                      <div>
-                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{item.product_name}</p>
-                        <p className="text-xs text-slate-400">Code: {item.product_code}</p>
-                        {item.discount_percent > 0 && (
-                          <p className="text-xs text-green-600">Remise: {item.discount_percent}%</p>
-                        )}
+                  {selectedSale.items && selectedSale.items.length > 0 ? (
+                    selectedSale.items.map((item) => (
+                      <div key={item.id} className="flex items-center justify-between rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                        <div>
+                          <p className="text-sm font-medium text-slate-800 dark:text-slate-200">{item.product_name}</p>
+                          <p className="text-xs text-slate-400">Code: {item.product_code}</p>
+                          {item.discount_percent > 0 && (
+                            <p className="text-xs text-green-600">Remise: {item.discount_percent}%</p>
+                          )}
+                          {item.batch_number && (
+                            <p className="text-xs text-slate-400">Lot: {item.batch_number}</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm text-slate-600 dark:text-slate-400">
+                            {item.quantity} x {item.unit_price.toLocaleString()} FC
+                          </p>
+                          <p className="text-sm font-semibold text-green-600">{item.total.toLocaleString()} FC</p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm text-slate-600 dark:text-slate-400">{item.quantity} x {item.unit_price.toFixed(2)} FC</p>
-                        <p className="text-sm font-semibold text-green-600">{item.total.toFixed(2)} FC</p>
-                      </div>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-400 text-center py-4">Aucun produit trouvé</p>
+                  )}
                 </div>
               </div>
               
@@ -1036,48 +1339,80 @@ const FactureManager: React.FC = () => {
               <div className="space-y-1 text-right">
                 <div className="flex justify-between text-sm">
                   <span className="text-slate-500">Sous-total:</span>
-                  <span>{selectedSale.subtotal.toFixed(2)} FC</span>
+                  <span>{selectedSale.subtotal.toLocaleString()} FC</span>
                 </div>
                 {selectedSale.total_discount > 0 && (
                   <div className="flex justify-between text-sm text-green-600">
                     <span>Remise:</span>
-                    <span>-{selectedSale.total_discount.toFixed(2)} FC</span>
+                    <span>-{selectedSale.total_discount.toLocaleString()} FC</span>
                   </div>
                 )}
                 {selectedSale.total_tva > 0 && (
                   <div className="flex justify-between text-sm">
                     <span>TVA:</span>
-                    <span>{selectedSale.total_tva.toFixed(2)} FC</span>
+                    <span>{selectedSale.total_tva.toLocaleString()} FC</span>
                   </div>
                 )}
                 <div className="flex justify-between border-t border-slate-200 pt-2 text-lg font-black">
                   <span>TOTAL:</span>
-                  <span className="text-blue-600">{selectedSale.total_amount.toFixed(2)} FC</span>
+                  <span className="text-blue-600">{selectedSale.total_amount.toLocaleString()} FC</span>
                 </div>
               </div>
+
+              {selectedSale.notes && (
+                <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-700/50">
+                  <p className="text-xs text-slate-400">Notes</p>
+                  <p className="text-sm">{selectedSale.notes}</p>
+                </div>
+              )}
             </div>
             
             <div className="border-t border-slate-100 p-4 dark:border-slate-700">
               <div className="flex justify-end gap-3">
                 <button
-                  onClick={() => exportToPDF(selectedSale)}
+                  onClick={() => {
+                    const saleForPrint = convertToFacturePrinterSale(selectedSale);
+                    setSaleToPrint(saleForPrint);
+                    setShowPrintModal(true);
+                    setShowDetailModal(false);
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  <Printer size={16} />
+                  Imprimer la facture
+                </button>
+                <button
+                  onClick={() => {
+                    const saleForExport = convertToFacturePrinterSale(selectedSale);
+                    exportToPDF(saleForExport);
+                  }}
                   className="flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
                 >
                   <Download size={16} />
                   PDF
-                </button>
-                <button
-                  onClick={() => handlePrint(selectedSale)}
-                  className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
-                >
-                  <Printer size={16} />
-                  Imprimer
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Modal d'impression avec FacturePrinter */}
+      {showPrintModal && saleToPrint && (
+      <FacturePrinter
+        sale={saleToPrint}
+        pharmacyId={userBranch?.parent_pharmacy_id || saleToPrint.pharmacy_id}  // ✅ utilise pharmacy_id au lieu de pharmacyId
+        onClose={() => {
+          setShowPrintModal(false);
+          setSaleToPrint(null);
+        }}
+        onPrint={() => {
+          setShowPrintModal(false);
+          setSaleToPrint(null);
+          toast({ title: "Succès", description: "Impression lancée", variant: "success" });
+        }}
+      />
+    )}
 
       {/* Modal Remboursement */}
       {showRefundModal && selectedSale && refundData && (
@@ -1101,10 +1436,10 @@ const FactureManager: React.FC = () => {
             <div className="p-4 space-y-4">
               <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-900/20">
                 <p className="text-sm text-amber-700 dark:text-amber-400">
-                  Vente #{selectedSale.receipt_number} du {formatDate(selectedSale.created_at)}
+                  Vente #{selectedSale.invoice_number || selectedSale.reference} du {formatDate(selectedSale.created_at)}
                 </p>
                 <p className="text-sm font-bold text-amber-800 dark:text-amber-300">
-                  Montant: {selectedSale.total_amount.toFixed(2)} FC
+                  Montant: {selectedSale.total_amount.toLocaleString()} FC
                 </p>
               </div>
               
@@ -1155,15 +1490,5 @@ const FactureManager: React.FC = () => {
     </div>
   );
 };
-
-// Icon Receipt
-const Receipt = ({ size, className }: { size: number; className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" />
-    <path d="M8 7h8" />
-    <path d="M8 12h8" />
-    <path d="M8 17h5" />
-  </svg>
-);
 
 export default FactureManager;
