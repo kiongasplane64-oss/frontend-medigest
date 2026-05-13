@@ -1,4 +1,4 @@
-// src/pages/Returns/components/StatsCards.tsx
+// src/modules/finance/views/StatsCards.tsx
 import React from 'react';
 import {
   Grid,
@@ -112,9 +112,10 @@ const StatsCards: React.FC<StatsCardsProps> = ({ stats, period, loading = false 
         </Typography>
       </Box>
       
+      {/* CORRIGÉ : Syntaxe MUI v6 standard - utilisation des props xs, sm, md directement */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
         {cards.map((card, index) => (
-          <Grid size={{ xs: 12, sm: 6, md: 3 }} key={index}>
+          <Grid xs={12} sm={6} md={3} key={index}>
             <Paper
               elevation={2}
               sx={{

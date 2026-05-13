@@ -29,7 +29,7 @@ import Expense from '@/modules/finance/depense/Expense';
 import DebtPage from '@/modules/finance/dette/DebtPage';
 import ReturnPage from '@/modules/finance/views/returnPage';
 import SubscriptionPage from '@/pages/SubscriptionPage';
-import SupplierCreditPage from '@/modules/finance/capital/SupplierCreditPage';
+///import SupplierCreditPage from '@/modules/finance/capital/SupplierCreditPage';
 import PaymentPage from '@/pages/PaymentPage';
 import PaymentSuccessPage from '@/pages/PaymentSuccessPage';
 import ConfigViewWrapper from '@/modules/core/ConfigViewWrapper';
@@ -346,10 +346,6 @@ export default function AppRoutes() {
       
       <Route path="/profits" element={<AdminLayout />}>
         <Route index element={<ProfitAnalysis />} />
-      </Route>
-      
-      <Route path="/suppliers" element={<AdminLayout />}>
-        <Route index element={<SupplierCreditPage />} />
       </Route>
 
       <Route path="/corbeil" element={<AdminLayout />}>
