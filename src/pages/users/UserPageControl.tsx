@@ -48,7 +48,7 @@ import {
 } from '@mui/icons-material';
 import api from '@/api/client';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
+
 
 // ============================================================
 // TYPES
@@ -596,7 +596,7 @@ const UserPageControl: React.FC = () => {
                     <TableCell>
                       {user.last_login ? (
                         <Typography variant="caption" color="text.secondary">
-                          {format(new Date(user.last_login), 'dd MMM yyyy HH:mm', { locale: fr })}
+                          {format(new Date(user.last_login), 'dd MMM yyyy HH:mm')}
                         </Typography>
                       ) : (
                         <Typography variant="caption" color="text.secondary">Jamais</Typography>

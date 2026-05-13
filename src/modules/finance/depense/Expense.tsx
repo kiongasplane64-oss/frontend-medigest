@@ -19,7 +19,7 @@ import {
   subMonths,
   parseISO,
 } from '@/utils/date';
-import { fr } from 'date-fns/locale';
+
 
 // UI Components
 import {
@@ -479,12 +479,12 @@ const Expense: React.FC = () => {
         };
       case 'week':
         return {
-          start_date: format(startOfWeek(now, { locale: fr }), 'yyyy-MM-dd'),
-          end_date: format(endOfWeek(now, { locale: fr }), 'yyyy-MM-dd'),
+          start_date: format(startOfWeek(now), 'yyyy-MM-dd'),
+          end_date: format(endOfWeek(now), 'yyyy-MM-dd'),
         };
       case 'last_week':
-        const lastWeekStart = startOfWeek(subWeeks(now, 1), { locale: fr });
-        const lastWeekEnd = endOfWeek(subWeeks(now, 1), { locale: fr });
+        const lastWeekStart = startOfWeek(subWeeks(now, 1));
+        const lastWeekEnd = endOfWeek(subWeeks(now, 1));
         return {
           start_date: format(lastWeekStart, 'yyyy-MM-dd'),
           end_date: format(lastWeekEnd, 'yyyy-MM-dd'),
@@ -775,7 +775,7 @@ const Expense: React.FC = () => {
   const chartData = useMemo(() => {
     if (!summaryData?.daily_trend) return [];
     return summaryData.daily_trend.map((item: { date: string; total: number; count: number }) => ({
-      date: format(parseISO(item.date), 'dd/MM', { locale: fr }),
+      date: format(parseISO(item.date), 'dd/MM'),
       total: item.total,
       count: item.count,
     }));
@@ -1420,7 +1420,7 @@ const Expense: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Date</p>
-                  <p>{format(parseISO(selectedExpense.expense_date), 'dd MMMM yyyy', { locale: fr })}</p>
+                  <p>{format(parseISO(selectedExpense.expense_date), 'dd MMMM yyyy')}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Statut</p>

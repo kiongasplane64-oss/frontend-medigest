@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Search, Edit2, Save, X, Package, Upload, Download } from 'lucide-react';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import { inventoryService } from '@/services/inventoryService';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 import type { Product, ProductCreate, Category } from '@/types/inventory.types';
@@ -344,7 +343,7 @@ export default function InitialStockView({ pharmacyId, branchId }: InitialStockV
                       )}
                       {product.expiry_date && (
                         <div className="text-xs text-slate-400">
-                          Exp: {format(new Date(product.expiry_date), 'dd/MM/yyyy', { locale: fr })}
+                          Exp: {format(new Date(product.expiry_date), 'dd/MM/yyyy')}
                         </div>
                       )}
                     </div>

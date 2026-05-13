@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, CheckCircle, XCircle, Clock, Package, Truck } from 'lucide-react';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import { inventoryService } from '@/services/inventoryService';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 import type { Product, RestockRequest } from '@/types/inventory.types';
@@ -279,7 +278,7 @@ export default function ApproView({ pharmacyId }: ApproViewProps) {
                           <span>Prix unitaire: {formatPrice(request.purchase_price)}</span>
                         )}
                         {request.expiry_date && (
-                          <span>Exp: {format(new Date(request.expiry_date), 'dd/MM/yyyy', { locale: fr })}</span>
+                          <span>Exp: {format(new Date(request.expiry_date), 'dd/MM/yyyy')}</span>
                         )}
                       </div>
                       {request.notes && (
@@ -287,7 +286,7 @@ export default function ApproView({ pharmacyId }: ApproViewProps) {
                       )}
                       {request.requested_at && (
                         <p className="text-xs text-slate-400 mt-2">
-                          Demandé le {format(new Date(request.requested_at), 'dd/MM/yyyy HH:mm', { locale: fr })}
+                          Demandé le {format(new Date(request.requested_at), 'dd/MM/yyyy HH:mm')}
                         </p>
                       )}
                     </div>

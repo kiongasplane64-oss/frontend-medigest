@@ -44,8 +44,9 @@ import {
 } from '@mui/icons-material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import { fr } from 'date-fns/locale';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import dayjs, { Dayjs } from 'dayjs';
+import 'dayjs/locale/fr';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
@@ -184,8 +185,8 @@ interface StockReportData {
 }
 
 interface FilterState {
-  startDate: Date | null;
-  endDate: Date | null;
+  startDate: Dayjs | null; 
+  endDate: Dayjs | null; 
   branchId: string;
   userId: string;
   productId: string;
@@ -273,8 +274,8 @@ const StockReport: React.FC = () => {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [filters, setFilters] = useState<FilterState>({
-    startDate: new Date(new Date().setDate(new Date().getDate() - 30)),
-    endDate: new Date(),
+    startDate:  dayjs().subtract(30, 'day'),
+    endDate: dayjs(),
     branchId: '',
     userId: '',
     productId: '',
@@ -666,8 +667,8 @@ const StockReport: React.FC = () => {
   // Réinitialiser les filtres
   const resetFilters = useCallback(() => {
     setFilters({
-      startDate: new Date(new Date().setDate(new Date().getDate() - 30)),
-      endDate: new Date(),
+      startDate: dayjs().subtract(30, 'day'),  
+      endDate: dayjs(),  
       branchId: '',
       userId: '',
       productId: '',
@@ -953,7 +954,7 @@ const StockReport: React.FC = () => {
   }
 
   return (
-    <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={fr}>
+    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="fr">
       <Box sx={{ p: 3, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
         {/* En-tête */}
         <Paper sx={{ p: 3, mb: 3, borderRadius: 2 }}>
@@ -1083,7 +1084,7 @@ const StockReport: React.FC = () => {
               <DatePicker
                 label="Date début"
                 value={filters.startDate}
-                onChange={(date: Date | null) => setFilters(prev => ({ ...prev, startDate: date }))}
+                onChange={(newValue: Dayjs | null) => setFilters(prev => ({ ...prev, startDate: newValue }))}
                 slotProps={{ textField: { fullWidth: true, size: 'small' } }}
               />
             </MuiGrid>
@@ -1091,9 +1092,10 @@ const StockReport: React.FC = () => {
               <DatePicker
                 label="Date fin"
                 value={filters.endDate}
-                onChange={(date: Date | null) => setFilters(prev => ({ ...prev, endDate: date }))}
+                onChange={(newValue: Dayjs | null) => setFilters(prev => ({ ...prev, endDate: newValue }))}
                 slotProps={{ textField: { fullWidth: true, size: 'small' } }}
               />
+              
             </MuiGrid>
             <MuiGrid item xs={12} sm={6} md={3}>
               <FormControl fullWidth size="small">

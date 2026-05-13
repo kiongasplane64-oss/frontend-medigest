@@ -44,8 +44,9 @@ import {
   Close as CloseIcon,
 } from '@mui/icons-material';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
-import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import { fr } from 'date-fns/locale';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import 'dayjs/locale/fr';
+
 import { format } from '@/utils/date';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '@/api/client';
@@ -334,7 +335,7 @@ const ReturnPage: React.FC = () => {
   
   // ==================== Rendu ====================
   return (
-    <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={fr}>
+    <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="fr">
       <Box sx={{ p: 3 }}>
         {/* En-tête */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>

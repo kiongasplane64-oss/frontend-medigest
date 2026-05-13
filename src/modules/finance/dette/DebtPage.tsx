@@ -40,7 +40,7 @@ import {
   CreditCard as CreditCardIcon,
 } from '@mui/icons-material';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
+
 
 // ============================================
 // TYPES
@@ -643,7 +643,7 @@ export default function DebtPage() {
                   </Box>
                   
                   <Typography variant="caption" color="textSecondary">
-                    Échéance: {format(new Date(debt.due_date), 'dd/MM/yyyy', { locale: fr })}
+                    Échéance: {format(new Date(debt.due_date), 'dd/MM/yyyy')}
                   </Typography>
                   
                   <Button
@@ -726,7 +726,7 @@ export default function DebtPage() {
                     />
                   </TableCell>
                   <TableCell>
-                    {format(new Date(debt.due_date), 'dd/MM/yyyy', { locale: fr })}
+                    {format(new Date(debt.due_date), 'dd/MM/yyyy')}
                   </TableCell>
                   <TableCell align="center">
                     {debt.status !== 'paid' && (
@@ -778,7 +778,7 @@ export default function DebtPage() {
                    payment.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}
                 </TableCell>
                 <TableCell>
-                  {format(new Date(payment.payment_date), 'dd MMM yyyy HH:mm', { locale: fr })}
+                  {format(new Date(payment.payment_date), 'dd MMM yyyy HH:mm')}
                 </TableCell>
                 <TableCell>{payment.received_by}</TableCell>
               </TableRow>

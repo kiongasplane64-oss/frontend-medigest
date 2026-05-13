@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import { TrendingUp, TrendingDown, ArrowLeftRight, Package, Download, Filter, X, Building2 } from 'lucide-react';
 import { inventoryService } from '@/services/inventoryService';
 import type { StockMovement } from '@/types/inventory.types';
@@ -254,7 +253,7 @@ export default function StockMovementView({ pharmacyId, branchId }: StockMovemen
               return (
                 <tr key={movement.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                   <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">
-                    {movement.created_at && format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm', { locale: fr })}
+                    {movement.created_at && format(new Date(movement.created_at), 'dd/MM/yyyy HH:mm')}
                    </td>
                   <td className="px-4 py-3">
                     <div className="font-medium text-sm text-slate-800">{movement.product_name || '-'}</div>

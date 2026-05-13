@@ -26,7 +26,7 @@ import {
   PlayArrow as ProcessIcon,
 } from '@mui/icons-material';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
+
 
 interface ReturnDetailsProps {
   returnObj: any;
@@ -125,12 +125,12 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <CalendarIcon fontSize="small" color="action" />
                 <Typography variant="body2">
-                  Demandé le: {format(new Date(returnObj.requested_date), 'dd MMMM yyyy à HH:mm', { locale: fr })}
+                  Demandé le: {format(new Date(returnObj.requested_date), 'dd MMMM yyyy à HH:mm')}
                 </Typography>
               </Box>
               {returnObj.processed_date && (
                 <Typography variant="body2" color="success.main">
-                  Traité le: {format(new Date(returnObj.processed_date), 'dd MMMM yyyy à HH:mm', { locale: fr })}
+                  Traité le: {format(new Date(returnObj.processed_date), 'dd MMMM yyyy à HH:mm')}
                 </Typography>
               )}
             </Stack>

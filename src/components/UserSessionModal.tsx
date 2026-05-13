@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { getUserSessionHistory, UserSession } from '@/services/userService';
 import { format, subDays, startOfMonth, endOfMonth } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -315,7 +314,7 @@ const UserSessionModal: React.FC<UserSessionModalProps> = ({
                         <div className="flex items-center gap-2 mb-1">
                           <Calendar size={12} className="text-slate-400" />
                           <span className="text-xs font-medium">
-                            {format(new Date(session.login_time), 'EEEE d MMMM yyyy', { locale: fr })}
+                            {format(new Date(session.login_time), 'EEEE d MMMM yyyy')}
                           </span>
                         </div>
                         <div className="flex items-center gap-4">

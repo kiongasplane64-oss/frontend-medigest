@@ -8,7 +8,6 @@ import {
   BarChart3, Settings, Shield, UserPlus
 } from 'lucide-react';
 import { format, formatDistanceToNow, differenceInDays } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import api from '@/api/client';
@@ -450,8 +449,8 @@ export default function TenantDetailsModal({ tenant, onClose }: TenantDetailsMod
                     <InfoCard
                       icon={<Calendar size={14} />}
                       title="Date de création"
-                      value={format(new Date(tenant.created_at), 'dd MMMM yyyy', { locale: fr })}
-                      subtitle={formatDistanceToNow(new Date(tenant.created_at), { addSuffix: true, locale: fr })}
+                      value={format(new Date(tenant.created_at), 'dd MMMM yyyy')}
+                      subtitle={formatDistanceToNow(new Date(tenant.created_at), { addSuffix: true})}
                     />
                     {tenant.adresse && (
                       <InfoCard
@@ -464,7 +463,7 @@ export default function TenantDetailsModal({ tenant, onClose }: TenantDetailsMod
                       <InfoCard
                         icon={<Clock size={14} />}
                         title="Fin de période d'essai"
-                        value={format(new Date(tenant.trial_end_date), 'dd MMMM yyyy', { locale: fr })}
+                        value={format(new Date(tenant.trial_end_date), 'dd MMMM yyyy')}
                         subtitle={
                           trialDaysRemaining !== null && trialDaysRemaining >= 0
                             ? `${trialDaysRemaining} jours restants`

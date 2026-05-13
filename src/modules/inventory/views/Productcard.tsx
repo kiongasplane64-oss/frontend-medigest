@@ -1,7 +1,6 @@
 // components/inventory/ProductCard.tsx
 import { Edit2, Eye, Package, AlertTriangle, Calendar } from 'lucide-react';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import type { Product, SalesType } from '@/types/inventory.types';
 
 interface ProductCardProps {
@@ -120,7 +119,7 @@ export default function ProductCard({
           }`}>
             <Calendar size={12} />
             <span>
-              Expire le {format(new Date(product.expiry_date), 'dd/MM/yyyy', { locale: fr })}
+              Expire le {format(new Date(product.expiry_date), 'dd/MM/yyyy')}
               {expiringSoon && !isExpired && ' (bientôt)'}
             </span>
           </div>

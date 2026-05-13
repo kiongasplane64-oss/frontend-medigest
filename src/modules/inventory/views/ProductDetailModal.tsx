@@ -2,7 +2,6 @@
 import { useState, useMemo } from 'react';
 import { X, Edit2, Package, Calendar, Tag, Building2, AlertTriangle } from 'lucide-react';
 import { format, differenceInDays } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import type { Product, SalesType } from '@/types/inventory.types';
 import StockAlertBadge from './StockAlertBadge';
 
@@ -66,7 +65,7 @@ export default function ProductDetailModal({
     }
     return { 
       status: 'valid', 
-      text: `Expire le ${format(expiryDate, 'dd MMMM yyyy', { locale: fr })}`, 
+      text: `Expire le ${format(expiryDate, 'dd MMMM yyyy')}`, 
       color: 'text-slate-500',
       daysLeft
     };
@@ -358,7 +357,7 @@ export default function ProductDetailModal({
                 </div>
                 <div className="text-center">
                   <p className="text-2xl font-bold text-slate-800">
-                    {product.last_sale_date ? format(new Date(product.last_sale_date), 'dd/MM/yyyy', { locale: fr }) : '-'}
+                    {product.last_sale_date ? format(new Date(product.last_sale_date), 'dd/MM/yyyy') : '-'}
                   </p>
                   <p className="text-xs text-slate-400">Dernière vente</p>
                 </div>

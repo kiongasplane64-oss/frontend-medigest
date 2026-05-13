@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, XCircle, Package, Receipt } from 'lucide-react';
 import { format } from '@/utils/date';
-import { fr } from 'date-fns/locale';
 import { inventoryService } from '@/services/inventoryService';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';
 import type { Product } from '@/types/inventory.types';
@@ -199,7 +198,7 @@ export default function AchatView({ pharmacyId }: AchatViewProps) {
                       <span className="text-sm text-slate-500">- {purchase.supplier}</span>
                     </div>
                     <div className="flex flex-wrap gap-3 mt-1 text-sm text-slate-500">
-                      <span>Date: {format(new Date(purchase.purchase_date), 'dd/MM/yyyy', { locale: fr })}</span>
+                      <span>Date: {format(new Date(purchase.purchase_date), 'dd/MM/yyyy')}</span>
                       <span>Total: {formatPrice(purchase.total_amount)}</span>
                       <span>{purchase.items.length} produit(s)</span>
                     </div>
