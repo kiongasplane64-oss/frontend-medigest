@@ -244,6 +244,12 @@ interface PieChartData {
   count: number;
 }
 
+// Type pour les props du label personnalisé
+interface CustomLabelProps {
+  name?: string;
+  percent?: number;
+}
+
 interface ApiError {
   response?: {
     data?: {
@@ -785,6 +791,38 @@ const Expense: React.FC = () => {
     }));
   }, [summaryData]);
 
+  // Label personnalisé pour le graphique en camembert
+  const renderCustomLabel = ({ name, percent }: CustomLabelProps) => {
+    if (!name || percent === undefined) return '';
+    return `${name}: ${(percent * 100).toFixed(0)}%`;
+  };
+
+  // Formateur personnalisé pour le tooltip - Version compatible avec Recharts
+  const currencyFormatter = (value: any, _name: any): string => {
+  if (value === undefined || value === null) return `0 ${primaryCurrency}`;
+  
+  if (typeof value === 'number') {
+    return `${value.toLocaleString()} ${primaryCurrency}`;
+  }
+  if (typeof value === 'string') {
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return `0 ${primaryCurrency}`;
+    return `${numValue.toLocaleString()} ${primaryCurrency}`;
+  }
+  if (Array.isArray(value)) {
+    const firstValue = value[0];
+    if (typeof firstValue === 'number') {
+      return `${firstValue.toLocaleString()} ${primaryCurrency}`;
+    }
+    if (typeof firstValue === 'string') {
+      const numValue = parseFloat(firstValue);
+      if (!isNaN(numValue)) return `${numValue.toLocaleString()} ${primaryCurrency}`;
+    }
+  }
+  
+  return `0 ${primaryCurrency}`;
+};
+
   // Rendu du badge de statut
   const renderStatusBadge = (status: string) => {
     const config = STATUS_CONFIG[status];
@@ -796,12 +834,6 @@ const Expense: React.FC = () => {
         {config.label}
       </Badge>
     );
-  };
-
-  // Formateur personnalisé pour le tooltip
-  const currencyFormatter = (value: number | undefined) => {
-    if (value === undefined) return `${0} ${primaryCurrency}`;
-    return `${value.toLocaleString()} ${primaryCurrency}`;
   };
 
   // Rendu du filtre par période
@@ -1632,7 +1664,7 @@ const Expense: React.FC = () => {
                 cx="50%"
                 cy="50%"
                 labelLine={false}
-                label={({ name, percent }: { name: string; percent: number }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
+                label={renderCustomLabel}
                 outerRadius={80}
                 fill="#8884d8"
                 dataKey="value"
