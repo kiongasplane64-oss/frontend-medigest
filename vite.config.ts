@@ -128,7 +128,9 @@ export default defineConfig({
       'date-fns', 
       'zustand', 
       'mobx', 
-      'mobx-react-lite'
+      'mobx-react-lite',
+      'dayjs', 
+      'dayjs/plugin/*'
     ],
     exclude: ['workbox-window', 'workbox-core', 'workbox-routing']
   },

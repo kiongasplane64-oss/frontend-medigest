@@ -1,63 +1,191 @@
 // src/utils/date.ts
-import * as dateFns from 'date-fns';
+import dayjs from 'dayjs';
+import 'dayjs/locale/fr';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+import duration from 'dayjs/plugin/duration';
+import weekOfYear from 'dayjs/plugin/weekOfYear';
+import quarterOfYear from 'dayjs/plugin/quarterOfYear';
 
-// Réexporter toutes les fonctions nécessaires
-export const format = dateFns.format;
-export const subDays = dateFns.subDays;
-export const startOfMonth = dateFns.startOfMonth;
-export const endOfMonth = dateFns.endOfMonth;
-export const differenceInDays = dateFns.differenceInDays;
-export const formatDistanceToNow = dateFns.formatDistanceToNow;
-export const parseISO = dateFns.parseISO;
-export const isAfter = dateFns.isAfter;
-export const isBefore = dateFns.isBefore;
-export const differenceInMonths = dateFns.differenceInMonths;
-export const addDays = dateFns.addDays;
-export const addMonths = dateFns.addMonths;
-export const startOfDay = dateFns.startOfDay;
-export const endOfDay = dateFns.endOfDay;
+// Importer les plugins sans les assigner à des variables pour éviter les conflits
+import isTodayPlugin from 'dayjs/plugin/isToday';
+import isYesterdayPlugin from 'dayjs/plugin/isYesterday';
 
-// Fonctions supplémentaires pour Expense.tsx
-export const startOfWeek = dateFns.startOfWeek;
-export const endOfWeek = dateFns.endOfWeek;
-export const startOfYear = dateFns.startOfYear;
-export const endOfYear = dateFns.endOfYear;
-export const subWeeks = dateFns.subWeeks;
-export const subMonths = dateFns.subMonths;
+// Configurer les plugins
+dayjs.extend(relativeTime);
+dayjs.extend(customParseFormat);
+dayjs.extend(duration);
+dayjs.extend(isTodayPlugin);
+dayjs.extend(isYesterdayPlugin);
+dayjs.extend(weekOfYear);
+dayjs.extend(quarterOfYear);
 
-// Autres fonctions utiles qui pourraient être nécessaires
-export const subYears = dateFns.subYears;
-export const addYears = dateFns.addYears;
-export const startOfQuarter = dateFns.startOfQuarter;
-export const endOfQuarter = dateFns.endOfQuarter;
-export const differenceInHours = dateFns.differenceInHours;
-export const differenceInMinutes = dateFns.differenceInMinutes;
-export const differenceInSeconds = dateFns.differenceInSeconds;
-export const isToday = dateFns.isToday;
-export const isYesterday = dateFns.isYesterday;
-export const isTomorrow = dateFns.isTomorrow;
-export const isPast = dateFns.isPast;
-export const isFuture = dateFns.isFuture;
-export const formatDistance = dateFns.formatDistance;
-export const formatRelative = dateFns.formatRelative;
-export const compareAsc = dateFns.compareAsc;
-export const compareDesc = dateFns.compareDesc;
-export const eachDayOfInterval = dateFns.eachDayOfInterval;
-export const eachMonthOfInterval = dateFns.eachMonthOfInterval;
-export const eachWeekOfInterval = dateFns.eachWeekOfInterval;
-export const eachYearOfInterval = dateFns.eachYearOfInterval;
-export const getDate = dateFns.getDate;
-export const getDay = dateFns.getDay;
-export const getDaysInMonth = dateFns.getDaysInMonth;
-export const getHours = dateFns.getHours;
-export const getMinutes = dateFns.getMinutes;
-export const getMonth = dateFns.getMonth;
-export const getYear = dateFns.getYear;
-export const setDate = dateFns.setDate;
-export const setMonth = dateFns.setMonth;
-export const setYear = dateFns.setYear;
-export const isValid = dateFns.isValid;
-export const toDate = dateFns.toDate;
+// Définir la locale française
+dayjs.locale('fr');
 
-// Exporter par défaut pour plus de flexibilité
-export default dateFns;
+// Réexporter les fonctions avec la même API que date-fns
+export const format = (date: Date | string | number, formatStr: string, _options?: { locale?: any }) => {
+  // Ignorer les options de locale puisque dayjs a déjà la locale 'fr' configurée
+  return dayjs(date).format(formatStr);
+};
+
+export const parseISO = (dateString: string) => {
+  return dayjs(dateString).toDate();
+};
+
+export const differenceInDays = (dateLeft: Date | string, dateRight: Date | string) => {
+  return dayjs(dateLeft).diff(dayjs(dateRight), 'day');
+};
+
+export const differenceInMonths = (dateLeft: Date | string, dateRight: Date | string) => {
+  return dayjs(dateLeft).diff(dayjs(dateRight), 'month');
+};
+
+export const differenceInHours = (dateLeft: Date | string, dateRight: Date | string) => {
+  return dayjs(dateLeft).diff(dayjs(dateRight), 'hour');
+};
+
+export const differenceInMinutes = (dateLeft: Date | string, dateRight: Date | string) => {
+  return dayjs(dateLeft).diff(dayjs(dateRight), 'minute');
+};
+
+export const differenceInSeconds = (dateLeft: Date | string, dateRight: Date | string) => {
+  return dayjs(dateLeft).diff(dayjs(dateRight), 'second');
+};
+
+export const addDays = (date: Date | string | number, amount: number) => {
+  return dayjs(date).add(amount, 'day').toDate();
+};
+
+export const addMonths = (date: Date | string | number, amount: number) => {
+  return dayjs(date).add(amount, 'month').toDate();
+};
+
+export const addYears = (date: Date | string | number, amount: number) => {
+  return dayjs(date).add(amount, 'year').toDate();
+};
+
+export const subDays = (date: Date | string | number, amount: number) => {
+  return dayjs(date).subtract(amount, 'day').toDate();
+};
+
+export const subWeeks = (date: Date | string | number, amount: number) => {
+  return dayjs(date).subtract(amount, 'week').toDate();
+};
+
+export const subMonths = (date: Date | string | number, amount: number) => {
+  return dayjs(date).subtract(amount, 'month').toDate();
+};
+
+export const subYears = (date: Date | string | number, amount: number) => {
+  return dayjs(date).subtract(amount, 'year').toDate();
+};
+
+export const startOfDay = (date: Date | string | number) => {
+  return dayjs(date).startOf('day').toDate();
+};
+
+export const endOfDay = (date: Date | string | number) => {
+  return dayjs(date).endOf('day').toDate();
+};
+
+export const startOfWeek = (date: Date | string | number, _options?: { locale?: any }) => {
+  return dayjs(date).startOf('week').toDate();
+};
+
+export const endOfWeek = (date: Date | string | number, _options?: { locale?: any }) => {
+  return dayjs(date).endOf('week').toDate();
+};
+
+export const startOfMonth = (date: Date | string | number) => {
+  return dayjs(date).startOf('month').toDate();
+};
+
+export const endOfMonth = (date: Date | string | number) => {
+  return dayjs(date).endOf('month').toDate();
+};
+
+export const startOfYear = (date: Date | string | number) => {
+  return dayjs(date).startOf('year').toDate();
+};
+
+export const endOfYear = (date: Date | string | number) => {
+  return dayjs(date).endOf('year').toDate();
+};
+
+export const startOfQuarter = (date: Date | string | number) => {
+  return dayjs(date).startOf('quarter').toDate();
+};
+
+export const endOfQuarter = (date: Date | string | number) => {
+  return dayjs(date).endOf('quarter').toDate();
+};
+
+// CORRIGÉ : formatDistanceToNow avec options complètes
+export const formatDistanceToNow = (date: Date | string | number, options?: { addSuffix?: boolean; locale?: any }) => {
+  if (options?.addSuffix) {
+    return dayjs(date).fromNow();
+  }
+  return dayjs(date).fromNow(true);
+};
+
+// CORRIGÉ : formatDistance avec 3 arguments (date, baseDate, options)
+export const formatDistance = (
+  date: Date | string | number, 
+  baseDate: Date | string | number, 
+  options?: { addSuffix?: boolean; locale?: any }
+) => {
+  if (options?.addSuffix) {
+    return dayjs(date).from(dayjs(baseDate));
+  }
+  return dayjs(date).from(dayjs(baseDate), true);
+};
+
+// CORRIGÉ : isToday sans conflit de nom
+export const isToday = (date: Date | string | number) => {
+  return dayjs(date).isToday();
+};
+
+// CORRIGÉ : isYesterday sans conflit de nom
+export const isYesterday = (date: Date | string | number) => {
+  return dayjs(date).isYesterday();
+};
+
+export const isPast = (date: Date | string | number) => {
+  return dayjs(date).isBefore(dayjs());
+};
+
+export const isFuture = (date: Date | string | number) => {
+  return dayjs(date).isAfter(dayjs());
+};
+
+export const isAfter = (date: Date | string | number, dateToCompare: Date | string | number) => {
+  return dayjs(date).isAfter(dayjs(dateToCompare));
+};
+
+export const isBefore = (date: Date | string | number, dateToCompare: Date | string | number) => {
+  return dayjs(date).isBefore(dayjs(dateToCompare));
+};
+
+export const compareAsc = (dateLeft: Date | string | number, dateRight: Date | string | number) => {
+  if (dayjs(dateLeft).isBefore(dayjs(dateRight))) return -1;
+  if (dayjs(dateLeft).isAfter(dayjs(dateRight))) return 1;
+  return 0;
+};
+
+export const compareDesc = (dateLeft: Date | string | number, dateRight: Date | string | number) => {
+  if (dayjs(dateLeft).isAfter(dayjs(dateRight))) return -1;
+  if (dayjs(dateLeft).isBefore(dayjs(dateRight))) return 1;
+  return 0;
+};
+
+export const isValid = (date: any) => {
+  return dayjs(date).isValid();
+};
+
+export const toDate = (date: Date | string | number) => {
+  return dayjs(date).toDate();
+};
+
+// Export par défaut
+export default dayjs;
