@@ -1,6 +1,6 @@
 // sections/OverviewSection.tsx
 import { Activity, Building2, Users, TrendingUp, BarChart, Server, Database, Wifi, HardDrive, AlertCircle } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 
 interface DashboardOverview {
   platform: {

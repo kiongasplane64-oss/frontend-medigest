@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, XCircle, Package, Receipt } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import { inventoryService } from '@/services/inventoryService';
 import { usePharmacyConfig } from '@/hooks/usePharmacyConfig';

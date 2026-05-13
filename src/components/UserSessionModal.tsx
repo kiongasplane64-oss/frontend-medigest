@@ -12,7 +12,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { getUserSessionHistory, UserSession } from '@/services/userService';
-import { format, subDays, startOfMonth, endOfMonth } from 'date-fns';
+import { format, subDays, startOfMonth, endOfMonth } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';

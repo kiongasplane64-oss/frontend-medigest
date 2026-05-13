@@ -47,7 +47,7 @@ import {
   Close as CloseIcon,
 } from '@mui/icons-material';
 import api from '@/api/client';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 
 // ============================================================

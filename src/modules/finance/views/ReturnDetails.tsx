@@ -25,7 +25,7 @@ import {
   Cancel as RejectIcon,
   PlayArrow as ProcessIcon,
 } from '@mui/icons-material';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 
 interface ReturnDetailsProps {

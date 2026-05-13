@@ -1,7 +1,7 @@
 // components/inventory/StockMovementView.tsx
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import { TrendingUp, TrendingDown, ArrowLeftRight, Package, Download, Filter, X, Building2 } from 'lucide-react';
 import { inventoryService } from '@/services/inventoryService';

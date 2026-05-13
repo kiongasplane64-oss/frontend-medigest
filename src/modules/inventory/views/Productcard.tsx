@@ -1,6 +1,6 @@
 // components/inventory/ProductCard.tsx
 import { Edit2, Eye, Package, AlertTriangle, Calendar } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import type { Product, SalesType } from '@/types/inventory.types';
 

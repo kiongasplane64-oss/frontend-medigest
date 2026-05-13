@@ -1,7 +1,7 @@
 // components/inventory/ProductDetailModal.tsx
 import { useState, useMemo } from 'react';
 import { X, Edit2, Package, Calendar, Tag, Building2, AlertTriangle } from 'lucide-react';
-import { format, differenceInDays } from 'date-fns';
+import { format, differenceInDays } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import type { Product, SalesType } from '@/types/inventory.types';
 import StockAlertBadge from './StockAlertBadge';

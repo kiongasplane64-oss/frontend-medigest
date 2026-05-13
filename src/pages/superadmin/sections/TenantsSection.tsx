@@ -6,7 +6,7 @@ import {
   LayoutGrid, List, Eye, AlertCircle, RotateCcw,
   Loader2, MoreVertical, UserCog, Ban, CheckCircle
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format } from '@/utils/date';
 import toast from 'react-hot-toast';
 import api from '@/api/client';
 import CreateTenantModal from '../modals/CreateTenantModal';

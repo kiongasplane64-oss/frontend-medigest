@@ -18,7 +18,7 @@ import {
   subWeeks,
   subMonths,
   parseISO,
-} from 'date-fns';
+} from '@/utils/date';
 import { fr } from 'date-fns/locale';
 
 // UI Components

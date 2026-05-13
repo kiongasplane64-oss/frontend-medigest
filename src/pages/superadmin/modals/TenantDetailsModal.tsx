@@ -7,7 +7,7 @@ import {
   Activity, CreditCard, TrendingUp, FileText, DollarSign,
   BarChart3, Settings, Shield, UserPlus
 } from 'lucide-react';
-import { format, formatDistanceToNow, differenceInDays } from 'date-fns';
+import { format, formatDistanceToNow, differenceInDays } from '@/utils/date';
 import { fr } from 'date-fns/locale';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
