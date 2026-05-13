@@ -996,7 +996,7 @@ const StockReport: React.FC = () => {
 
         {/* Cartes de résumé */}
         <MuiGrid container spacing={3} sx={{ mb: 3 }}>
-          <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+          <MuiGrid item xs={12} sm={6} md={3}>
             <Card sx={{ borderRadius: 2 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1016,7 +1016,7 @@ const StockReport: React.FC = () => {
               </CardContent>
             </Card>
           </MuiGrid>
-          <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+          <MuiGrid item xs={12} sm={6} md={3}>
             <Card sx={{ borderRadius: 2 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1033,7 +1033,7 @@ const StockReport: React.FC = () => {
               </CardContent>
             </Card>
           </MuiGrid>
-          <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+          <MuiGrid item xs={12} sm={6} md={3}>
             <Card sx={{ borderRadius: 2 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1053,7 +1053,7 @@ const StockReport: React.FC = () => {
               </CardContent>
             </Card>
           </MuiGrid>
-          <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+          <MuiGrid item xs={12} sm={6} md={3}>
             <Card sx={{ borderRadius: 2 }}>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1079,7 +1079,7 @@ const StockReport: React.FC = () => {
             Filtres
           </Typography>
           <MuiGrid container spacing={2} sx={{ mt: 1 }}>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <DatePicker
                 label="Date début"
                 value={filters.startDate}
@@ -1087,7 +1087,7 @@ const StockReport: React.FC = () => {
                 slotProps={{ textField: { fullWidth: true, size: 'small' } }}
               />
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <DatePicker
                 label="Date fin"
                 value={filters.endDate}
@@ -1095,7 +1095,7 @@ const StockReport: React.FC = () => {
                 slotProps={{ textField: { fullWidth: true, size: 'small' } }}
               />
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <FormControl fullWidth size="small">
                 <InputLabel>Branche</InputLabel>
                 <Select
@@ -1110,7 +1110,7 @@ const StockReport: React.FC = () => {
                 </Select>
               </FormControl>
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <FormControl fullWidth size="small">
                 <InputLabel>Utilisateur</InputLabel>
                 <Select
@@ -1125,7 +1125,7 @@ const StockReport: React.FC = () => {
                 </Select>
               </FormControl>
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <FormControl fullWidth size="small">
                 <InputLabel>Type Mouvement</InputLabel>
                 <Select
@@ -1143,7 +1143,7 @@ const StockReport: React.FC = () => {
                 </Select>
               </FormControl>
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <FormControl fullWidth size="small">
                 <InputLabel>Grouper par</InputLabel>
                 <Select
@@ -1158,7 +1158,7 @@ const StockReport: React.FC = () => {
                 </Select>
               </FormControl>
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <TextField
                 fullWidth
                 size="small"
@@ -1177,7 +1177,7 @@ const StockReport: React.FC = () => {
                 }}
               />
             </MuiGrid>
-            <MuiGrid size={{ xs: 12, sm: 6, md: 3 }}>
+            <MuiGrid item xs={12} sm={6} md={3}>
               <Button
                 fullWidth
                 variant="outlined"
@@ -1509,19 +1509,19 @@ const StockReport: React.FC = () => {
                     <Box sx={{ p: 2, bgcolor: '#f8f9fa' }}>
                       <Typography variant="h6">{result.product_name}</Typography>
                       <MuiGrid container spacing={2} sx={{ mt: 1 }}>
-                        <MuiGrid size={{ xs: 3 }}>
+                        <MuiGrid item xs={3}>
                           <Typography variant="caption" color="textSecondary">Stock initial</Typography>
                           <Typography variant="h6">{result.initial_stock}</Typography>
                         </MuiGrid>
-                        <MuiGrid size={{ xs: 3 }}>
+                        <MuiGrid item xs={3}>
                           <Typography variant="caption" color="success.main">Synchro OK</Typography>
                           <Typography variant="h6" sx={{ color: 'success.main' }}>{result.synced_quantity}</Typography>
                         </MuiGrid>
-                        <MuiGrid size={{ xs: 3 }}>
+                        <MuiGrid item xs={3}>
                           <Typography variant="caption" color="error.main">Ignoré</Typography>
                           <Typography variant="h6" sx={{ color: 'error.main' }}>{result.ignored_quantity}</Typography>
                         </MuiGrid>
-                        <MuiGrid size={{ xs: 3 }}>
+                        <MuiGrid item xs={3}>
                           <Typography variant="caption" color="textSecondary">Stock restant</Typography>
                           <Typography variant="h6">{result.remaining_stock}</Typography>
                         </MuiGrid>

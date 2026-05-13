@@ -1,4 +1,4 @@
-// src/pages/Returns/components/ReturnDetails.tsx
+// src/modules/finance/views/ReturnDetails.tsx
 import React from 'react';
 import {
   Box,
@@ -83,7 +83,7 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
       
       {/* Informations principales */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 12, md: 6 }}>
+        <Grid item xs={12} md={6}>  {/* Changé de size à item xs/md */}
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Typography variant="subtitle2" color="textSecondary" gutterBottom>
               Informations client
@@ -110,7 +110,7 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
           </Paper>
         </Grid>
         
-        <Grid size={{ xs: 12, md: 6 }}>
+        <Grid item xs={12} md={6}>  {/* Changé de size à item xs/md */}
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Typography variant="subtitle2" color="textSecondary" gutterBottom>
               Détails du retour
@@ -144,7 +144,7 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
           Montants
         </Typography>
         <Grid container spacing={2}>
-          <Grid size={{ xs: 4 }}>
+          <Grid item xs={4}>  {/* Changé de size à item xs */}
             <Typography variant="caption" color="textSecondary">
               Sous-total
             </Typography>
@@ -152,7 +152,7 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
               {returnObj.subtotal?.toLocaleString('fr-FR') || 0} FCFA
             </Typography>
           </Grid>
-          <Grid size={{ xs: 4 }}>
+          <Grid item xs={4}>  {/* Changé de size à item xs */}
             <Typography variant="caption" color="textSecondary">
               Taxes
             </Typography>
@@ -160,7 +160,7 @@ const ReturnDetails: React.FC<ReturnDetailsProps> = ({
               {returnObj.tax_amount?.toLocaleString('fr-FR') || 0} FCFA
             </Typography>
           </Grid>
-          <Grid size={{ xs: 4 }}>
+          <Grid item xs={4}>  {/* Changé de size à item xs */}
             <Typography variant="caption" color="textSecondary">
               Total
             </Typography>

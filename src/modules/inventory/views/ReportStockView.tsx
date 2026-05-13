@@ -457,10 +457,10 @@ export default function ReportStockView() {
         </Typography>
       </Paper>
 
-      {/* Toolbar */}
+      {/* Toolbar - CORRIGÉ : Syntaxe MUI v6 standard */}
       <Paper sx={{ p: 2, mb: 2 }}>
         <Grid container spacing={2}>
-          <Grid size={{ xs: 12, md: 4 }}>
+          <Grid xs={12} md={4}>
             <TextField
               fullWidth
               size="small"
@@ -486,7 +486,7 @@ export default function ReportStockView() {
             />
           </Grid>
 
-          <Grid size={{ xs: 12, sm: 6, md: 2 }}>
+          <Grid xs={12} sm={6} md={2}>
             <FormControl fullWidth size="small">
               <InputLabel>Catégorie</InputLabel>
               <Select
@@ -503,7 +503,7 @@ export default function ReportStockView() {
             </FormControl>
           </Grid>
 
-          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+          <Grid xs={6} sm={3} md={2}>
             <FormControl fullWidth size="small">
               <InputLabel>Trier par</InputLabel>
               <Select
@@ -518,7 +518,7 @@ export default function ReportStockView() {
             </FormControl>
           </Grid>
 
-          <Grid size={{ xs: 6, sm: 3, md: 2 }}>
+          <Grid xs={6} sm={3} md={2}>
             <Button
               fullWidth
               variant="outlined"
@@ -528,7 +528,7 @@ export default function ReportStockView() {
             </Button>
           </Grid>
 
-          <Grid size={{ xs: 12, md: 2 }}>
+          <Grid xs={12} md={2}>
             <Button
               fullWidth
               variant="contained"
@@ -543,7 +543,7 @@ export default function ReportStockView() {
         </Grid>
       </Paper>
 
-      {/* Global Summary */}
+      {/* Global Summary - CORRIGÉ : Syntaxe MUI v6 standard */}
       {reportData && (
         <Paper sx={{ p: 3, mb: 2 }}>
           <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -551,7 +551,7 @@ export default function ReportStockView() {
             Résumé global
           </Typography>
           <Grid container spacing={2}>
-            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+            <Grid xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E3F2FD' }}>
                 <CardContent>
                   <InventoryIcon color="primary" />
@@ -560,7 +560,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+            <Grid xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#FFF3E0' }}>
                 <CardContent>
                   <InventoryIcon color="warning" />
@@ -569,7 +569,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+            <Grid xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E8F5E9' }}>
                 <CardContent>
                   <MoneyIcon color="success" />
@@ -578,7 +578,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
+            <Grid xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E8EAF6' }}>
                 <CardContent>
                   <MoneyIcon color="info" />
@@ -587,7 +587,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid size={{ xs: 12, sm: 8, md: 4 }}>
+            <Grid xs={12} sm={8} md={4}>
               <Card sx={{ textAlign: 'center', bgcolor: '#C8E6C9' }}>
                 <CardContent>
                   <TrendingUpIcon sx={{ color: '#2E7D32' }} />
