@@ -280,260 +280,254 @@ const FactureManager: React.FC = () => {
   const [refundProcessing, setRefundProcessing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // ==================== FONCTIONS D'APPEL API ====================
+// ==================== FONCTIONS D'APPEL API ====================
 
-  // Récupérer le profil de l'utilisateur connecté
-  const loadUserProfile = useCallback(async () => {
-    try {
-      const response = await api.get('/users/me/profile');
-      return response.data;
-    } catch (error) {
-      console.error('Erreur chargement profil:', error);
-      return null;
+// Récupérer le profil de l'utilisateur connecté
+const loadUserProfile = useCallback(async () => {
+  try {
+    const response = await api.get('/users/me/profile');
+    return response.data;
+  } catch (error) {
+    console.error('Erreur chargement profil:', error);
+    return null;
+  }
+}, []);
+
+// Récupérer la branche de l'utilisateur
+const loadUserBranch = useCallback(async () => {
+  setBranchLoading(true);
+  try {
+    const profile = await loadUserProfile();
+    
+    if (!profile) {
+      console.error('Impossible de charger le profil');
+      setBranchLoading(false);
+      return;
     }
-  }, []);
-
-  // Récupérer la branche de l'utilisateur
-  const loadUserBranch = useCallback(async () => {
-    setBranchLoading(true);
-    try {
-      const profile = await loadUserProfile();
-      
-      if (!profile) {
-        console.error('Impossible de charger le profil');
-        setBranchLoading(false);
-        return;
-      }
-      
-      const branchId = profile.active_branch_id || profile.branch_id || profile.current_branch_id;
-      
-      if (!branchId) {
-        console.warn('Aucune branche associée à cet utilisateur');
-        toast({ 
-          title: "Attention", 
-          description: "Aucune branche associée à votre compte", 
-          variant: "destructive" 
-        });
-        setBranchLoading(false);
-        return;
-      }
-      
-      const branchResponse = await api.get(`/branches/${branchId}`);
-      const branchData = branchResponse.data;
-      
-      setUserBranch({
-        id: branchData.id,
-        name: branchData.name,
-        code: branchData.code || branchData.name.substring(0, 4).toUpperCase(),
-        is_active: branchData.is_active,
-        parent_pharmacy_id: branchData.parent_pharmacy_id
+    
+    const branchId = profile.active_branch_id || profile.branch_id || profile.current_branch_id;
+    
+    if (!branchId) {
+      console.warn('Aucune branche associée à cet utilisateur');
+      toast({ 
+        title: "Attention", 
+        description: "Aucune branche associée à votre compte", 
+        variant: "destructive" 
       });
+      setBranchLoading(false);
+      return;
+    }
+    
+    const branchResponse = await api.get(`/branches/${branchId}`);
+    const branchData = branchResponse.data;
+    
+    setUserBranch({
+      id: branchData.id,
+      name: branchData.name,
+      code: branchData.code || branchData.name.substring(0, 4).toUpperCase(),
+      is_active: branchData.is_active,
+      parent_pharmacy_id: branchData.parent_pharmacy_id
+    });
+    
+  } catch (error: any) {
+    console.error('Erreur chargement branche:', error);
+    let errorMessage = "Impossible de charger les informations de votre branche";
+    if (error.response?.data?.detail) {
+      errorMessage = error.response.data.detail;
+    }
+    toast({ 
+      title: "Erreur", 
+      description: errorMessage, 
+      variant: "destructive" 
+    });
+  } finally {
+    setBranchLoading(false);
+  }
+}, [toast, loadUserProfile]);
+
+// Calculer la plage de dates en fonction de la période
+const getDateRange = useCallback((): { startDate: string; endDate: string } => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  switch (filters.period) {
+    case 'today': {
+      const dateStr = today.toISOString().split('T')[0];
+      return {
+        startDate: dateStr,
+        endDate: dateStr
+      };
+    }
+    
+    case 'yesterday': {
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const dateStr = yesterday.toISOString().split('T')[0];
+      return {
+        startDate: dateStr,
+        endDate: dateStr
+      };
+    }
+    
+    case 'week': {
+      const dayOfWeek = today.getDay();
+      const monday = new Date(today);
+      const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      monday.setDate(today.getDate() - offset);
+      monday.setHours(0, 0, 0, 0);
       
-    } catch (error: any) {
-      console.error('Erreur chargement branche:', error);
-      let errorMessage = "Impossible de charger les informations de votre branche";
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      sunday.setHours(23, 59, 59, 999);
+      
+      return {
+        startDate: monday.toISOString().split('T')[0],
+        endDate: sunday.toISOString().split('T')[0]
+      };
+    }
+    
+    case 'month': {
+      const year = filters.selectedYear;
+      const month = filters.selectedMonth;
+      const startDate = new Date(year, month - 1, 1);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(year, month, 0);
+      endDate.setHours(23, 59, 59, 999);
+      return {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      };
+    }
+    
+    case 'year': {
+      const year = filters.selectedYear;
+      const startDate = new Date(year, 0, 1);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(year, 11, 31);
+      endDate.setHours(23, 59, 59, 999);
+      return {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0]
+      };
+    }
+    
+    case 'custom': {
+      let startDate = filters.startDate;
+      let endDate = filters.endDate;
+      
+      if (!startDate) {
+        startDate = today.toISOString().split('T')[0];
+      }
+      if (!endDate) {
+        endDate = today.toISOString().split('T')[0];
+      }
+      
+      return {
+        startDate: startDate,
+        endDate: endDate
+      };
+    }
+    
+    default: {
+      const dateStr = today.toISOString().split('T')[0];
+      return {
+        startDate: dateStr,
+        endDate: dateStr
+      };
+    }
+  }
+}, [filters.period, filters.selectedMonth, filters.selectedYear, filters.startDate, filters.endDate]);
+
+// Charger les ventes (GET /sales)
+const loadSales = useCallback(async () => {
+  if (!userBranch?.id) {
+    console.warn('⚠️ Aucune branche disponible');
+    setLoading(false);
+    return;
+  }
+  
+  setLoading(true);
+  try {
+    const { startDate, endDate } = getDateRange();
+    const branchId = userBranch.id;
+    
+    const params: Record<string, any> = {
+      branch_id: branchId,
+      skip: (currentPage - 1) * pageSize,
+      limit: pageSize,
+      start_date: startDate,
+      end_date: endDate,
+      sort_by: "created_at",
+      sort_order: "desc"
+    };
+    
+    if (filters.sellerId) params.user_id = filters.sellerId;
+    if (filters.paymentMethod) params.payment_method = filters.paymentMethod;
+    if (filters.status) params.status = filters.status;
+    if (searchTerm) params.search = searchTerm;
+    
+    console.log('📡 Requête GET /sales:', { params });
+    
+    const response = await api.get<SalesListResponse>('/sales', { params });
+    const data = response.data;
+    
+    let items: Sale[] = [];
+    let total = 0;
+    
+    if (data && data.items && Array.isArray(data.items)) {
+      items = data.items;
+      total = data.total || items.length;
+    } else if (Array.isArray(data)) {
+      items = data;
+      total = items.length;
+    } else {
+      console.warn('Format de réponse non reconnu:', data);
+    }
+    
+    const salesWithBranch: Sale[] = items.map(sale => ({
+      ...sale,
+      branch_name: userBranch.name,
+      status: sale.status === 'pending' || sale.status === 'completed' || sale.status === 'cancelled'
+        ? sale.status
+        : 'completed' as const
+    }));
+    
+    console.log(`✅ ${salesWithBranch.length} ventes chargées (total: ${total})`);
+    
+    setSales(salesWithBranch);
+    setTotalSales(total);
+    
+  } catch (error: any) {
+    console.error('❌ Erreur chargement ventes:', error);
+    
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      toast({ 
+        title: "Timeout", 
+        description: "Le serveur met trop de temps à répondre. Vérifiez votre connexion.", 
+        variant: "destructive" 
+      });
+    } else {
+      let errorMessage = "Impossible de charger les ventes";
       if (error.response?.data?.detail) {
         errorMessage = error.response.data.detail;
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
       }
+      
       toast({ 
         title: "Erreur", 
         description: errorMessage, 
         variant: "destructive" 
       });
-    } finally {
-      setBranchLoading(false);
     }
-  }, [toast, loadUserProfile]);
+    setSales([]);
+    setTotalSales(0);
+  } finally {
+    setLoading(false);
+  }
+}, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
 
-  // Calculer la plage de dates en fonction de la période
-  const getDateRange = useCallback((): { startDate: string; endDate: string } => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    switch (filters.period) {
-      case 'today':
-        return {
-          startDate: today.toISOString().split('T')[0],
-          endDate: today.toISOString().split('T')[0]
-        };
-      
-      case 'yesterday':
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        return {
-          startDate: yesterday.toISOString().split('T')[0],
-          endDate: yesterday.toISOString().split('T')[0]
-        };
-      
-      case 'week': {
-        const dayOfWeek = today.getDay();
-        const monday = new Date(today);
-        const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        monday.setDate(today.getDate() - offset);
-        monday.setHours(0, 0, 0, 0);
-        
-        const sunday = new Date(monday);
-        sunday.setDate(monday.getDate() + 6);
-        sunday.setHours(23, 59, 59, 999);
-        
-        return {
-          startDate: monday.toISOString().split('T')[0],
-          endDate: sunday.toISOString().split('T')[0]
-        };
-      }
-      
-      case 'month': {
-        const year = filters.selectedYear;
-        const month = filters.selectedMonth;
-        const startDate = new Date(year, month - 1, 1);
-        const endDate = new Date(year, month, 0);
-        return {
-          startDate: startDate.toISOString().split('T')[0],
-          endDate: endDate.toISOString().split('T')[0]
-        };
-      }
-      
-      case 'year': {
-        const year = filters.selectedYear;
-        return {
-          startDate: `${year}-01-01`,
-          endDate: `${year}-12-31`
-        };
-      }
-      
-      case 'custom':
-        return {
-          startDate: filters.startDate,
-          endDate: filters.endDate
-        };
-      
-      default:
-        return {
-          startDate: today.toISOString().split('T')[0],
-          endDate: today.toISOString().split('T')[0]
-        };
-    }
-  }, [filters]);
-
-  // Charger les ventes (GET /sales)
-  const loadSales = useCallback(async () => {
-    if (!userBranch?.id) {
-      console.warn('⚠️ Aucune branche disponible');
-      setLoading(false);
-      return;
-    }
-    
-    setLoading(true);
-    try {
-      const { startDate, endDate } = getDateRange();
-      const branchId = userBranch.id;
-      
-      const params: Record<string, any> = {
-        branch_id: branchId,
-        skip: (currentPage - 1) * pageSize,
-        limit: pageSize,
-        start_date: startDate,
-        end_date: endDate,
-        sort_by: "created_at",
-        sort_order: "desc"
-      };
-      
-      if (filters.sellerId) params.user_id = filters.sellerId;
-      if (filters.paymentMethod) params.payment_method = filters.paymentMethod;
-      if (filters.status) params.status = filters.status;
-      if (searchTerm) params.search = searchTerm;
-      
-      console.log('📡 Requête GET /sales:', { params });
-      
-      const response = await api.get<SalesListResponse>('/sales', { params });
-      const data = response.data;
-      
-      let items: Sale[] = [];
-      let total = 0;
-      
-      if (data && data.items && Array.isArray(data.items)) {
-        items = data.items;
-        total = data.total || items.length;
-      } else if (Array.isArray(data)) {
-        items = data;
-        total = items.length;
-      } else {
-        console.warn('Format de réponse non reconnu:', data);
-      }
-      
-      // Correction: s'assurer que status est du bon type
-      const salesWithBranch: Sale[] = items.map(sale => ({
-        ...sale,
-        branch_name: userBranch.name,
-        status: sale.status === 'pending' || sale.status === 'completed' || sale.status === 'cancelled'
-          ? sale.status
-          : 'completed' as const
-      }));
-      
-      console.log(`✅ ${salesWithBranch.length} ventes chargées (total: ${total})`);
-      
-      setSales(salesWithBranch);
-      setTotalSales(total);
-      
-    } catch (error: any) {
-      console.error('❌ Erreur chargement ventes:', error);
-      
-      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
-        toast({ 
-          title: "Timeout", 
-          description: "Le serveur met trop de temps à répondre. Vérifiez votre connexion.", 
-          variant: "destructive" 
-        });
-      } else {
-        let errorMessage = "Impossible de charger les ventes";
-        if (error.response?.data?.detail) {
-          errorMessage = error.response.data.detail;
-        } else if (error.response?.data?.message) {
-          errorMessage = error.response.data.message;
-        }
-        
-        toast({ 
-          title: "Erreur", 
-          description: errorMessage, 
-          variant: "destructive" 
-        });
-      }
-      setSales([]);
-      setTotalSales(0);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, pageSize, filters, searchTerm, toast, getDateRange, userBranch]);
-
-  // Charger la liste des vendeurs (GET /users/sellers)
-  const loadSellers = useCallback(async () => {
-    if (!userBranch?.id) return;
-    
-    try {
-      const branchId = userBranch.id;
-      const response = await api.get('/users/sellers', { 
-        params: { branch_id: branchId } 
-      });
-      
-      let sellersList: Seller[] = [];
-      
-      if (response.data?.users && Array.isArray(response.data.users)) {
-        sellersList = response.data.users;
-      } else if (response.data?.sellers && Array.isArray(response.data.sellers)) {
-        sellersList = response.data.sellers;
-      } else if (Array.isArray(response.data)) {
-        sellersList = response.data;
-      } else if (response.data?.data && Array.isArray(response.data.data)) {
-        sellersList = response.data.data;
-      }
-      
-      
-    } catch (error) {
-      console.error('Erreur chargement vendeurs:', error);
-    }
-  }, [userBranch]);
-
-  // Ajouter cette fonction pour charger les vendeurs qui ont vendu pendant la période
+// Charger les vendeurs qui ont vendu pendant la période
 const loadAvailableSellers = useCallback(async () => {
   if (!userBranch?.id) return;
   
@@ -568,6 +562,12 @@ const loadAvailableSellers = useCallback(async () => {
       let sellersList: Seller[] = [];
       if (sellersResponse.data?.users && Array.isArray(sellersResponse.data.users)) {
         sellersList = sellersResponse.data.users;
+      } else if (sellersResponse.data?.sellers && Array.isArray(sellersResponse.data.sellers)) {
+        sellersList = sellersResponse.data.sellers;
+      } else if (Array.isArray(sellersResponse.data)) {
+        sellersList = sellersResponse.data;
+      } else if (sellersResponse.data?.data && Array.isArray(sellersResponse.data.data)) {
+        sellersList = sellersResponse.data.data;
       }
       setAvailableSellers(sellersList);
     }
@@ -576,41 +576,59 @@ const loadAvailableSellers = useCallback(async () => {
   }
 }, [userBranch, getDateRange]);
 
-// Appeler cette fonction quand les filtres de date changent
+// Charger les détails d'une vente (GET /sales/{id})
+const loadSaleDetails = useCallback(async (saleId: string) => {
+  try {
+    console.log('📡 Chargement détails vente:', saleId);
+    const response = await api.get<SaleDetailResponse>(`/sales/${saleId}`);
+    const data = response.data;
+    
+    const detailData: SaleDetailResponse = {
+      ...data,
+      items: data.items || [],
+      status: data.status === 'pending' || data.status === 'completed' || data.status === 'cancelled'
+        ? data.status
+        : 'completed'
+    };
+    
+    setSelectedSale(detailData);
+    setShowDetailModal(true);
+  } catch (error: any) {
+    console.error('Erreur chargement détails:', error);
+    let errorMessage = "Impossible de charger les détails de la vente";
+    if (error.response?.data?.detail) {
+      errorMessage = error.response.data.detail;
+    }
+    toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
+  }
+}, [toast]);
+
+// ==================== EFFETS ====================
+
+useEffect(() => {
+  loadUserBranch();
+}, [loadUserBranch]);
+
+useEffect(() => {
+  if (userBranch?.id) {
+    loadSales();
+    loadAvailableSellers();
+  }
+}, [loadSales, loadAvailableSellers, userBranch]);
+
+// Appeler loadAvailableSellers quand les filtres de date changent
 useEffect(() => {
   if (userBranch?.id) {
     loadAvailableSellers();
   }
 }, [filters.period, filters.selectedMonth, filters.selectedYear, filters.startDate, filters.endDate, userBranch]);
-
-  // Charger les détails d'une vente (GET /sales/{id})
-  const loadSaleDetails = useCallback(async (saleId: string) => {
-    try {
-      console.log('📡 Chargement détails vente:', saleId);
-      const response = await api.get<SaleDetailResponse>(`/sales/${saleId}`);
-      const data = response.data;
-      
-      // S'assurer que les items sont présents et que status est du bon type
-      const detailData: SaleDetailResponse = {
-        ...data,
-        items: data.items || [],
-        status: data.status === 'pending' || data.status === 'completed' || data.status === 'cancelled'
-          ? data.status
-          : 'completed'
-      };
-      
-      setSelectedSale(detailData);
-      setShowDetailModal(true);
-    } catch (error: any) {
-      console.error('Erreur chargement détails:', error);
-      let errorMessage = "Impossible de charger les détails de la vente";
-      if (error.response?.data?.detail) {
-        errorMessage = error.response.data.detail;
-      }
-      toast({ title: "Erreur", description: errorMessage, variant: "destructive" });
-    }
-  }, [toast]);
-
+// Appeler loadAvailableSellers quand les filtres de date changent
+useEffect(() => {
+  if (userBranch?.id) {
+    loadAvailableSellers();
+  }
+}, [filters.period, filters.selectedMonth, filters.selectedYear, filters.startDate, filters.endDate, userBranch]);
+  
   // Ouvrir le modal d'impression avec FacturePrinter
   const openPrintModal = useCallback((sale: Sale) => {
     const saleForPrint = convertToFacturePrinterSale(sale);
@@ -899,9 +917,9 @@ const exportToPDF = async (sale: Sale | FacturePrinterSaleData) => {
   useEffect(() => {
     if (userBranch?.id) {
       loadSales();
-      loadSellers();
+      loadAvailableSellers();
     }
-  }, [loadSales, loadSellers, userBranch]);
+  }, [loadSales, loadAvailableSellers, userBranch]);
 
   useEffect(() => {
     if (userBranch?.id) {
