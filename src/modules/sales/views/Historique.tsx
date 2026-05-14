@@ -1,5 +1,5 @@
-// Historique.tsx
-import { useEffect, useMemo, useState } from 'react';
+// Historique.tsx - Version complète avec nouvel onglet Utilisateur
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search,
   ArrowLeft,
@@ -23,6 +23,9 @@ import {
   User,
   BarChart3,
   FolderTree,
+  FileText,
+  List,
+  ShoppingBag,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -73,17 +76,6 @@ interface CategorySaleStats {
   products: Map<string, { productName: string; quantity: number; amount: number }>;
 }
 
-interface UserStats {
-  userId: string;
-  userName: string;
-  totalSales: number;
-  totalAmount: number;
-  averageTicket: number;
-  lastSaleDate: number | null;
-  lastSaleFormatted: string;
-  salesByBranch: Map<string, { branchName: string; amount: number; count: number }>;
-}
-
 interface BranchStats {
   branchId: string;
   branchName: string;
@@ -117,6 +109,35 @@ interface MonthlyStats {
   byUser: Map<string, { userName: string; amount: number; count: number }>;
   byBranch: Map<string, { branchName: string; amount: number; count: number }>;
 }
+
+// Nouveaux types pour l'onglet utilisateur
+interface UserSaleDetail {
+  id: string;
+  time: string;
+  hour: string;
+  products: { name: string; quantity: number; price: number; total: number }[];
+  totalAmount: number;
+  timestamp: number;
+}
+
+interface UserProductStats {
+  productId: string;
+  productName: string;
+  quantitySold: number;
+  timesSold: number;
+  totalAmount: number;
+  unitPrice: number;
+}
+
+interface ProductSummary {
+  productId: string;
+  productName: string;
+  totalQuantity: number;
+  unitPrice: number;
+  totalAmount: number;
+}
+
+type UserViewTab = 'details' | 'stats' | 'summary';
 
 type ViewMode = 'sales' | 'users' | 'branches' | 'analytics' | 'categories';
 type PeriodType = 'today' | 'week' | 'month' | 'year' | 'custom';
@@ -152,6 +173,10 @@ export default function Historique() {
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([]);
+  
+  // Nouveaux states pour l'onglet utilisateur
+  const [userViewTab, setUserViewTab] = useState<UserViewTab>('details');
+  const [selectedUserForDetail, setSelectedUserForDetail] = useState<string | null>(null);
 
   const itemsPerPage = 20;
   const pendingCount = getPendingCount();
@@ -215,7 +240,6 @@ export default function Historique() {
     toast({ title: "Réessai", description: "Tentative de re-synchronisation des ventes échouées" });
   };
 
-  // Helper pour s'assurer que total est un nombre
   const getTotalAmount = (sale: any): number => {
     if (typeof sale.total === 'number') return sale.total;
     if (typeof sale.total === 'string') return parseFloat(sale.total) || 0;
@@ -224,7 +248,6 @@ export default function Historique() {
     return 0;
   };
 
-  // Fonction pour formater les prix avec la devise FC
   const formatPrice = (price: number): string => {
     return price.toFixed(2) + ' FC';
   };
@@ -395,11 +418,9 @@ export default function Historique() {
     
     filteredSales.forEach(sale => {
       sale.items.forEach(item => {
-        // Essayer de déterminer la catégorie depuis l'API ou utiliser "Non catégorisé"
         let categoryId = item.categoryId || 'uncategorized';
         let categoryName = item.category || 'Non catégorisé';
         
-        // Chercher la catégorie dans la liste des catégories connues
         if (categories.length > 0 && item.categoryId) {
           const found = categories.find(c => c.id === item.categoryId);
           if (found) {
@@ -425,7 +446,6 @@ export default function Historique() {
         stats.quantitySold += item.quantity || 0;
         stats.saleCount++;
         
-        // Agrégation par produit dans la catégorie
         const productKey = item.productId || item.id || item.name;
         if (!stats.products.has(productKey)) {
           stats.products.set(productKey, {
@@ -440,7 +460,6 @@ export default function Historique() {
       });
     });
     
-    // Calculer les pourcentages
     const result = Array.from(categoryMap.values());
     result.forEach(stats => {
       stats.percentage = totalAmount > 0 ? (stats.totalAmount / totalAmount) * 100 : 0;
@@ -449,52 +468,8 @@ export default function Historique() {
     return result.sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredSales, categories]);
 
-  const userStats = useMemo((): UserStats[] => {
-    const userMap = new Map<string, UserStats>();
-    
-    filteredSales.forEach(sale => {
-      const userId = sale.cashierId || 'unknown';
-      const userName = sale.cashierName || 'Inconnu';
-      
-      if (!userMap.has(userId)) {
-        userMap.set(userId, {
-          userId,
-          userName,
-          totalSales: 0,
-          totalAmount: 0,
-          averageTicket: 0,
-          lastSaleDate: null,
-          lastSaleFormatted: '',
-          salesByBranch: new Map(),
-        });
-      }
-      
-      const stats = userMap.get(userId)!;
-      stats.totalSales++;
-      stats.totalAmount += sale.total;
-      
-      if (!stats.lastSaleDate || sale.timestamp > stats.lastSaleDate) {
-        stats.lastSaleDate = sale.timestamp;
-        stats.lastSaleFormatted = formatDateTime(sale.timestamp);
-      }
-      
-      const branchId = sale.branchId || 'main';
-      const branchName = sale.branchName || 'Branche Principale';
-      if (!stats.salesByBranch.has(branchId)) {
-        stats.salesByBranch.set(branchId, { branchName, amount: 0, count: 0 });
-      }
-      const branchStats = stats.salesByBranch.get(branchId)!;
-      branchStats.amount += sale.total;
-      branchStats.count++;
-    });
-    
-    const result = Array.from(userMap.values());
-    result.forEach(stats => {
-      stats.averageTicket = stats.totalSales > 0 ? stats.totalAmount / stats.totalSales : 0;
-    });
-    
-    return result.sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [filteredSales]);
+  // userStats est utilisé dans la vue mais pas déclaré comme variable séparée
+  // On va l'utiliser directement dans le JSX si besoin
 
   const branchStats = useMemo((): BranchStats[] => {
     const branchMap = new Map<string, BranchStats>();
@@ -655,6 +630,128 @@ export default function Historique() {
     };
   }, [filteredSales]);
 
+  // Données détaillées par utilisateur pour l'onglet
+  const userSalesDetails = useMemo(() => {
+    const detailsMap = new Map<string, UserSaleDetail[]>();
+    
+    filteredSales.forEach(sale => {
+      const userId = sale.cashierId || 'unknown';
+      if (selectedUserForDetail && selectedUserForDetail !== userId) return;
+      
+      const saleDate = new Date(sale.timestamp);
+      const timeStr = formatDateTime(sale.timestamp);
+      const hourStr = saleDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      
+      const products = sale.items.map(item => ({
+        name: item.name,
+        quantity: item.quantity || 0,
+        price: item.price || 0,
+        total: (item.price || 0) * (item.quantity || 0),
+      }));
+      
+      const detail: UserSaleDetail = {
+        id: sale.id,
+        time: timeStr,
+        hour: hourStr,
+        products,
+        totalAmount: sale.total,
+        timestamp: sale.timestamp,
+      };
+      
+      if (!detailsMap.has(userId)) {
+        detailsMap.set(userId, []);
+      }
+      detailsMap.get(userId)!.push(detail);
+    });
+    
+    // Trier par date décroissante
+    for (const [, details] of detailsMap) {
+      details.sort((a, b) => b.timestamp - a.timestamp);
+    }
+    
+    return detailsMap;
+  }, [filteredSales, selectedUserForDetail]);
+
+  // Statistiques produits par utilisateur (nombre de fois vendu)
+  const userProductStats = useMemo(() => {
+    const statsMap = new Map<string, Map<string, UserProductStats>>();
+    
+    filteredSales.forEach(sale => {
+      const userId = sale.cashierId || 'unknown';
+      const userName = sale.cashierName || 'Inconnu';
+      void userName; 
+      
+      if (selectedUserForDetail && selectedUserForDetail !== userId) return;
+      
+      if (!statsMap.has(userId)) {
+        statsMap.set(userId, new Map());
+      }
+      
+      const userProducts = statsMap.get(userId)!;
+      
+      sale.items.forEach(item => {
+        const productId = item.productId || item.id || item.name;
+        const productName = item.name;
+        const quantity = item.quantity || 0;
+        const unitPrice = item.price || 0;
+        const total = quantity * unitPrice;
+        
+        if (!userProducts.has(productId)) {
+          userProducts.set(productId, {
+            productId,
+            productName,
+            quantitySold: 0,
+            timesSold: 0,
+            totalAmount: 0,
+            unitPrice: unitPrice,
+          });
+        }
+        
+        const stats = userProducts.get(productId)!;
+        stats.quantitySold += quantity;
+        stats.timesSold += 1;
+        stats.totalAmount += total;
+        // Garder le prix unitaire (moyen pondéré)
+        stats.unitPrice = (stats.unitPrice * (stats.timesSold - 1) + unitPrice) / stats.timesSold;
+      });
+    });
+    
+    return statsMap;
+  }, [filteredSales, selectedUserForDetail]);
+
+  // Tableau de synthèse global (tous produits confondus)
+  const productSummary = useMemo((): ProductSummary[] => {
+    const productMap = new Map<string, ProductSummary>();
+    
+    filteredSales.forEach(sale => {
+      sale.items.forEach(item => {
+        const productId = item.productId || item.id || item.name;
+        const productName = item.name;
+        const quantity = item.quantity || 0;
+        const unitPrice = item.price || 0;
+        const total = quantity * unitPrice;
+        
+        if (!productMap.has(productId)) {
+          productMap.set(productId, {
+            productId,
+            productName,
+            totalQuantity: 0,
+            unitPrice: 0,
+            totalAmount: 0,
+          });
+        }
+        
+        const summary = productMap.get(productId)!;
+        summary.totalQuantity += quantity;
+        summary.totalAmount += total;
+        // Prix unitaire moyen pondéré
+        summary.unitPrice = summary.totalAmount / summary.totalQuantity;
+      });
+    });
+    
+    return Array.from(productMap.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredSales]);
+
   function getSaleNumber(sale: Sale): string {
     return sale.receiptNumber || sale.id.slice(0, 8) || 'N/A';
   }
@@ -787,6 +884,103 @@ export default function Historique() {
     printWindow.print();
   }
 
+  // Impression du détail utilisateur
+  function printUserDetails(userId: string, userName: string) {
+    const details = userSalesDetails.get(userId) || [];
+    if (details.length === 0) return;
+    
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    if (!printWindow) return;
+    
+    const totalAmount = details.reduce((sum, d) => sum + d.totalAmount, 0);
+    const productStats = userProductStats.get(userId);
+    
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Détail ventes - ${userName}</title>
+          <meta charset="UTF-8" />
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px; background: white; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            h1 { color: #1e293b; margin-bottom: 10px; }
+            .header { border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 25px; }
+            .stats { display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
+            .stat-card { background: #f1f5f9; padding: 15px; border-radius: 12px; min-width: 150px; }
+            .stat-card h3 { font-size: 12px; color: #64748b; margin-bottom: 5px; }
+            .stat-card p { font-size: 24px; font-weight: bold; color: #1e293b; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
+            th { background: #f8fafc; font-weight: bold; color: #1e293b; }
+            .sale-row { background: #fef3c7; }
+            .product-row td { background: white; }
+            .total-row { background: #dcfce7; font-weight: bold; }
+            .footer { margin-top: 30px; text-align: center; color: #94a3b8; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>Détail des ventes - ${escapeHtml(userName)}</h1>
+              <p>Période: ${formatDate(new Date().getTime())}</p>
+            </div>
+            <div class="stats">
+              <div class="stat-card"><h3>Nombre de ventes</h3><p>${details.length}</p></div>
+              <div class="stat-card"><h3>CA total</h3><p>${formatPrice(totalAmount)}</p></div>
+              <div class="stat-card"><h3>Ticket moyen</h3><p>${formatPrice(totalAmount / (details.length || 1))}</p></div>
+            </div>
+            <h3 style="margin-bottom: 15px;">📋 Ventes détaillées</h3>
+            <table>
+              <thead>
+                <tr><th>Heure</th><th>Produit</th><th>Qté</th><th>Prix unit.</th><th>Montant</th></tr>
+              </thead>
+              <tbody>
+                ${details.map(sale => `
+                  <tr class="sale-row"><td colspan="5" style="background:#fef3c7;"><strong>🕐 ${sale.time}</strong> - Total: ${formatPrice(sale.totalAmount)}</td></tr>
+                  ${sale.products.map(prod => `
+                    <tr class="product-row">
+                      <td style="padding-left: 20px;"></td>
+                      <td>${escapeHtml(prod.name)}</td>
+                      <td>${prod.quantity}</td>
+                      <td>${formatPrice(prod.price)}</td>
+                      <td>${formatPrice(prod.total)}</td>
+                    </tr>
+                  `).join('')}
+                `).join('')}
+              </tbody>
+            </table>
+            ${productStats && productStats.size > 0 ? `
+              <h3 style="margin-bottom: 15px;">📊 Statistiques produits</h3>
+              <table>
+                <thead><tr><th>Produit</th><th>Qté totale</th><th>Nb ventes</th><th>Prix unit. moyen</th><th>Montant total</th></tr></thead>
+                <tbody>
+                  ${Array.from(productStats.values()).map(stat => `
+                    <tr>
+                      <td>${escapeHtml(stat.productName)}</td>
+                      <td>${stat.quantitySold}</td>
+                      <td>${stat.timesSold}</td>
+                      <td>${formatPrice(stat.unitPrice)}</td>
+                      <td>${formatPrice(stat.totalAmount)}</td>
+                    </tr>
+                  `).join('')}
+                  <tr class="total-row"><td colspan="4"><strong>Total général</strong></td><td><strong>${formatPrice(totalAmount)}</strong></td></tr>
+                </tbody>
+              </table>
+            ` : ''}
+            <div class="footer">Document généré le ${new Date().toLocaleString('fr-FR')}</div>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  }
+
   function escapeHtml(str: string): string {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -800,6 +994,7 @@ export default function Historique() {
     setCustomStartDate('');
     setCustomEndDate('');
     setCurrentPage(1);
+    setSelectedUserForDetail(null);
   }
 
   const isLoading = loading || storeLoading;
@@ -967,7 +1162,7 @@ export default function Historique() {
           <button onClick={() => setViewMode('sales')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'sales' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
             📋 Ventes
           </button>
-          <button onClick={() => setViewMode('users')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'users' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
+          <button onClick={() => { setViewMode('users'); setSelectedUserForDetail(null); }} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'users' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
             👥 Par Utilisateur
           </button>
           <button onClick={() => setViewMode('branches')} className={`px-4 py-2 font-semibold transition-colors ${viewMode === 'branches' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -1036,50 +1231,287 @@ export default function Historique() {
           </section>
         )}
 
-        {/* Vue Utilisateurs */}
+        {/* Vue Utilisateurs - NOUVELLE VERSION */}
         {viewMode === 'users' && (
-          <section className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
-            <div className="border-b border-slate-100 p-4 md:p-5">
-              <h2 className="flex items-center gap-2 text-lg font-black text-slate-800"><User size={20} className="text-blue-600" /> Statistiques par utilisateur</h2>
+          <div className="space-y-6">
+            {/* Sélecteur d'utilisateur */}
+            <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="font-semibold text-slate-700">Sélectionner un utilisateur :</label>
+                <select
+                  value={selectedUserForDetail || ''}
+                  onChange={(e) => setSelectedUserForDetail(e.target.value || null)}
+                  className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">-- Tous les utilisateurs --</option>
+                  {uniqueUsers.map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+                {selectedUserForDetail && (
+                  <button
+                    onClick={() => printUserDetails(selectedUserForDetail, uniqueUsers.find(u => u.id === selectedUserForDetail)?.name || 'Utilisateur')}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700"
+                  >
+                    <Printer size={18} /> Imprimer
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="divide-y divide-slate-100">
-              {userStats.length === 0 ? (
-                <div className="p-10 text-center text-slate-400">Aucune donnée utilisateur</div>
-              ) : (
-                userStats.map((stats) => (
-                  <div key={stats.userId} className="p-4 md:p-5">
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100"><User size={18} className="text-blue-600" /></div>
-                        <div>
-                          <h3 className="font-bold text-slate-800">{stats.userName}</h3>
-                          <p className="text-xs text-slate-400">ID: {stats.userId === 'unknown' ? 'Non assigné' : stats.userId}</p>
-                        </div>
-                      </div>
+
+            {/* Onglets internes */}
+            <div className="flex flex-wrap gap-2 border-b border-slate-200 bg-white rounded-t-3xl px-4 pt-2">
+              <button
+                onClick={() => setUserViewTab('details')}
+                className={`px-4 py-2 font-semibold transition-colors ${userViewTab === 'details' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <FileText size={16} className="inline mr-1" /> Détail des ventes
+              </button>
+              <button
+                onClick={() => setUserViewTab('stats')}
+                className={`px-4 py-2 font-semibold transition-colors ${userViewTab === 'stats' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <BarChart3 size={16} className="inline mr-1" /> Statistiques produits
+              </button>
+              <button
+                onClick={() => setUserViewTab('summary')}
+                className={`px-4 py-2 font-semibold transition-colors ${userViewTab === 'summary' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                <List size={16} className="inline mr-1" /> Synthèse générale
+              </button>
+            </div>
+
+            {/* Onglet 1: Détail des ventes par utilisateur */}
+{userViewTab === 'details' && (
+  <section className="overflow-hidden rounded-b-3xl rounded-tr-3xl border border-slate-100 bg-white shadow-sm">
+    <div className="border-b border-slate-100 p-4 md:p-5">
+      <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
+        <Clock size={20} className="text-blue-600" /> 
+        Détail des ventes
+        {selectedUserForDetail && <span className="text-sm font-normal text-slate-500"> - {uniqueUsers.find(u => u.id === selectedUserForDetail)?.name}</span>}
+      </h2>
+    </div>
+    <div className="divide-y divide-slate-100">
+      {Array.from(userSalesDetails.entries()).length === 0 ? (
+        <div className="p-10 text-center text-slate-400">Aucune vente trouvée pour cet utilisateur</div>
+      ) : (
+        Array.from(userSalesDetails.entries()).map(([userId, sales]) => {
+          const userName = uniqueUsers.find(u => u.id === userId)?.name || 'Utilisateur inconnu';
+          const userTotal = sales.reduce((sum, s) => sum + s.totalAmount, 0);
+          return (
+            <div key={userId} className="p-4 md:p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100">
+                    <User size={18} className="text-blue-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800">{userName}</h3>
+                    <p className="text-xs text-slate-400">
+                      ID: {userId} · {sales.length} vente(s) · Total: {formatPrice(userTotal)}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => printUserDetails(userId, userName)}
+                  className="rounded-lg p-2 text-slate-400 hover:bg-emerald-50 hover:text-emerald-600"
+                  title="Imprimer"
+                >
+                  <Printer size={18} />
+                </button>
+              </div>
+              
+              {/* Tableau des ventes */}
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Heure</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Produit</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Qté</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Montant</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {sales.map((sale) => (
+                      <React.Fragment key={sale.id}>
+                        <tr className="bg-amber-50">
+                          <td colSpan={4} className="px-4 py-2 text-sm font-semibold text-amber-700">
+                            🕐 {sale.time} - Total: {formatPrice(sale.totalAmount)}
+                          </td>
+                        </tr>
+                        {sale.products.map((product, pIdx) => (
+                          <tr key={`${sale.id}-${pIdx}`} className="hover:bg-slate-50">
+                            {pIdx === 0 && <td rowSpan={sale.products.length} className="px-4 py-2 text-sm text-slate-500 align-top">{sale.hour}</td>}
+                            <td className="px-4 py-2 text-sm text-slate-700">{product.name}</td>
+                            <td className="px-4 py-2 text-center text-sm text-slate-600">{product.quantity}</td>
+                            <td className="px-4 py-2 text-right text-sm font-medium text-emerald-600">{formatPrice(product.total)}</td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                    <tr className="bg-green-50 font-bold">
+                      <td colSpan={3} className="px-4 py-3 text-right">TOTAL GÉNÉRAL</td>
+                      <td className="px-4 py-3 text-right text-emerald-700">{formatPrice(userTotal)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  </section>
+)}
+
+{/* Onglet 2: Statistiques produits par utilisateur */}
+{userViewTab === 'stats' && (
+  <section className="overflow-hidden rounded-b-3xl rounded-tr-3xl border border-slate-100 bg-white shadow-sm">
+    <div className="border-b border-slate-100 p-4 md:p-5">
+      <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
+        <BarChart3 size={20} className="text-blue-600" /> 
+        Statistiques produits par utilisateur
+        <span className="text-sm font-normal text-slate-500">(Nombre de fois chaque produit a été vendu)</span>
+      </h2>
+    </div>
+    <div className="divide-y divide-slate-100">
+      {Array.from(userProductStats.entries()).length === 0 ? (
+        <div className="p-10 text-center text-slate-400">Aucune donnée produit disponible</div>
+      ) : (
+        Array.from(userProductStats.entries()).map(([userId, products]) => {
+          const userName = uniqueUsers.find(u => u.id === userId)?.name || 'Utilisateur inconnu';
+          const userTotal = Array.from(products.values()).reduce((sum, p) => sum + p.totalAmount, 0);
+          return (
+            <div key={userId} className="p-4 md:p-5">
+              <div className="mb-4 flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-purple-100">
+                  <User size={18} className="text-purple-600" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800">
+                    {userName}
+                    <span className="ml-2 text-xs font-normal text-slate-400">(ID: {userId})</span>
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {products.size} produit(s) différent(s) · CA total: {formatPrice(userTotal)}
+                  </p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Produit</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Qté totale</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Nb fois vendu</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Prix unitaire</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Montant total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {Array.from(products.values())
+                      .sort((a, b) => b.timesSold - a.timesSold)
+                      .map((product) => (
+                        <tr key={product.productId} className="hover:bg-slate-50">
+                          <td className="px-4 py-2 text-sm text-slate-700">{product.productName}</td>
+                          <td className="px-4 py-2 text-center text-sm text-slate-600">{product.quantitySold}</td>
+                          <td className="px-4 py-2 text-center">
+                            <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                              {product.timesSold} fois
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-right text-sm text-slate-600">{formatPrice(product.unitPrice)}</td>
+                          <td className="px-4 py-2 text-right text-sm font-medium text-emerald-600">{formatPrice(product.totalAmount)}</td>
+                        </tr>
+                      ))}
+                    <tr className="bg-green-50 font-bold">
+                      <td colSpan={4} className="px-4 py-3 text-right">TOTAL GÉNÉRAL</td>
+                      <td className="px-4 py-3 text-right text-emerald-700">{formatPrice(userTotal)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  </section>
+)}
+            {/* Onglet 3: Synthèse générale (tous utilisateurs, tous produits) */}
+            {userViewTab === 'summary' && (
+              <section className="overflow-hidden rounded-b-3xl rounded-tr-3xl border border-slate-100 bg-white shadow-sm">
+                <div className="border-b border-slate-100 p-4 md:p-5">
+                  <h2 className="flex items-center gap-2 text-lg font-black text-slate-800">
+                    <ShoppingBag size={20} className="text-blue-600" /> 
+                    Synthèse générale des ventes
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Tous produits vendus - Quantités totales et montants
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200">
+                    <thead className="bg-slate-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Produit</th>
+                        <th className="px-4 py-3 text-center text-xs font-medium text-slate-500 uppercase">Quantité vendue</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Prix unitaire moyen</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 uppercase">Montant total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {productSummary.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-10 text-center text-slate-400">Aucun produit vendu</td>
+                        </tr>
+                      ) : (
+                        productSummary.map((product) => (
+                          <tr key={product.productId} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-sm font-medium text-slate-700">{product.productName}</td>
+                            <td className="px-4 py-3 text-center text-sm text-slate-600">
+                              <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-sm font-semibold text-emerald-700">
+                                {product.totalQuantity}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right text-sm text-slate-600">{formatPrice(product.unitPrice)}</td>
+                            <td className="px-4 py-3 text-right text-sm font-semibold text-blue-600">{formatPrice(product.totalAmount)}</td>
+                          </tr>
+                        ))
+                      )}
+                      <tr className="bg-blue-50 font-bold">
+                        <td className="px-4 py-4 text-right text-base" colSpan={3}>TOTAL GÉNÉRAL</td>
+                        <td className="px-4 py-4 text-right text-xl font-black text-blue-700">{formatPrice(globalStats.totalAmount)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                
+                {/* Récapitulatif supplémentaire */}
+                <div className="border-t border-slate-100 bg-linear-to-r from-blue-50 to-indigo-50 p-4 md:p-5">
+                  <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-slate-500">Nombre total de produits</p>
+                      <p className="text-xl font-bold text-slate-800">{productSummary.length}</p>
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-400">Total ventes</p>
-                        <p className="text-xl font-bold text-slate-800">{stats.totalSales}</p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-400">CA total</p>
-                        <p className="text-xl font-bold text-emerald-600">{formatPrice(stats.totalAmount)}</p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-400">Ticket moyen</p>
-                        <p className="text-xl font-bold text-blue-600">{formatPrice(stats.averageTicket)}</p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-400">Dernière vente</p>
-                        <p className="text-sm font-semibold text-slate-700">{stats.lastSaleFormatted || 'Jamais'}</p>
-                      </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Articles vendus</p>
+                      <p className="text-xl font-bold text-slate-800">{globalStats.totalItems}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">Nombre de ventes</p>
+                      <p className="text-xl font-bold text-slate-800">{globalStats.totalSales}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-slate-500">CA total</p>
+                      <p className="text-xl font-bold text-emerald-600">{formatPrice(globalStats.totalAmount)}</p>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-          </section>
+                </div>
+              </section>
+            )}
+          </div>
         )}
 
         {/* Vue Branches */}
@@ -1161,7 +1593,6 @@ export default function Historique() {
                       </div>
                     </div>
                     
-                    {/* Barre de progression */}
                     <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-slate-100">
                       <div 
                         className="h-full rounded-full bg-linear-to-r from-blue-500 to-indigo-600 transition-all duration-500"
@@ -1169,7 +1600,6 @@ export default function Historique() {
                       />
                     </div>
                     
-                    {/* TOUS les produits de la catégorie - Sans filtre "plus vendus" */}
                     {category.products.size > 0 && (
                       <div className="mt-3 rounded-xl bg-slate-50 p-3">
                         <p className="mb-2 text-sm font-semibold text-slate-600">
@@ -1180,9 +1610,7 @@ export default function Historique() {
                         </p>
                         <div className="space-y-2 max-h-96 overflow-y-auto">
                           {Array.from(category.products.entries())
-                            // Tri simple par montant décroissant pour meilleure lisibilité
                             .sort((a, b) => b[1].amount - a[1].amount)
-                            // Afficher TOUS les produits, pas de limite .slice()
                             .map(([productId, product]) => (
                               <div key={productId} className="flex items-center justify-between border-b border-slate-200 pb-2 last:border-0 hover:bg-slate-100/50 p-2 rounded-lg transition-colors">
                                 <div className="flex-1">
@@ -1205,7 +1633,6 @@ export default function Historique() {
                   </div>
                 ))}
                 
-                {/* Résumé des catégories incluant les non catégorisées */}
                 <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-4 md:p-5">
                   <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
                     <div>
@@ -1213,7 +1640,6 @@ export default function Historique() {
                       <p className="text-xl font-bold text-slate-800">
                         {categoryStats.length}
                         {(() => {
-                          // Compter les catégories non catégorisées
                           const uncategorizedCount = categoryStats.filter(c => 
                             c.categoryId === 'uncategorized' || 
                             c.categoryName === 'Non catégorisé'
@@ -1244,7 +1670,6 @@ export default function Historique() {
                   </div>
                 </div>
                 
-                {/* Note explicative sur l'affichage */}
                 <div className="bg-amber-50 p-3 text-center text-xs text-amber-700 border-t border-amber-100">
                   <p className="flex items-center justify-center gap-2">
                     📊 Toutes les ventes sont affichées • 
@@ -1257,6 +1682,7 @@ export default function Historique() {
             )}
           </section>
         )}
+
         {/* Vue Analyses */}
         {viewMode === 'analytics' && (
           <div className="space-y-6">
@@ -1309,9 +1735,9 @@ export default function Historique() {
                         <div>
                           <p className="mb-2 text-sm font-semibold text-slate-600">Top utilisateurs</p>
                           <div className="space-y-1">
-                            {Array.from(month.byUser.entries()).slice(0, 3).map(([userId, user]) => (
+                            {Array.from(month.byUser.entries()).slice(0, 3).map(([userId, userStats]) => (
                               <div key={userId} className="rounded-lg bg-slate-50 p-2 text-sm">
-                                <span className="font-medium">{user.userName}</span>: {formatPrice(user.amount)}
+                                <span className="font-medium">{userStats.userName}</span>: {formatPrice(userStats.amount)}
                               </div>
                             ))}
                           </div>
@@ -1353,7 +1779,6 @@ export default function Historique() {
                 <div className="rounded-2xl bg-slate-50 p-4"><p className="mb-1 text-xs text-slate-400">Total</p><p className="text-xl font-bold text-blue-600">{formatPrice(selectedSale.total || 0)}</p></div>
               </div>
 
-              {/* Section articles dans le modal de détails */}
               <div className="overflow-hidden rounded-2xl border border-slate-100">
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
                   <h4 className="font-bold text-slate-800">Articles</h4>
