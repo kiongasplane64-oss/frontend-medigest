@@ -166,15 +166,27 @@ const apiService = {
     return response.data;
   },
 
-  // ✅ CORRIGÉ : Récupérer la branche au lieu de la pharmacie
+  // ✅ Utilisation de l'endpoint /branches/current qui existe dans le backend
   async getCurrentBranch(): Promise<BranchInfo> {
     try {
-      // Essayer l'endpoint branch/current s'il existe
+      // L'endpoint /branches/current existe dans branches.py
       const response = await api.get('/branches/current');
       return response.data;
     } catch (error: any) {
-      // Fallback : récupérer la première branche active
-      if (error.response?.status === 404 || error.response?.status === 400) {
+      console.warn('⚠️ Erreur sur /branches/current:', error?.response?.status);
+      
+      // Fallback 1: Essayer de récupérer via l'utilisateur
+      try {
+        const userResponse = await api.get('/users/me');
+        const branchId = userResponse.data?.branch_id || userResponse.data?.active_branch_id;
+        
+        if (branchId) {
+          const branchResponse = await api.get(`/branches/${branchId}`);
+          return branchResponse.data;
+        }
+        throw new Error('Aucun ID de branche trouvé');
+      } catch (fallbackError) {
+        // Fallback 2: Récupérer la première branche active
         const branchesResponse = await api.get('/branches/', {
           params: { limit: 1, is_active: true }
         });
@@ -182,8 +194,9 @@ const apiService = {
         if (branchesResponse.data?.items?.length > 0) {
           return branchesResponse.data.items[0];
         }
+        
+        throw new Error('Aucune branche disponible');
       }
-      throw error;
     }
   },
 };
@@ -210,58 +223,58 @@ export default function ReportStockView() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [exporting, setExporting] = useState(false);
   const [currentBranch, setCurrentBranch] = useState<BranchInfo | null>(null);
-  
 
   const loadData = useCallback(async () => {
-  try {
-    setLoading(true);
-
-    // Charger les catégories et produits en parallèle
-    const [categoriesData, productsData] = await Promise.all([
-      apiService.getCategories(),
-      apiService.getProducts({ get_all: true }),
-    ]);
-
-    setCategories(categoriesData);
-    setAllProducts(productsData);
-
-    // Charger la branche séparément avec gestion d'erreur robuste
-    let branchData: BranchInfo | null = null;
-    
     try {
-      branchData = await apiService.getCurrentBranch();
-    } catch (branchError: any) {
-      console.warn('⚠️ Impossible de charger les infos de la branche:', branchError?.response?.data || branchError);
+      setLoading(true);
+
+      // Charger les catégories et produits en parallèle
+      const [categoriesData, productsData] = await Promise.all([
+        apiService.getCategories(),
+        apiService.getProducts({ get_all: true }),
+      ]);
+
+      setCategories(categoriesData);
+      setAllProducts(productsData);
+
+      // Charger la branche active de l'utilisateur
+      let branchData: BranchInfo | null = null;
+      
+      try {
+        branchData = await apiService.getCurrentBranch();
+      } catch (branchError: any) {
+        console.warn('⚠️ Impossible de charger la branche:', branchError?.message);
+      }
+
+      // Si aucune branche n'est trouvée, utiliser les infos de l'utilisateur
+      if (!branchData) {
+        branchData = {
+          id: user?.branch_id || '',
+          name: user?.branch_name || user?.nom_complet?.split(' ')[0] || 'Branche',
+          code: '',
+          address: '',
+          city: '',
+          phone: '',
+          email: user?.email || '',
+          is_main_branch: false,
+          is_active: true,
+          parent_pharmacy_id: undefined,
+        };
+      }
+
+      setCurrentBranch(branchData);
+
+      // Calculer les statistiques avec les données chargées
+      const stats = calculateStatsByCategory(productsData, categoriesData, branchData, user);
+      setReportData(stats);
+      
+    } catch (error) {
+      console.error('❌ Erreur chargement données:', error);
+      enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
+    } finally {
+      setLoading(false);
     }
-
-    // Si la branche n'a pas pu être chargée, utiliser une valeur par défaut
-    if (!branchData) {
-      branchData = {
-        id: user?.branch_id || '',
-        name: user?.branch_name || user?.nom_complet || 'Branche',
-        code: '',
-        address: '',
-        city: '',
-        phone: '',
-        email: '',
-        is_main_branch: false,
-        is_active: true,
-      };
-    }
-
-    setCurrentBranch(branchData);
-
-    // Calculer les statistiques avec les données chargées
-    const stats = calculateStatsByCategory(productsData, categoriesData, branchData, user);
-    setReportData(stats);
-    
-  } catch (error) {
-    console.error('❌ Erreur chargement données:', error);
-    enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
-  } finally {
-    setLoading(false);
-  }
-}, [user, enqueueSnackbar]);
+  }, [user, enqueueSnackbar]);
 
   useEffect(() => {
     loadData();
