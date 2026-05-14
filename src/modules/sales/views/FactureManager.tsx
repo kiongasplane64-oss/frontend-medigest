@@ -255,6 +255,7 @@ const FactureManager: React.FC = () => {
   const [totalSales, setTotalSales] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(20);
+  const [availableSellers, setAvailableSellers] = useState<Seller[]>([]);
   
   const [userBranch, setUserBranch] = useState<BranchInfo | null>(null);
   const [branchLoading, setBranchLoading] = useState(true);
@@ -277,7 +278,6 @@ const FactureManager: React.FC = () => {
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [refundData, setRefundData] = useState<RefundData | null>(null);
   const [refundProcessing, setRefundProcessing] = useState(false);
-  const [sellers, setSellers] = useState<Seller[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   // ==================== FONCTIONS D'APPEL API ====================
@@ -527,12 +527,61 @@ const FactureManager: React.FC = () => {
         sellersList = response.data.data;
       }
       
-      setSellers(sellersList);
       
     } catch (error) {
       console.error('Erreur chargement vendeurs:', error);
     }
   }, [userBranch]);
+
+  // Ajouter cette fonction pour charger les vendeurs qui ont vendu pendant la période
+const loadAvailableSellers = useCallback(async () => {
+  if (!userBranch?.id) return;
+  
+  try {
+    const { startDate, endDate } = getDateRange();
+    const branchId = userBranch.id;
+    
+    const response = await api.get('/sales', {
+      params: {
+        branch_id: branchId,
+        start_date: startDate,
+        end_date: endDate,
+        group_by_seller: true,
+        limit: 1000
+      }
+    });
+    
+    if (response.data?.type === 'seller_stats' && response.data.stats) {
+      const sellersWithSales = response.data.stats.map((stat: any) => ({
+        id: stat.seller_id,
+        nom_complet: stat.seller_name,
+        email: stat.seller_name,
+        role: 'vendeur',
+        is_active: true
+      }));
+      setAvailableSellers(sellersWithSales);
+    } else {
+      // Fallback: charger tous les vendeurs
+      const sellersResponse = await api.get('/users/sellers', { 
+        params: { branch_id: branchId } 
+      });
+      let sellersList: Seller[] = [];
+      if (sellersResponse.data?.users && Array.isArray(sellersResponse.data.users)) {
+        sellersList = sellersResponse.data.users;
+      }
+      setAvailableSellers(sellersList);
+    }
+  } catch (error) {
+    console.error('Erreur chargement vendeurs avec ventes:', error);
+  }
+}, [userBranch, getDateRange]);
+
+// Appeler cette fonction quand les filtres de date changent
+useEffect(() => {
+  if (userBranch?.id) {
+    loadAvailableSellers();
+  }
+}, [filters.period, filters.selectedMonth, filters.selectedYear, filters.startDate, filters.endDate, userBranch]);
 
   // Charger les détails d'une vente (GET /sales/{id})
   const loadSaleDetails = useCallback(async (saleId: string) => {
@@ -654,78 +703,16 @@ const FactureManager: React.FC = () => {
 
   // ==================== FONCTIONS D'EXPORT (fallback si pas de FacturePrinter) ====================
 
-  const exportToPDF = async (sale: Sale | FacturePrinterSaleData) => {
-    try {
-      let items: SaleItem[] = [];
-      let saleData: any = sale;
-      
-      // Si c'est un FacturePrinterSaleData, construire les données
-      if ('receiptNumber' in sale && !('created_at' in sale)) {
-        // C'est un FacturePrinterSaleData
-        const element = document.createElement('div');
-        element.className = 'p-6 font-mono';
-        element.style.backgroundColor = 'white';
-        element.style.width = '300px';
+  // Remplacer la fonction exportToPDF par celle-ci (vers la ligne 750)
+
+const exportToPDF = async (sale: Sale | FacturePrinterSaleData) => {
+  try {
+    let items: any[] = [];
         
-        element.innerHTML = `
-          <div style="text-align: center; margin-bottom: 20px;">
-            <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
-            <p>Branche: ${userBranch?.code || ''}</p>
-            <p>N° ${sale.receiptNumber}</p>
-            <p>${formatDateTime(sale.timestamp)}</p>
-          </div>
-          <div style="margin-bottom: 10px;">
-            <p>Client: ${sale.customerName || 'Passager'}</p>
-            <p>Vendeur: ${sale.cashierName}</p>
-            <p>Paiement: ${sale.paymentMethod === 'cash' ? 'Espèces' : 
-              sale.paymentMethod === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
-          </div>
-          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
-          <div style="margin-bottom: 10px;">
-            ${sale.items.map((item: any) => `
-              <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                <span>${item.name} x${item.quantity}</span>
-                <span>${(item.price * item.quantity).toFixed(2)} FC</span>
-              </div>
-              ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
-            `).join('')}
-          </div>
-          <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
-          <div style="display: flex; justify-content: space-between; font-weight: bold;">
-            <span>TOTAL</span>
-            <span>${sale.total.toFixed(2)} FC</span>
-          </div>
-          <div style="text-align: center; margin-top: 20px; font-size: 10px;">
-            <p>Merci de votre visite !</p>
-          </div>
-        `;
-        
-        document.body.appendChild(element);
-        const canvas = await html2canvas(element, { scale: 2 });
-        document.body.removeChild(element);
-        
-        const pdf = new jsPDF({
-          unit: 'mm',
-          format: [80, canvas.height * 80 / canvas.width],
-          orientation: 'portrait'
-        });
-        
-        const imgData = canvas.toDataURL('image/png');
-        pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
-        pdf.save(`facture-${sale.receiptNumber}.pdf`);
-        
-        toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
-        return;
-      }
-      
-      // Sinon, c'est un Sale normal
-      if (!sale.items || sale.items.length === 0) {
-        const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${sale.id}`);
-        items = detailsResponse.data.items || [];
-        saleData = { ...sale, ...detailsResponse.data, items };
-      } else {
-        items = sale.items;
-      }
+    // Si c'est un FacturePrinterSaleData, construire les données
+    if ('receiptNumber' in sale && !('created_at' in sale)) {
+      // S'assurer que total est un nombre
+      const totalAmount = typeof sale.total === 'number' ? sale.total : parseFloat(String(sale.total));
       
       const element = document.createElement('div');
       element.className = 'p-6 font-mono';
@@ -736,29 +723,32 @@ const FactureManager: React.FC = () => {
         <div style="text-align: center; margin-bottom: 20px;">
           <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
           <p>Branche: ${userBranch?.code || ''}</p>
-          <p>N° ${saleData.invoice_number || saleData.reference}</p>
-          <p>${formatDateTime(saleData.created_at)}</p>
+          <p>N° ${sale.receiptNumber}</p>
+          <p>${formatDateTime(sale.timestamp)}</p>
         </div>
         <div style="margin-bottom: 10px;">
-          <p>Client: ${saleData.customer_name || 'Passager'}</p>
-          <p>Vendeur: ${saleData.seller_name}</p>
-          <p>Paiement: ${saleData.payment_method === 'cash' ? 'Espèces' : 
-            saleData.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
+          <p>Client: ${sale.customerName || 'Passager'}</p>
+          <p>Vendeur: ${sale.cashierName}</p>
+          <p>Paiement: ${sale.paymentMethod === 'cash' ? 'Espèces' : 
+            sale.paymentMethod === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
         </div>
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="margin-bottom: 10px;">
-          ${items.map((item: SaleItem) => `
-            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-              <span>${item.product_name} x${item.quantity}</span>
-              <span>${item.total.toFixed(2)} FC</span>
-            </div>
-            ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
-          `).join('')}
+          ${(sale.items || []).map((item: any) => {
+            const itemTotal = (item.price || 0) * (item.quantity || 0);
+            return `
+              <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                <span>${item.name} x${item.quantity}</span>
+                <span>${itemTotal.toFixed(2)} FC</span>
+              </div>
+              ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
+            `;
+          }).join('')}
         </div>
         <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
         <div style="display: flex; justify-content: space-between; font-weight: bold;">
           <span>TOTAL</span>
-          <span>${saleData.total_amount.toFixed(2)} FC</span>
+          <span>${totalAmount.toFixed(2)} FC</span>
         </div>
         <div style="text-align: center; margin-top: 20px; font-size: 10px;">
           <p>Merci de votre visite !</p>
@@ -777,14 +767,94 @@ const FactureManager: React.FC = () => {
       
       const imgData = canvas.toDataURL('image/png');
       pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
-      pdf.save(`facture-${saleData.invoice_number || saleData.reference}.pdf`);
+      pdf.save(`facture-${sale.receiptNumber}.pdf`);
       
       toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
-    } catch (error) {
-      console.error('Erreur export PDF:', error);
-      toast({ title: "Erreur", description: "Impossible de générer le PDF", variant: "destructive" });
+      return;
     }
-  };
+    
+    // Sinon, c'est un Sale normal
+    const saleAsSale = sale as Sale;
+    
+    // S'assurer que total_amount est un nombre
+    const totalAmount = typeof saleAsSale.total_amount === 'number' 
+      ? saleAsSale.total_amount 
+      : parseFloat(String(saleAsSale.total_amount || 0));
+    
+    // Récupérer les items si nécessaire
+    if (!saleAsSale.items || saleAsSale.items.length === 0) {
+      try {
+        const detailsResponse = await api.get<SaleDetailResponse>(`/sales/${saleAsSale.id}`);
+        items = detailsResponse.data.items || [];
+        saleAsSale.items = items;
+      } catch (e) {
+        items = [];
+      }
+    } else {
+      items = saleAsSale.items;
+    }
+    
+    const element = document.createElement('div');
+    element.className = 'p-6 font-mono';
+    element.style.backgroundColor = 'white';
+    element.style.width = '300px';
+    
+    element.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <h2 style="font-weight: bold;">${userBranch?.name || 'Pharmacie'}</h2>
+        <p>Branche: ${userBranch?.code || ''}</p>
+        <p>N° ${saleAsSale.invoice_number || saleAsSale.reference}</p>
+        <p>${formatDateTime(saleAsSale.created_at)}</p>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <p>Client: ${saleAsSale.customer_name || 'Passager'}</p>
+        <p>Vendeur: ${saleAsSale.seller_name}</p>
+        <p>Paiement: ${saleAsSale.payment_method === 'cash' ? 'Espèces' : 
+          saleAsSale.payment_method === 'mobile_money' ? 'Mobile Money' : 'Compte'}</p>
+      </div>
+      <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+      <div style="margin-bottom: 10px;">
+        ${items.map((item: SaleItem) => {
+          const itemTotal = typeof item.total === 'number' ? item.total : parseFloat(String(item.total || 0));
+          return `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+              <span>${item.product_name} x${item.quantity}</span>
+              <span>${itemTotal.toFixed(2)} FC</span>
+            </div>
+            ${item.discount_percent > 0 ? `<div style="font-size: 10px; color: green;">Remise: ${item.discount_percent}%</div>` : ''}
+          `;
+        }).join('')}
+      </div>
+      <hr style="border-top: 1px dashed #ccc; margin: 10px 0;" />
+      <div style="display: flex; justify-content: space-between; font-weight: bold;">
+        <span>TOTAL</span>
+        <span>${totalAmount.toFixed(2)} FC</span>
+      </div>
+      <div style="text-align: center; margin-top: 20px; font-size: 10px;">
+        <p>Merci de votre visite !</p>
+      </div>
+    `;
+    
+    document.body.appendChild(element);
+    const canvas = await html2canvas(element, { scale: 2 });
+    document.body.removeChild(element);
+    
+    const pdf = new jsPDF({
+      unit: 'mm',
+      format: [80, canvas.height * 80 / canvas.width],
+      orientation: 'portrait'
+    });
+    
+    const imgData = canvas.toDataURL('image/png');
+    pdf.addImage(imgData, 'PNG', 0, 0, 80, canvas.height * 80 / canvas.width);
+    pdf.save(`facture-${saleAsSale.invoice_number || saleAsSale.reference}.pdf`);
+    
+    toast({ title: "Succès", description: "PDF généré avec succès", variant: "success" });
+  } catch (error) {
+    console.error('Erreur export PDF:', error);
+    toast({ title: "Erreur", description: "Impossible de générer le PDF: " + (error as Error).message, variant: "destructive" });
+  }
+};
 
   // ==================== STATISTIQUES ====================
 
@@ -998,7 +1068,7 @@ const FactureManager: React.FC = () => {
               className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700"
             >
               <option value="">Tous les vendeurs</option>
-              {sellers.map(seller => (
+              {availableSellers.map(seller => (
                 <option key={seller.id} value={seller.id}>
                   {seller.nom_complet || seller.name || seller.email}
                 </option>
