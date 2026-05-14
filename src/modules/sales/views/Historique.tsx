@@ -1169,21 +1169,34 @@ export default function Historique() {
                       />
                     </div>
                     
-                    {/* Produits de la catégorie */}
+                    {/* TOUS les produits de la catégorie - Sans filtre "plus vendus" */}
                     {category.products.size > 0 && (
                       <div className="mt-3 rounded-xl bg-slate-50 p-3">
-                        <p className="mb-2 text-sm font-semibold text-slate-600">📦 Produits les plus vendus</p>
-                        <div className="space-y-2">
+                        <p className="mb-2 text-sm font-semibold text-slate-600">
+                          📦 Tous les produits vendus dans cette catégorie
+                          <span className="ml-2 text-xs font-normal text-slate-400">
+                            ({category.products.size} produit{category.products.size > 1 ? 's' : ''})
+                          </span>
+                        </p>
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
                           {Array.from(category.products.entries())
+                            // Tri simple par montant décroissant pour meilleure lisibilité
                             .sort((a, b) => b[1].amount - a[1].amount)
-                            .slice(0, 5)
+                            // Afficher TOUS les produits, pas de limite .slice()
                             .map(([productId, product]) => (
-                              <div key={productId} className="flex items-center justify-between border-b border-slate-200 pb-2 last:border-0">
-                                <div>
+                              <div key={productId} className="flex items-center justify-between border-b border-slate-200 pb-2 last:border-0 hover:bg-slate-100/50 p-2 rounded-lg transition-colors">
+                                <div className="flex-1">
                                   <p className="font-medium text-slate-700">{product.productName}</p>
-                                  <p className="text-xs text-slate-400">Quantité: {product.quantity}</p>
+                                  <p className="text-xs text-slate-400">
+                                    Quantité: {product.quantity} unité{product.quantity > 1 ? 's' : ''}
+                                  </p>
                                 </div>
-                                <p className="font-semibold text-emerald-600">{formatPrice(product.amount)}</p>
+                                <div className="text-right">
+                                  <p className="font-semibold text-emerald-600">{formatPrice(product.amount)}</p>
+                                  <p className="text-xs text-slate-400">
+                                    {((product.amount / category.totalAmount) * 100).toFixed(1)}% de la catégorie
+                                  </p>
+                                </div>
                               </div>
                             ))}
                         </div>
@@ -1192,12 +1205,26 @@ export default function Historique() {
                   </div>
                 ))}
                 
-                {/* Résumé des catégories */}
+                {/* Résumé des catégories incluant les non catégorisées */}
                 <div className="bg-linear-to-r from-blue-50 to-indigo-50 p-4 md:p-5">
                   <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
                     <div>
                       <p className="text-xs text-slate-500">Nombre de catégories</p>
-                      <p className="text-xl font-bold text-slate-800">{categoryStats.length}</p>
+                      <p className="text-xl font-bold text-slate-800">
+                        {categoryStats.length}
+                        {(() => {
+                          // Compter les catégories non catégorisées
+                          const uncategorizedCount = categoryStats.filter(c => 
+                            c.categoryId === 'uncategorized' || 
+                            c.categoryName === 'Non catégorisé'
+                          ).length;
+                          return uncategorizedCount > 0 ? (
+                            <span className="text-sm font-normal text-amber-600 ml-1">
+                              (dont {uncategorizedCount} non catégorisée{uncategorizedCount > 1 ? 's' : ''})
+                            </span>
+                          ) : null;
+                        })()}
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs text-slate-500">Catégorie principale</p>
@@ -1216,11 +1243,20 @@ export default function Historique() {
                     </div>
                   </div>
                 </div>
+                
+                {/* Note explicative sur l'affichage */}
+                <div className="bg-amber-50 p-3 text-center text-xs text-amber-700 border-t border-amber-100">
+                  <p className="flex items-center justify-center gap-2">
+                    📊 Toutes les ventes sont affichées • 
+                    {categoryStats.some(c => c.categoryName === 'Non catégorisé') 
+                      ? ' ✓ Les produits non catégorisés sont inclus' 
+                      : ' Tous les produits sont visibles sans limitation'}
+                  </p>
+                </div>
               </div>
             )}
           </section>
         )}
-
         {/* Vue Analyses */}
         {viewMode === 'analytics' && (
           <div className="space-y-6">
