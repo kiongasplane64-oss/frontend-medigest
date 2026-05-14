@@ -11,6 +11,7 @@ export interface User {
   tenant_id?: string | null;
   pharmacy_id?: string | null;
   branch_id?: string; 
+  branch_name?: string;
   current_pharmacy?: {  
     id: string;
     name: string;
@@ -28,6 +29,8 @@ export interface User {
   has_subscription?: boolean;
   subscription_status?: string;
   subscription_end_date?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 type UserInput = Partial<User> & {

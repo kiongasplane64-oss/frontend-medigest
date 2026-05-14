@@ -47,6 +47,7 @@ import {
   TrendingUp as TrendingUpIcon,
   PictureAsPdf as PdfIcon,
   Folder as FolderIcon,
+  Store as StoreIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSnackbar } from 'notistack';
@@ -88,18 +89,21 @@ interface CategoryStats {
   products: Product[];
 }
 
-interface PharmacyInfo {
+interface BranchInfo {
   id: string;
   name: string;
+  code: string;
   address: string;
+  city: string;
   phone: string;
   email: string;
-  licenseNumber: string;
-  logo?: string;
+  is_main_branch: boolean;
+  is_active: boolean;
+  parent_pharmacy_id?: string;
 }
 
 interface ReportData {
-  pharmacy: PharmacyInfo;
+  branch: BranchInfo;
   user: {
     name: string;
     email: string;
@@ -162,9 +166,25 @@ const apiService = {
     return response.data;
   },
 
-  async getPharmacyInfo(): Promise<PharmacyInfo> {
-    const response = await api.get('/pharmacies/current');
-    return response.data;
+  // ✅ CORRIGÉ : Récupérer la branche au lieu de la pharmacie
+  async getCurrentBranch(): Promise<BranchInfo> {
+    try {
+      // Essayer l'endpoint branch/current s'il existe
+      const response = await api.get('/branches/current');
+      return response.data;
+    } catch (error: any) {
+      // Fallback : récupérer la première branche active
+      if (error.response?.status === 404 || error.response?.status === 400) {
+        const branchesResponse = await api.get('/branches/', {
+          params: { limit: 1, is_active: true }
+        });
+        
+        if (branchesResponse.data?.items?.length > 0) {
+          return branchesResponse.data.items[0];
+        }
+      }
+      throw error;
+    }
   },
 };
 
@@ -189,31 +209,59 @@ export default function ReportStockView() {
   const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'profit'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [exporting, setExporting] = useState(false);
-  const [currentPharmacy, setCurrentPharmacy] = useState<PharmacyInfo | null>(null);
+  const [currentBranch, setCurrentBranch] = useState<BranchInfo | null>(null);
+  
 
   const loadData = useCallback(async () => {
+  try {
+    setLoading(true);
+
+    // Charger les catégories et produits en parallèle
+    const [categoriesData, productsData] = await Promise.all([
+      apiService.getCategories(),
+      apiService.getProducts({ get_all: true }),
+    ]);
+
+    setCategories(categoriesData);
+    setAllProducts(productsData);
+
+    // Charger la branche séparément avec gestion d'erreur robuste
+    let branchData: BranchInfo | null = null;
+    
     try {
-      setLoading(true);
-
-      const [categoriesData, productsData, pharmacyData] = await Promise.all([
-        apiService.getCategories(),
-        apiService.getProducts({ get_all: true }),
-        apiService.getPharmacyInfo(),
-      ]);
-
-      setCategories(categoriesData);
-      setAllProducts(productsData);
-      setCurrentPharmacy(pharmacyData);
-
-      const stats = calculateStatsByCategory(productsData, categoriesData, pharmacyData, user);
-      setReportData(stats);
-    } catch (error) {
-      console.error('Erreur chargement données:', error);
-      enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
-    } finally {
-      setLoading(false);
+      branchData = await apiService.getCurrentBranch();
+    } catch (branchError: any) {
+      console.warn('⚠️ Impossible de charger les infos de la branche:', branchError?.response?.data || branchError);
     }
-  }, [user, enqueueSnackbar]);
+
+    // Si la branche n'a pas pu être chargée, utiliser une valeur par défaut
+    if (!branchData) {
+      branchData = {
+        id: user?.branch_id || '',
+        name: user?.branch_name || user?.nom_complet || 'Branche',
+        code: '',
+        address: '',
+        city: '',
+        phone: '',
+        email: '',
+        is_main_branch: false,
+        is_active: true,
+      };
+    }
+
+    setCurrentBranch(branchData);
+
+    // Calculer les statistiques avec les données chargées
+    const stats = calculateStatsByCategory(productsData, categoriesData, branchData, user);
+    setReportData(stats);
+    
+  } catch (error) {
+    console.error('❌ Erreur chargement données:', error);
+    enqueueSnackbar('Impossible de charger les données du stock', { variant: 'error' });
+  } finally {
+    setLoading(false);
+  }
+}, [user, enqueueSnackbar]);
 
   useEffect(() => {
     loadData();
@@ -222,7 +270,7 @@ export default function ReportStockView() {
   const calculateStatsByCategory = (
     productsListData: Product[],
     categoriesList: Category[],
-    pharmacy: PharmacyInfo | null,
+    branch: BranchInfo | null,
     currentUser: any
   ): ReportData => {
     const categoryMap = new Map<string, CategoryStats>();
@@ -297,13 +345,16 @@ export default function ReportStockView() {
       .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
 
     return {
-      pharmacy: pharmacy || {
+      branch: branch || {
         id: '',
-        name: 'Pharmacie',
+        name: 'Branche',
+        code: '',
         address: '',
+        city: '',
         phone: '',
         email: '',
-        licenseNumber: '',
+        is_main_branch: false,
+        is_active: true,
       },
       user: {
         name: currentUser?.nom_complet || currentUser?.email || 'Utilisateur',
@@ -427,7 +478,8 @@ export default function ReportStockView() {
   };
 
   const totalProductsCount = allProducts.length;
-  const pharmacyName = currentPharmacy?.name || 'Pharmacie';
+  const branchName = currentBranch?.name || 'Branche';
+  const branchCode = currentBranch?.code || '';
 
   const filteredCategories = reportData?.categories.filter(cat => {
     if (selectedCategory === 'all') return true;
@@ -448,45 +500,59 @@ export default function ReportStockView() {
     <Box sx={{ p: 2, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
       {/* Header */}
       <Paper sx={{ p: 3, mb: 2, bgcolor: theme.palette.primary.main, color: '#fff' }}>
-        <Typography variant="h4" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <InventoryIcon fontSize="large" />
-          Rapport de Stock - {pharmacyName}
-        </Typography>
-        <Typography variant="subtitle1" sx={{ opacity: 0.9, mt: 1 }}>
-          par catégorie | Total produits: {totalProductsCount}
-        </Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 2 }}>
+          <Box>
+            <Typography variant="h4" sx={{ fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 1 }}>
+              <InventoryIcon fontSize="large" />
+              Rapport de Stock - {branchName}
+            </Typography>
+            <Typography variant="subtitle1" sx={{ opacity: 0.9, mt: 1 }}>
+              par catégorie | Total produits: {totalProductsCount}
+            </Typography>
+          </Box>
+          {branchCode && (
+            <Chip 
+              icon={<StoreIcon />} 
+              label={`Code: ${branchCode}`} 
+              sx={{ 
+                bgcolor: 'rgba(255,255,255,0.2)', 
+                color: '#fff',
+                fontWeight: 'bold',
+                fontSize: '0.9rem'
+              }} 
+            />
+          )}
+        </Box>
       </Paper>
 
-      {/* Toolbar - CORRIGÉ : Syntaxe MUI v6 standard */}
+      {/* Toolbar */}
       <Paper sx={{ p: 2, mb: 2 }}>
         <Grid container spacing={2}>
-          <Grid xs={12} md={4}>
+          <Grid item xs={12} md={4}>
             <TextField
               fullWidth
               size="small"
               placeholder="Rechercher un produit..."
               value={searchQuery}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-              slotProps={{
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon />
-                    </InputAdornment>
-                  ),
-                  endAdornment: searchQuery && (
-                    <InputAdornment position="end">
-                      <IconButton size="small" onClick={() => setSearchQuery('')}>
-                        <CloseIcon fontSize="small" />
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                },
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon />
+                  </InputAdornment>
+                ),
+                endAdornment: searchQuery && (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearchQuery('')}>
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ),
               }}
             />
           </Grid>
 
-          <Grid xs={12} sm={6} md={2}>
+          <Grid item xs={12} sm={6} md={2}>
             <FormControl fullWidth size="small">
               <InputLabel>Catégorie</InputLabel>
               <Select
@@ -503,7 +569,7 @@ export default function ReportStockView() {
             </FormControl>
           </Grid>
 
-          <Grid xs={6} sm={3} md={2}>
+          <Grid item xs={6} sm={3} md={2}>
             <FormControl fullWidth size="small">
               <InputLabel>Trier par</InputLabel>
               <Select
@@ -518,7 +584,7 @@ export default function ReportStockView() {
             </FormControl>
           </Grid>
 
-          <Grid xs={6} sm={3} md={2}>
+          <Grid item xs={6} sm={3} md={2}>
             <Button
               fullWidth
               variant="outlined"
@@ -528,7 +594,7 @@ export default function ReportStockView() {
             </Button>
           </Grid>
 
-          <Grid xs={12} md={2}>
+          <Grid item xs={12} md={2}>
             <Button
               fullWidth
               variant="contained"
@@ -543,7 +609,7 @@ export default function ReportStockView() {
         </Grid>
       </Paper>
 
-      {/* Global Summary - CORRIGÉ : Syntaxe MUI v6 standard */}
+      {/* Global Summary */}
       {reportData && (
         <Paper sx={{ p: 3, mb: 2 }}>
           <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -551,7 +617,7 @@ export default function ReportStockView() {
             Résumé global
           </Typography>
           <Grid container spacing={2}>
-            <Grid xs={6} sm={4} md={2}>
+            <Grid item xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E3F2FD' }}>
                 <CardContent>
                   <InventoryIcon color="primary" />
@@ -560,7 +626,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid xs={6} sm={4} md={2}>
+            <Grid item xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#FFF3E0' }}>
                 <CardContent>
                   <InventoryIcon color="warning" />
@@ -569,7 +635,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid xs={6} sm={4} md={2}>
+            <Grid item xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E8F5E9' }}>
                 <CardContent>
                   <MoneyIcon color="success" />
@@ -578,7 +644,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid xs={6} sm={4} md={2}>
+            <Grid item xs={6} sm={4} md={2}>
               <Card sx={{ textAlign: 'center', bgcolor: '#E8EAF6' }}>
                 <CardContent>
                   <MoneyIcon color="info" />
@@ -587,7 +653,7 @@ export default function ReportStockView() {
                 </CardContent>
               </Card>
             </Grid>
-            <Grid xs={12} sm={8} md={4}>
+            <Grid item xs={12} sm={8} md={4}>
               <Card sx={{ textAlign: 'center', bgcolor: '#C8E6C9' }}>
                 <CardContent>
                   <TrendingUpIcon sx={{ color: '#2E7D32' }} />
@@ -604,136 +670,152 @@ export default function ReportStockView() {
 
       {/* Categories List */}
       <Box>
-        {filteredCategories.map(category => (
-          <Paper key={category.categoryId} sx={{ mb: 2, overflow: 'hidden' }}>
-            <Box
-              sx={{
-                p: 2,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                cursor: 'pointer',
-                bgcolor: category.categoryId === 'uncategorized' ? '#FFF3E0' : '#FAFAFA',
-                '&:hover': { bgcolor: '#F0F0F0' },
-              }}
-              onClick={() => toggleCategory(category.categoryId)}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {category.categoryId === 'uncategorized' ? (
-                  <WarningIcon sx={{ color: '#FF9800' }} />
-                ) : (
-                  <FolderIcon color="primary" />
-                )}
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                  {category.categoryName}
-                </Typography>
-                {category.categoryId === 'uncategorized' && (
-                  <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
-                )}
+        {filteredCategories.length === 0 ? (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <InventoryIcon sx={{ fontSize: 60, color: 'text.disabled', mb: 2 }} />
+            <Typography variant="h6" color="text.secondary">
+              Aucune catégorie trouvée
+            </Typography>
+            <Typography variant="body2" color="text.disabled">
+              {searchQuery 
+                ? 'Aucun produit ne correspond à votre recherche' 
+                : 'Aucun produit dans cette catégorie'}
+            </Typography>
+          </Paper>
+        ) : (
+          filteredCategories.map(category => (
+            <Paper key={category.categoryId} sx={{ mb: 2, overflow: 'hidden' }}>
+              <Box
+                sx={{
+                  p: 2,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  cursor: 'pointer',
+                  bgcolor: category.categoryId === 'uncategorized' ? '#FFF3E0' : '#FAFAFA',
+                  '&:hover': { bgcolor: '#F0F0F0' },
+                }}
+                onClick={() => toggleCategory(category.categoryId)}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {category.categoryId === 'uncategorized' ? (
+                    <WarningIcon sx={{ color: '#FF9800' }} />
+                  ) : (
+                    <FolderIcon color="primary" />
+                  )}
+                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+                    {category.categoryName}
+                  </Typography>
+                  {category.categoryId === 'uncategorized' && (
+                    <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
+                  )}
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Typography variant="body2" color="textSecondary">
+                    {category.productCount} produits | {category.totalQuantity} unités
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
+                    Profit: {formatCurrency(category.totalProfit)}
+                  </Typography>
+                  {expandedCategories.has(category.categoryId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </Box>
               </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography variant="body2" color="textSecondary">
-                  {category.productCount} produits | {category.totalQuantity} unités
-                </Typography>
-                <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
-                  Profit: {formatCurrency(category.totalProfit)}
-                </Typography>
-                {expandedCategories.has(category.categoryId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </Box>
-            </Box>
 
-            <Collapse in={expandedCategories.has(category.categoryId)}>
-              <Box sx={{ p: 2 }}>
-                <TableContainer>
-                  <Table size="small" stickyHeader>
-                    <TableHead>
-                      <StyledTableRow>
-                        <StyledTableCell>Code</StyledTableCell>
-                        <StyledTableCell>Produit</StyledTableCell>
-                        <StyledTableCell align="right">Qté</StyledTableCell>
-                        <StyledTableCell align="right">PA</StyledTableCell>
-                        <StyledTableCell align="right">PV</StyledTableCell>
-                        <StyledTableCell align="right">Val Achat</StyledTableCell>
-                        <StyledTableCell align="right">Val Vente</StyledTableCell>
-                        <StyledTableCell align="right">Profit</StyledTableCell>
-                        <StyledTableCell align="center">Actions</StyledTableCell>
-                      </StyledTableRow>
-                    </TableHead>
-                    <TableBody>
-                      {getFilteredProducts(category.products).map(product => {
-                        const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
-                        const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
-                        const profit = sellingValue - purchaseValue;
+              <Collapse in={expandedCategories.has(category.categoryId)}>
+                <Box sx={{ p: 2 }}>
+                  <TableContainer>
+                    <Table size="small" stickyHeader>
+                      <TableHead>
+                        <StyledTableRow>
+                          <StyledTableCell>Code</StyledTableCell>
+                          <StyledTableCell>Produit</StyledTableCell>
+                          <StyledTableCell align="right">Qté</StyledTableCell>
+                          <StyledTableCell align="right">PA</StyledTableCell>
+                          <StyledTableCell align="right">PV</StyledTableCell>
+                          <StyledTableCell align="right">Val Achat</StyledTableCell>
+                          <StyledTableCell align="right">Val Vente</StyledTableCell>
+                          <StyledTableCell align="right">Profit</StyledTableCell>
+                          <StyledTableCell align="center">Actions</StyledTableCell>
+                        </StyledTableRow>
+                      </TableHead>
+                      <TableBody>
+                        {getFilteredProducts(category.products).map(product => {
+                          const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
+                          const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
+                          const profit = sellingValue - purchaseValue;
 
-                        return (
-                          <StyledTableRow key={product.id}>
-                            <StyledTableCell>{product.code}</StyledTableCell>
-                            <StyledTableCell>
-                              <Tooltip title={product.name}>
-                                <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
-                              </Tooltip>
-                            </StyledTableCell>
-                            <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
-                            <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
-                            <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
-                            <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
-                            <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
-                            <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
-                              {formatCurrency(profit)}
-                            </StyledTableCell>
-                            <StyledTableCell align="center">
-                              {category.categoryId === 'uncategorized' && (
-                                <Tooltip title="Attribuer une catégorie">
+                          return (
+                            <StyledTableRow key={product.id}>
+                              <StyledTableCell>{product.code}</StyledTableCell>
+                              <StyledTableCell>
+                                <Tooltip title={product.name}>
+                                  <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
+                                </Tooltip>
+                              </StyledTableCell>
+                              <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
+                              <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
+                              <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
+                              <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
+                              <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
+                              <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
+                                {formatCurrency(profit)}
+                              </StyledTableCell>
+                              <StyledTableCell align="center">
+                                {category.categoryId === 'uncategorized' && (
+                                  <Tooltip title="Attribuer une catégorie">
+                                    <IconButton
+                                      size="small"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setProductToCategorize(product);
+                                        setCategoryDialogOpen(true);
+                                      }}
+                                    >
+                                      <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+                                    </IconButton>
+                                  </Tooltip>
+                                )}
+                                <Tooltip title="Supprimer">
                                   <IconButton
                                     size="small"
-                                    onClick={() => {
-                                      setProductToCategorize(product);
-                                      setCategoryDialogOpen(true);
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedProduct(product);
+                                      setDeleteDialogOpen(true);
                                     }}
                                   >
-                                    <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+                                    <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
                                   </IconButton>
                                 </Tooltip>
-                              )}
-                              <Tooltip title="Supprimer">
-                                <IconButton
-                                  size="small"
-                                  onClick={() => {
-                                    setSelectedProduct(product);
-                                    setDeleteDialogOpen(true);
-                                  }}
-                                >
-                                  <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
-                                </IconButton>
-                              </Tooltip>
-                            </StyledTableCell>
-                          </StyledTableRow>
-                        );
-                      })}
+                              </StyledTableCell>
+                            </StyledTableRow>
+                          );
+                        })}
 
-                      {/* Category Total Row */}
-                      <StyledTableRow sx={{ bgcolor: '#F5F5F5' }}>
-                        <StyledTableCell colSpan={5}>
-                          <Typography sx={{ fontWeight: 'bold' }}>Totaux {category.categoryName}</Typography>
-                        </StyledTableCell>
-                        <StyledTableCell align="right">
-                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalPurchaseValue)}</Typography>
-                        </StyledTableCell>
-                        <StyledTableCell align="right">
-                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalSellingValue)}</Typography>
-                        </StyledTableCell>
-                        <StyledTableCell align="right" sx={{ color: '#4CAF50' }}>
-                          <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalProfit)}</Typography>
-                        </StyledTableCell>
-                        <StyledTableCell />
-                      </StyledTableRow>
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            </Collapse>
-          </Paper>
-        ))}
+                        {/* Category Total Row */}
+                        <StyledTableRow sx={{ bgcolor: '#F5F5F5' }}>
+                          <StyledTableCell colSpan={5}>
+                            <Typography sx={{ fontWeight: 'bold' }}>Totaux {category.categoryName}</Typography>
+                          </StyledTableCell>
+                          <StyledTableCell align="right">
+                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalPurchaseValue)}</Typography>
+                          </StyledTableCell>
+                          <StyledTableCell align="right">
+                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalSellingValue)}</Typography>
+                          </StyledTableCell>
+                          <StyledTableCell align="right" sx={{ color: '#4CAF50' }}>
+                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalProfit)}</Typography>
+                          </StyledTableCell>
+                          <StyledTableCell />
+                        </StyledTableRow>
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              </Collapse>
+            </Paper>
+          ))
+        )}
       </Box>
 
       {/* Footer */}
@@ -744,6 +826,11 @@ export default function ReportStockView() {
         <Typography variant="caption" color="textSecondary" component="div">
           👤 {user?.nom_complet || user?.email}
         </Typography>
+        {currentBranch?.city && (
+          <Typography variant="caption" color="textSecondary" component="div">
+            📍 {currentBranch.name} - {currentBranch.city}
+          </Typography>
+        )}
       </Paper>
 
       {/* Delete Dialog */}
