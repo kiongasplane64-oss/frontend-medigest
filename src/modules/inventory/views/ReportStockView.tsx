@@ -158,7 +158,7 @@ const CategorySection = React.memo(({
   onCategorize: (product: Product) => void;
   onDelete: (product: Product) => void;
 }) => {
-  const [visibleCount, setVisibleCount] = useState(50);
+  const [visibleCount, setVisibleCount] = useState(1000);
   
   // Filtrer et trier les produits avec useMemo pour éviter les recalculs inutiles
   const filteredProducts = useMemo(() => {
