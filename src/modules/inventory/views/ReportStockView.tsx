@@ -48,41 +48,33 @@ import {
   PictureAsPdf as PdfIcon,
   Folder as FolderIcon,
   Store as StoreIcon,
+  Category as CategoryIcon,
 } from '@mui/icons-material';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSnackbar } from 'notistack';
 import api from '@/api/client';
 import { formatCurrency } from '@/utils/formatters';
 
-// Types
-interface Category {
-  id: string;
-  name: string;
-  description?: string;
-  parent_id?: string;
-  is_active: boolean;
-}
-
+// Types - Adaptés à la structure sans table categories
 interface Product {
   id: string;
   name: string;
+  commercial_name?: string;
   code: string;
   barcode?: string;
   quantity: number;
   purchase_price: number;
   selling_price: number;
-  category_id?: string;
-  category?: Category;
-  expired?: boolean;
+  category: string | null;  // Champ texte direct, pas category_id
+  branch_id?: string;
+  pharmacy_id?: string;
   expiry_date?: string;
   stock_status?: string;
-  pharmacy_id?: string;
-  branch_id?: string;
+  is_active: boolean;
 }
 
 interface CategoryStats {
-  categoryId: string;
-  categoryName: string;
+  categoryName: string;  // Nom de la catégorie (texte)
   totalQuantity: number;
   totalPurchaseValue: number;
   totalSellingValue: number;
@@ -146,18 +138,19 @@ const StyledTableRow = styled(TableRow)(({ theme }) => ({
   },
 }));
 
+// Service API adapté
 const apiService = {
-  async getCategories(): Promise<Category[]> {
-    const response = await api.get('/stock/categories/simple');
-    return response.data;
-  },
-
-  async getProducts(params?: { category_id?: string; get_all?: boolean; pharmacy_id?: string; branch_id?: string }): Promise<Product[]> {
+  async getProducts(params?: { 
+    get_all?: boolean; 
+    pharmacy_id?: string; 
+    branch_id?: string;
+    search?: string;
+  }): Promise<Product[]> {
     const queryParams = new URLSearchParams();
-    if (params?.category_id) queryParams.append('category_id', params.category_id);
     if (params?.get_all) queryParams.append('get_all', 'true');
     if (params?.pharmacy_id) queryParams.append('pharmacy_id', params.pharmacy_id);
     if (params?.branch_id) queryParams.append('branch_id', params.branch_id);
+    if (params?.search) queryParams.append('search', params.search);
 
     const response = await api.get(`/stock/?${queryParams.toString()}`);
     return response.data.products || [];
@@ -170,8 +163,8 @@ const apiService = {
     return response.data;
   },
 
-  async updateProduct(productId: string, data: Partial<Product>): Promise<Product> {
-    const response = await api.put(`/stock/${productId}`, data);
+  async updateProductCategory(productId: string, category: string): Promise<Product> {
+    const response = await api.put(`/stock/${productId}`, { category });
     return response.data;
   },
 
@@ -206,6 +199,13 @@ const apiService = {
       return null;
     }
   },
+
+  async generatePdfReport(reportData: any): Promise<Blob> {
+    const response = await api.post('/stock/reports/stock-pdf', reportData, {
+      responseType: 'blob',
+    });
+    return response.data;
+  }
 };
 
 export default function ReportStockView({ pharmacyId, branchId }: ReportStockViewProps) {
@@ -214,7 +214,6 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
   const theme = useTheme();
 
   const [loading, setLoading] = useState(true);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -223,32 +222,39 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
   const [deletionReason, setDeletionReason] = useState('');
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [productToCategorize, setProductToCategorize] = useState<Product | null>(null);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
+  const [newCategoryName, setNewCategoryName] = useState<string>('');
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'profit'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [exporting, setExporting] = useState(false);
   const [currentBranch, setCurrentBranch] = useState<BranchInfo | null>(null);
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
 
-      // Charger les catégories et produits en parallèle avec les filtres pharmacy_id/branch_id
-      const [categoriesData, productsData] = await Promise.all([
-        apiService.getCategories(),
-        apiService.getProducts({ 
-          get_all: true,
-          pharmacy_id: pharmacyId,
-          branch_id: branchId
-        }),
-      ]);
+      // Charger les produits avec les filtres
+      const productsData = await apiService.getProducts({ 
+        get_all: true,
+        pharmacy_id: pharmacyId,
+        branch_id: branchId
+      });
 
-      setCategories(categoriesData);
       setAllProducts(productsData);
 
-      // Charger la branche (priorité à branchId passé en prop, sinon charger automatiquement)
+      // Extraire les catégories uniques des produits
+      const uniqueCategories = Array.from(
+        new Set(
+          productsData
+            .filter(p => p.category && p.category.trim() !== '')
+            .map(p => p.category as string)
+        )
+      ).sort();
+      setAvailableCategories(uniqueCategories);
+
+      // Charger la branche
       let branchData: BranchInfo | null = null;
       
       if (branchId) {
@@ -259,8 +265,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
         branchData = await apiService.getBranchInfo();
       }
 
-      // Si aucune branche n'est trouvée, utiliser les infos de l'utilisateur
-      if (!branchData) {
+      if (!branchData && user) {
         branchData = {
           id: branchId || user?.branch_id || '',
           name: user?.branch_name || user?.nom_complet?.split(' ')[0] || 'Branche',
@@ -277,8 +282,8 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
 
       setCurrentBranch(branchData);
 
-      // Calculer les statistiques avec les données chargées
-      const stats = calculateStatsByCategory(productsData, categoriesData, branchData, user);
+      // Calculer les statistiques
+      const stats = calculateStatsByCategory(productsData, branchData, user);
       setReportData(stats);
       
     } catch (error) {
@@ -291,84 +296,71 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
 
   useEffect(() => {
     loadData();
-  }, [loadData, pharmacyId, branchId]);
+  }, [loadData]);
 
   const calculateStatsByCategory = (
-    productsListData: Product[],
-    categoriesList: Category[],
+    productsList: Product[],
     branch: BranchInfo | null,
     currentUser: any
   ): ReportData => {
     const categoryMap = new Map<string, CategoryStats>();
 
-    categoriesList.forEach(cat => {
-      categoryMap.set(cat.id, {
-        categoryId: cat.id,
-        categoryName: cat.name,
-        totalQuantity: 0,
-        totalPurchaseValue: 0,
-        totalSellingValue: 0,
-        totalProfit: 0,
-        productCount: 0,
-        products: [],
-      });
-    });
-
-    const uncategorized: CategoryStats = {
-      categoryId: 'uncategorized',
-      categoryName: 'Sans catégorie',
-      totalQuantity: 0,
-      totalPurchaseValue: 0,
-      totalSellingValue: 0,
-      totalProfit: 0,
-      productCount: 0,
-      products: [],
-    };
-
-    let globalTotals = {
-      totalQuantity: 0,
-      totalPurchaseValue: 0,
-      totalSellingValue: 0,
-      totalProfit: 0,
-      productCount: 0,
-    };
-
-    productsListData.forEach(product => {
+    // Grouper les produits par catégorie (texte direct)
+    productsList.forEach(product => {
       const quantity = product.quantity || 0;
       const purchaseValue = quantity * (product.purchase_price || 0);
       const sellingValue = quantity * (product.selling_price || 0);
       const profit = sellingValue - purchaseValue;
+      const categoryName = product.category && product.category.trim() !== '' 
+        ? product.category.trim() 
+        : 'Sans catégorie';
 
       const productWithStats = { ...product };
 
-      globalTotals.totalQuantity += quantity;
-      globalTotals.totalPurchaseValue += purchaseValue;
-      globalTotals.totalSellingValue += sellingValue;
-      globalTotals.totalProfit += profit;
-      globalTotals.productCount += 1;
-
-      if (product.category_id && categoryMap.has(product.category_id)) {
-        const stats = categoryMap.get(product.category_id)!;
-        stats.totalQuantity += quantity;
-        stats.totalPurchaseValue += purchaseValue;
-        stats.totalSellingValue += sellingValue;
-        stats.totalProfit += profit;
-        stats.productCount += 1;
-        stats.products.push(productWithStats);
-        categoryMap.set(product.category_id, stats);
-      } else {
-        uncategorized.totalQuantity += quantity;
-        uncategorized.totalPurchaseValue += purchaseValue;
-        uncategorized.totalSellingValue += sellingValue;
-        uncategorized.totalProfit += profit;
-        uncategorized.productCount += 1;
-        uncategorized.products.push(productWithStats);
+      if (!categoryMap.has(categoryName)) {
+        categoryMap.set(categoryName, {
+          categoryName,
+          totalQuantity: 0,
+          totalPurchaseValue: 0,
+          totalSellingValue: 0,
+          totalProfit: 0,
+          productCount: 0,
+          products: [],
+        });
       }
+
+      const stats = categoryMap.get(categoryName)!;
+      stats.totalQuantity += quantity;
+      stats.totalPurchaseValue += purchaseValue;
+      stats.totalSellingValue += sellingValue;
+      stats.totalProfit += profit;
+      stats.productCount += 1;
+      stats.products.push(productWithStats);
     });
 
-    const categoriesArray = Array.from(categoryMap.values())
-      .filter(cat => cat.productCount > 0)
-      .sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+    // Séparer les catégories normales et "Sans catégorie"
+    let uncategorized: CategoryStats | null = null;
+    const categoriesArray: CategoryStats[] = [];
+
+    for (const [name, stats] of categoryMap.entries()) {
+      if (name === 'Sans catégorie') {
+        uncategorized = stats;
+      } else {
+        categoriesArray.push(stats);
+      }
+    }
+
+    // Trier les catégories par nom
+    categoriesArray.sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+
+    // Calculer les totaux globaux
+    const globalTotals = {
+      totalQuantity: categoriesArray.reduce((sum, c) => sum + c.totalQuantity, 0) + (uncategorized?.totalQuantity || 0),
+      totalPurchaseValue: categoriesArray.reduce((sum, c) => sum + c.totalPurchaseValue, 0) + (uncategorized?.totalPurchaseValue || 0),
+      totalSellingValue: categoriesArray.reduce((sum, c) => sum + c.totalSellingValue, 0) + (uncategorized?.totalSellingValue || 0),
+      totalProfit: categoriesArray.reduce((sum, c) => sum + c.totalProfit, 0) + (uncategorized?.totalProfit || 0),
+      productCount: productsList.length,
+    };
 
     return {
       branch: branch || {
@@ -390,13 +382,21 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
       },
       date: new Date().toLocaleDateString('fr-FR'),
       categories: categoriesArray,
-      uncategorized,
+      uncategorized: uncategorized || {
+        categoryName: 'Sans catégorie',
+        totalQuantity: 0,
+        totalPurchaseValue: 0,
+        totalSellingValue: 0,
+        totalProfit: 0,
+        productCount: 0,
+        products: [],
+      },
       globalTotals,
     };
   };
 
-  const getFilteredProducts = (productsListData: Product[]): Product[] => {
-    let filtered = [...productsListData];
+  const getFilteredProducts = (productsList: Product[]): Product[] => {
+    let filtered = [...productsList];
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -450,14 +450,14 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
   };
 
   const handleUpdateCategory = async () => {
-    if (!productToCategorize || !selectedCategoryId) return;
+    if (!productToCategorize || !newCategoryName.trim()) return;
 
     try {
-      await apiService.updateProduct(productToCategorize.id, { category_id: selectedCategoryId });
+      await apiService.updateProductCategory(productToCategorize.id, newCategoryName.trim());
       enqueueSnackbar('Catégorie mise à jour avec succès', { variant: 'success' });
       setCategoryDialogOpen(false);
       setProductToCategorize(null);
-      setSelectedCategoryId('');
+      setNewCategoryName('');
       loadData();
     } catch (error) {
       console.error('Erreur mise à jour catégorie:', error);
@@ -470,15 +470,35 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
     setExporting(true);
 
     try {
-      const response = await api.post('/reports/stock-pdf', {
-        ...reportData,
+      const requestData = {
+        branch: reportData.branch,
+        user: reportData.user,
+        categories: reportData.categories.map(cat => ({
+          categoryName: cat.categoryName,
+          totalQuantity: cat.totalQuantity,
+          totalPurchaseValue: cat.totalPurchaseValue,
+          totalSellingValue: cat.totalSellingValue,
+          totalProfit: cat.totalProfit,
+          productCount: cat.productCount,
+          products: cat.products.map(p => ({
+            id: p.id,
+            name: p.name,
+            code: p.code,
+            quantity: p.quantity,
+            purchase_price: p.purchase_price,
+            selling_price: p.selling_price,
+            category: p.category
+          }))
+        })),
+        uncategorized: reportData.uncategorized,
+        globalTotals: reportData.globalTotals,
         pharmacy_id: pharmacyId,
         branch_id: branchId,
-      }, {
-        responseType: 'blob',
-      });
+      };
 
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const pdfBlob = await apiService.generatePdfReport(requestData);
+      
+      const url = window.URL.createObjectURL(pdfBlob);
       const link = document.createElement('a');
       link.href = url;
       link.setAttribute('download', `rapport_stock_${new Date().toISOString().split('T')[0]}.pdf`);
@@ -488,21 +508,21 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
       window.URL.revokeObjectURL(url);
 
       enqueueSnackbar('PDF généré avec succès', { variant: 'success' });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erreur export PDF:', error);
-      enqueueSnackbar('Impossible de générer le PDF', { variant: 'error' });
+      enqueueSnackbar('Impossible de générer le PDF: ' + (error.message || 'Erreur inconnue'), { variant: 'error' });
     } finally {
       setExporting(false);
     }
   };
 
-  const toggleCategory = (categoryId: string) => {
+  const toggleCategory = (categoryName: string) => {
     setExpandedCategories(prev => {
       const next = new Set(prev);
-      if (next.has(categoryId)) {
-        next.delete(categoryId);
+      if (next.has(categoryName)) {
+        next.delete(categoryName);
       } else {
-        next.add(categoryId);
+        next.add(categoryName);
       }
       return next;
     });
@@ -512,16 +532,27 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
   const branchName = currentBranch?.name || 'Branche';
   const branchCode = currentBranch?.code || '';
 
-  const filteredCategories = reportData?.categories.filter(cat => {
-    if (selectedCategory === 'all') return true;
-    if (selectedCategory === 'uncategorized') return cat.categoryId === 'uncategorized';
-    return cat.categoryId === selectedCategory;
-  }) || [];
+  // Filtrer les catégories à afficher
+  const getCategoriesToDisplay = () => {
+    if (!reportData) return [];
+    
+    const allCats = [...reportData.categories];
+    if (selectedCategory === 'all') {
+      return allCats;
+    }
+    if (selectedCategory === 'uncategorized') {
+      return reportData.uncategorized.productCount > 0 ? [reportData.uncategorized] : [];
+    }
+    const found = allCats.find(c => c.categoryName === selectedCategory);
+    return found ? [found] : [];
+  };
 
-  // Afficher les filtres actifs (pharmacy/branch)
+  const categoriesToDisplay = getCategoriesToDisplay();
+
+  // Afficher les filtres actifs
   const activeFilters = [];
-  if (pharmacyId) activeFilters.push(`Pharmacie: ${pharmacyId}`);
-  if (branchId) activeFilters.push(`Branche: ${branchId}`);
+  if (pharmacyId) activeFilters.push(`Pharmacie: ${pharmacyId.substring(0, 8)}...`);
+  if (branchId) activeFilters.push(`Branche: ${branchId.substring(0, 8)}...`);
 
   if (loading) {
     return (
@@ -601,9 +632,14 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                 onChange={(e: SelectChangeEvent) => setSelectedCategory(e.target.value)}
                 label="Catégorie"
               >
-                <MenuItem value="all">Toutes les catégories</MenuItem>
-                {categories.map(cat => (
-                  <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+                <MenuItem value="all">📁 Toutes les catégories</MenuItem>
+                {availableCategories.map(cat => (
+                  <MenuItem key={cat} value={cat}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <CategoryIcon fontSize="small" />
+                      {cat}
+                    </Box>
+                  </MenuItem>
                 ))}
                 <MenuItem value="uncategorized">⚠️ Sans catégorie</MenuItem>
               </Select>
@@ -711,7 +747,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
 
       {/* Categories List */}
       <Box>
-        {filteredCategories.length === 0 ? (
+        {categoriesToDisplay.length === 0 ? (
           <Paper sx={{ p: 4, textAlign: 'center' }}>
             <InventoryIcon sx={{ fontSize: 60, color: 'text.disabled', mb: 2 }} />
             <Typography variant="h6" color="text.secondary">
@@ -724,8 +760,8 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
             </Typography>
           </Paper>
         ) : (
-          filteredCategories.map(category => (
-            <Paper key={category.categoryId} sx={{ mb: 2, overflow: 'hidden' }}>
+          categoriesToDisplay.map(category => (
+            <Paper key={category.categoryName} sx={{ mb: 2, overflow: 'hidden' }}>
               <Box
                 sx={{
                   p: 2,
@@ -733,13 +769,13 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   cursor: 'pointer',
-                  bgcolor: category.categoryId === 'uncategorized' ? '#FFF3E0' : '#FAFAFA',
+                  bgcolor: category.categoryName === 'Sans catégorie' ? '#FFF3E0' : '#FAFAFA',
                   '&:hover': { bgcolor: '#F0F0F0' },
                 }}
-                onClick={() => toggleCategory(category.categoryId)}
+                onClick={() => toggleCategory(category.categoryName)}
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  {category.categoryId === 'uncategorized' ? (
+                  {category.categoryName === 'Sans catégorie' ? (
                     <WarningIcon sx={{ color: '#FF9800' }} />
                   ) : (
                     <FolderIcon color="primary" />
@@ -747,7 +783,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                   <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
                     {category.categoryName}
                   </Typography>
-                  {category.categoryId === 'uncategorized' && (
+                  {category.categoryName === 'Sans catégorie' && (
                     <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
                   )}
                 </Box>
@@ -758,11 +794,11 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                   <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
                     Profit: {formatCurrency(category.totalProfit)}
                   </Typography>
-                  {expandedCategories.has(category.categoryId) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  {expandedCategories.has(category.categoryName) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                 </Box>
               </Box>
 
-              <Collapse in={expandedCategories.has(category.categoryId)}>
+              <Collapse in={expandedCategories.has(category.categoryName)}>
                 <Box sx={{ p: 2 }}>
                   <TableContainer>
                     <Table size="small" stickyHeader>
@@ -792,6 +828,11 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                                 <Tooltip title={product.name}>
                                   <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
                                 </Tooltip>
+                                {product.commercial_name && (
+                                  <Typography variant="caption" component="div" color="textSecondary">
+                                    {product.commercial_name}
+                                  </Typography>
+                                )}
                               </StyledTableCell>
                               <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
                               <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
@@ -802,7 +843,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
                                 {formatCurrency(profit)}
                               </StyledTableCell>
                               <StyledTableCell align="center">
-                                {category.categoryId === 'uncategorized' && (
+                                {category.categoryName === 'Sans catégorie' && (
                                   <Tooltip title="Attribuer une catégorie">
                                     <IconButton
                                       size="small"
@@ -874,7 +915,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
         )}
         {(pharmacyId || branchId) && (
           <Typography variant="caption" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
-            🔍 Filtré par: {pharmacyId && `Pharmacie ${pharmacyId}`} {branchId && `Branche ${branchId}`}
+            🔍 Filtré par: {pharmacyId && `Pharmacie ${pharmacyId.substring(0, 8)}...`} {branchId && `Branche ${branchId.substring(0, 8)}...`}
           </Typography>
         )}
       </Paper>
@@ -905,30 +946,46 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
         </DialogActions>
       </Dialog>
 
-      {/* Category Dialog */}
+      {/* Category Dialog - Modification pour utiliser un champ texte */}
       <Dialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>🏷️ Attribuer une catégorie</DialogTitle>
         <DialogContent>
           <Typography variant="subtitle2" color="primary" gutterBottom>
             {productToCategorize?.name}
           </Typography>
+          
+          {/* Sélection parmi les catégories existantes */}
           <FormControl fullWidth margin="normal">
-            <InputLabel>Catégorie</InputLabel>
+            <InputLabel>Ou choisir une catégorie existante</InputLabel>
             <Select
-              value={selectedCategoryId}
-              onChange={(e: SelectChangeEvent) => setSelectedCategoryId(e.target.value)}
-              label="Catégorie"
+              value={newCategoryName}
+              onChange={(e: SelectChangeEvent) => setNewCategoryName(e.target.value)}
+              label="Ou choisir une catégorie existante"
             >
-              <MenuItem value="">-- Choisir une catégorie --</MenuItem>
-              {categories.map(cat => (
-                <MenuItem key={cat.id} value={cat.id}>{cat.name}</MenuItem>
+              <MenuItem value="">-- Choisir --</MenuItem>
+              {availableCategories.map(cat => (
+                <MenuItem key={cat} value={cat}>{cat}</MenuItem>
               ))}
             </Select>
           </FormControl>
+          
+          <Typography variant="body2" color="textSecondary" sx={{ my: 1, textAlign: 'center' }}>
+            — OU —
+          </Typography>
+          
+          {/* Nouvelle catégorie en texte libre */}
+          <TextField
+            fullWidth
+            label="Nouvelle catégorie"
+            value={newCategoryName}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewCategoryName(e.target.value)}
+            placeholder="Ex: Antibiotiques, Pansements, ..."
+            helperText="Vous pouvez créer une nouvelle catégorie en tapant son nom"
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCategoryDialogOpen(false)}>Annuler</Button>
-          <Button onClick={handleUpdateCategory} variant="contained" disabled={!selectedCategoryId}>
+          <Button onClick={handleUpdateCategory} variant="contained" disabled={!newCategoryName.trim()}>
             Valider
           </Button>
         </DialogActions>
