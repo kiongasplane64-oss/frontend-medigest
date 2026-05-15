@@ -76,6 +76,8 @@ interface Product {
   expired?: boolean;
   expiry_date?: string;
   stock_status?: string;
+  pharmacy_id?: string;
+  branch_id?: string;
 }
 
 interface CategoryStats {
@@ -121,6 +123,11 @@ interface ReportData {
   };
 }
 
+interface ReportStockViewProps {
+  pharmacyId?: string;
+  branchId?: string;
+}
+
 const StyledTableCell = styled(TableCell)(({ theme }) => ({
   fontSize: '0.75rem',
   padding: '8px 4px',
@@ -145,10 +152,12 @@ const apiService = {
     return response.data;
   },
 
-  async getProducts(params?: { category_id?: string; get_all?: boolean }): Promise<Product[]> {
+  async getProducts(params?: { category_id?: string; get_all?: boolean; pharmacy_id?: string; branch_id?: string }): Promise<Product[]> {
     const queryParams = new URLSearchParams();
     if (params?.category_id) queryParams.append('category_id', params.category_id);
     if (params?.get_all) queryParams.append('get_all', 'true');
+    if (params?.pharmacy_id) queryParams.append('pharmacy_id', params.pharmacy_id);
+    if (params?.branch_id) queryParams.append('branch_id', params.branch_id);
 
     const response = await api.get(`/stock/?${queryParams.toString()}`);
     return response.data.products || [];
@@ -166,42 +175,40 @@ const apiService = {
     return response.data;
   },
 
-  // ✅ Utilisation de l'endpoint /branches/current qui existe dans le backend
-  async getCurrentBranch(): Promise<BranchInfo> {
+  async getBranchInfo(branchId?: string): Promise<BranchInfo | null> {
+    if (branchId) {
+      try {
+        const response = await api.get(`/branches/${branchId}`);
+        return response.data;
+      } catch (error) {
+        console.warn('⚠️ Erreur chargement branche spécifique:', error);
+      }
+    }
+
     try {
-      // L'endpoint /branches/current existe dans branches.py
       const response = await api.get('/branches/current');
       return response.data;
     } catch (error: any) {
       console.warn('⚠️ Erreur sur /branches/current:', error?.response?.status);
       
-      // Fallback 1: Essayer de récupérer via l'utilisateur
       try {
         const userResponse = await api.get('/users/me');
-        const branchId = userResponse.data?.branch_id || userResponse.data?.active_branch_id;
+        const userBranchId = userResponse.data?.branch_id || userResponse.data?.active_branch_id;
         
-        if (branchId) {
-          const branchResponse = await api.get(`/branches/${branchId}`);
+        if (userBranchId) {
+          const branchResponse = await api.get(`/branches/${userBranchId}`);
           return branchResponse.data;
         }
-        throw new Error('Aucun ID de branche trouvé');
       } catch (fallbackError) {
-        // Fallback 2: Récupérer la première branche active
-        const branchesResponse = await api.get('/branches/', {
-          params: { limit: 1, is_active: true }
-        });
-        
-        if (branchesResponse.data?.items?.length > 0) {
-          return branchesResponse.data.items[0];
-        }
-        
-        throw new Error('Aucune branche disponible');
+        console.warn('⚠️ Fallback échoué:', fallbackError);
       }
+      
+      return null;
     }
   },
 };
 
-export default function ReportStockView() {
+export default function ReportStockView({ pharmacyId, branchId }: ReportStockViewProps) {
   const { user } = useAuthStore();
   const { enqueueSnackbar } = useSnackbar();
   const theme = useTheme();
@@ -228,28 +235,34 @@ export default function ReportStockView() {
     try {
       setLoading(true);
 
-      // Charger les catégories et produits en parallèle
+      // Charger les catégories et produits en parallèle avec les filtres pharmacy_id/branch_id
       const [categoriesData, productsData] = await Promise.all([
         apiService.getCategories(),
-        apiService.getProducts({ get_all: true }),
+        apiService.getProducts({ 
+          get_all: true,
+          pharmacy_id: pharmacyId,
+          branch_id: branchId
+        }),
       ]);
 
       setCategories(categoriesData);
       setAllProducts(productsData);
 
-      // Charger la branche active de l'utilisateur
+      // Charger la branche (priorité à branchId passé en prop, sinon charger automatiquement)
       let branchData: BranchInfo | null = null;
       
-      try {
-        branchData = await apiService.getCurrentBranch();
-      } catch (branchError: any) {
-        console.warn('⚠️ Impossible de charger la branche:', branchError?.message);
+      if (branchId) {
+        branchData = await apiService.getBranchInfo(branchId);
+      }
+      
+      if (!branchData) {
+        branchData = await apiService.getBranchInfo();
       }
 
       // Si aucune branche n'est trouvée, utiliser les infos de l'utilisateur
       if (!branchData) {
         branchData = {
-          id: user?.branch_id || '',
+          id: branchId || user?.branch_id || '',
           name: user?.branch_name || user?.nom_complet?.split(' ')[0] || 'Branche',
           code: '',
           address: '',
@@ -258,7 +271,7 @@ export default function ReportStockView() {
           email: user?.email || '',
           is_main_branch: false,
           is_active: true,
-          parent_pharmacy_id: undefined,
+          parent_pharmacy_id: pharmacyId,
         };
       }
 
@@ -274,11 +287,11 @@ export default function ReportStockView() {
     } finally {
       setLoading(false);
     }
-  }, [user, enqueueSnackbar]);
+  }, [user, enqueueSnackbar, pharmacyId, branchId]);
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+  }, [loadData, pharmacyId, branchId]);
 
   const calculateStatsByCategory = (
     productsListData: Product[],
@@ -359,7 +372,7 @@ export default function ReportStockView() {
 
     return {
       branch: branch || {
-        id: '',
+        id: branchId || '',
         name: 'Branche',
         code: '',
         address: '',
@@ -368,6 +381,7 @@ export default function ReportStockView() {
         email: '',
         is_main_branch: false,
         is_active: true,
+        parent_pharmacy_id: pharmacyId,
       },
       user: {
         name: currentUser?.nom_complet || currentUser?.email || 'Utilisateur',
@@ -456,7 +470,11 @@ export default function ReportStockView() {
     setExporting(true);
 
     try {
-      const response = await api.post('/reports/stock-pdf', reportData, {
+      const response = await api.post('/reports/stock-pdf', {
+        ...reportData,
+        pharmacy_id: pharmacyId,
+        branch_id: branchId,
+      }, {
         responseType: 'blob',
       });
 
@@ -500,6 +518,11 @@ export default function ReportStockView() {
     return cat.categoryId === selectedCategory;
   }) || [];
 
+  // Afficher les filtres actifs (pharmacy/branch)
+  const activeFilters = [];
+  if (pharmacyId) activeFilters.push(`Pharmacie: ${pharmacyId}`);
+  if (branchId) activeFilters.push(`Branche: ${branchId}`);
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
@@ -522,6 +545,11 @@ export default function ReportStockView() {
             <Typography variant="subtitle1" sx={{ opacity: 0.9, mt: 1 }}>
               par catégorie | Total produits: {totalProductsCount}
             </Typography>
+            {activeFilters.length > 0 && (
+              <Typography variant="caption" sx={{ opacity: 0.7, mt: 0.5, display: 'block' }}>
+                Filtres actifs: {activeFilters.join(' • ')}
+              </Typography>
+            )}
           </Box>
           {branchCode && (
             <Chip 
@@ -842,6 +870,11 @@ export default function ReportStockView() {
         {currentBranch?.city && (
           <Typography variant="caption" color="textSecondary" component="div">
             📍 {currentBranch.name} - {currentBranch.city}
+          </Typography>
+        )}
+        {(pharmacyId || branchId) && (
+          <Typography variant="caption" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
+            🔍 Filtré par: {pharmacyId && `Pharmacie ${pharmacyId}`} {branchId && `Branche ${branchId}`}
           </Typography>
         )}
       </Paper>
