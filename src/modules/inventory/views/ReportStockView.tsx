@@ -1,5 +1,5 @@
 // src/modules/inventory/views/ReportStockView.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -55,7 +55,7 @@ import { useSnackbar } from 'notistack';
 import api from '@/api/client';
 import { formatCurrency } from '@/utils/formatters';
 
-// Types - Adaptés à la structure sans table categories
+// Types
 interface Product {
   id: string;
   name: string;
@@ -65,7 +65,7 @@ interface Product {
   quantity: number;
   purchase_price: number;
   selling_price: number;
-  category: string | null;  // Champ texte direct, pas category_id
+  category: string | null;
   branch_id?: string;
   pharmacy_id?: string;
   expiry_date?: string;
@@ -74,7 +74,7 @@ interface Product {
 }
 
 interface CategoryStats {
-  categoryName: string;  // Nom de la catégorie (texte)
+  categoryName: string;
   totalQuantity: number;
   totalPurchaseValue: number;
   totalSellingValue: number;
@@ -138,19 +138,229 @@ const StyledTableRow = styled(TableRow)(({ theme }) => ({
   },
 }));
 
-// Service API adapté
+// Composant de section de catégorie optimisé avec React.memo
+const CategorySection = React.memo(({ 
+  category, 
+  expanded,
+  onToggle,
+  searchQuery,
+  sortBy,
+  sortOrder,
+  onCategorize,
+  onDelete
+}: {
+  category: CategoryStats;
+  expanded: boolean;
+  onToggle: () => void;
+  searchQuery: string;
+  sortBy: string;
+  sortOrder: string;
+  onCategorize: (product: Product) => void;
+  onDelete: (product: Product) => void;
+}) => {
+  const [visibleCount, setVisibleCount] = useState(50);
+  
+  // Filtrer et trier les produits avec useMemo pour éviter les recalculs inutiles
+  const filteredProducts = useMemo(() => {
+    let filtered = [...category.products];
+    
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        p.code.toLowerCase().includes(query) ||
+        (p.barcode && p.barcode.toLowerCase().includes(query))
+      );
+    }
+    
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      switch (sortBy) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'quantity':
+          comparison = (a.quantity || 0) - (b.quantity || 0);
+          break;
+        case 'profit':
+          const profitA = (a.quantity || 0) * ((a.selling_price || 0) - (a.purchase_price || 0));
+          const profitB = (b.quantity || 0) * ((b.selling_price || 0) - (b.purchase_price || 0));
+          comparison = profitA - profitB;
+          break;
+      }
+      return sortOrder === 'asc' ? comparison : -comparison;
+    });
+    
+    return filtered;
+  }, [category.products, searchQuery, sortBy, sortOrder]);
+  
+  const visibleProducts = filteredProducts.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredProducts.length;
+  
+  return (
+    <Paper sx={{ mb: 2, overflow: 'hidden' }}>
+      <Box
+        sx={{
+          p: 2,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          cursor: 'pointer',
+          bgcolor: category.categoryName === 'Sans catégorie' ? '#FFF3E0' : '#FAFAFA',
+          '&:hover': { bgcolor: '#F0F0F0' },
+        }}
+        onClick={onToggle}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {category.categoryName === 'Sans catégorie' ? (
+            <WarningIcon sx={{ color: '#FF9800' }} />
+          ) : (
+            <FolderIcon color="primary" />
+          )}
+          <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
+            {category.categoryName}
+          </Typography>
+          {category.categoryName === 'Sans catégorie' && (
+            <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
+          )}
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Typography variant="body2" color="textSecondary">
+            {category.productCount} produits | {category.totalQuantity} unités
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
+            Profit: {formatCurrency(category.totalProfit)}
+          </Typography>
+          {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+        </Box>
+      </Box>
+
+      <Collapse in={expanded}>
+        <Box sx={{ p: 2 }}>
+          <TableContainer>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <StyledTableRow>
+                  <StyledTableCell>Code</StyledTableCell>
+                  <StyledTableCell>Produit</StyledTableCell>
+                  <StyledTableCell align="right">Qté</StyledTableCell>
+                  <StyledTableCell align="right">PA</StyledTableCell>
+                  <StyledTableCell align="right">PV</StyledTableCell>
+                  <StyledTableCell align="right">Val Achat</StyledTableCell>
+                  <StyledTableCell align="right">Val Vente</StyledTableCell>
+                  <StyledTableCell align="right">Profit</StyledTableCell>
+                  <StyledTableCell align="center">Actions</StyledTableCell>
+                </StyledTableRow>
+              </TableHead>
+              <TableBody>
+                {visibleProducts.map(product => {
+                  const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
+                  const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
+                  const profit = sellingValue - purchaseValue;
+
+                  return (
+                    <StyledTableRow key={product.id}>
+                      <StyledTableCell>{product.code}</StyledTableCell>
+                      <StyledTableCell>
+                        <Tooltip title={product.name}>
+                          <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
+                        </Tooltip>
+                        {product.commercial_name && (
+                          <Typography variant="caption" component="div" color="textSecondary">
+                            {product.commercial_name}
+                          </Typography>
+                        )}
+                      </StyledTableCell>
+                      <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
+                      <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
+                      <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
+                      <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
+                      <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
+                      <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
+                        {formatCurrency(profit)}
+                      </StyledTableCell>
+                      <StyledTableCell align="center">
+                        {category.categoryName === 'Sans catégorie' && (
+                          <Tooltip title="Attribuer une catégorie">
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onCategorize(product);
+                              }}
+                            >
+                              <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                        <Tooltip title="Supprimer">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDelete(product);
+                            }}
+                          >
+                            <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
+                          </IconButton>
+                        </Tooltip>
+                      </StyledTableCell>
+                    </StyledTableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          
+          {/* Bouton "Voir plus" pour charger progressivement */}
+          {hasMore && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <Button 
+                size="small" 
+                variant="outlined"
+                onClick={() => setVisibleCount(prev => prev + 50)}
+                startIcon={<ExpandMoreIcon />}
+              >
+                Voir plus ({filteredProducts.length - visibleCount} restants)
+              </Button>
+            </Box>
+          )}
+          
+          {/* Total de la catégorie */}
+          <Box sx={{ mt: 2, p: 1.5, bgcolor: '#F5F5F5', borderRadius: 1, display: 'flex', justifyContent: 'flex-end', gap: 3, flexWrap: 'wrap' }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+              Total achat: {formatCurrency(category.totalPurchaseValue)}
+            </Typography>
+            <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+              Total vente: {formatCurrency(category.totalSellingValue)}
+            </Typography>
+            <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#4CAF50' }}>
+              Profit: {formatCurrency(category.totalProfit)}
+            </Typography>
+          </Box>
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+});
+
+CategorySection.displayName = 'CategorySection';
+
+// Service API
 const apiService = {
   async getProducts(params?: { 
     get_all?: boolean; 
     pharmacy_id?: string; 
     branch_id?: string;
     search?: string;
+    limit?: number;
   }): Promise<Product[]> {
     const queryParams = new URLSearchParams();
     if (params?.get_all) queryParams.append('get_all', 'true');
     if (params?.pharmacy_id) queryParams.append('pharmacy_id', params.pharmacy_id);
     if (params?.branch_id) queryParams.append('branch_id', params.branch_id);
     if (params?.search) queryParams.append('search', params.search);
+    if (params?.limit) queryParams.append('limit', params.limit.toString());
 
     const response = await api.get(`/stock/?${queryParams.toString()}`);
     return response.data.products || [];
@@ -231,20 +441,114 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
   const [currentBranch, setCurrentBranch] = useState<BranchInfo | null>(null);
   const [availableCategories, setAvailableCategories] = useState<string[]>([]);
 
+  // Calcul des statistiques par catégorie - optimisé avec useMemo
+  const calculateStatsByCategory = useCallback((
+    productsList: Product[],
+    branch: BranchInfo | null,
+    currentUser: any
+  ): ReportData => {
+    const categoryMap = new Map<string, CategoryStats>();
+
+    productsList.forEach(product => {
+      const quantity = product.quantity || 0;
+      const purchaseValue = quantity * (product.purchase_price || 0);
+      const sellingValue = quantity * (product.selling_price || 0);
+      const profit = sellingValue - purchaseValue;
+      const categoryName = product.category && product.category.trim() !== '' 
+        ? product.category.trim() 
+        : 'Sans catégorie';
+
+      if (!categoryMap.has(categoryName)) {
+        categoryMap.set(categoryName, {
+          categoryName,
+          totalQuantity: 0,
+          totalPurchaseValue: 0,
+          totalSellingValue: 0,
+          totalProfit: 0,
+          productCount: 0,
+          products: [],
+        });
+      }
+
+      const stats = categoryMap.get(categoryName)!;
+      stats.totalQuantity += quantity;
+      stats.totalPurchaseValue += purchaseValue;
+      stats.totalSellingValue += sellingValue;
+      stats.totalProfit += profit;
+      stats.productCount += 1;
+      stats.products.push({ ...product });
+    });
+
+    let uncategorized: CategoryStats | null = null;
+    const categoriesArray: CategoryStats[] = [];
+
+    for (const [name, stats] of categoryMap.entries()) {
+      if (name === 'Sans catégorie') {
+        uncategorized = stats;
+      } else {
+        categoriesArray.push(stats);
+      }
+    }
+
+    categoriesArray.sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+
+    const globalTotals = {
+      totalQuantity: categoriesArray.reduce((sum, c) => sum + c.totalQuantity, 0) + (uncategorized?.totalQuantity || 0),
+      totalPurchaseValue: categoriesArray.reduce((sum, c) => sum + c.totalPurchaseValue, 0) + (uncategorized?.totalPurchaseValue || 0),
+      totalSellingValue: categoriesArray.reduce((sum, c) => sum + c.totalSellingValue, 0) + (uncategorized?.totalSellingValue || 0),
+      totalProfit: categoriesArray.reduce((sum, c) => sum + c.totalProfit, 0) + (uncategorized?.totalProfit || 0),
+      productCount: productsList.length,
+    };
+
+    return {
+      branch: branch || {
+        id: branchId || '',
+        name: 'Branche',
+        code: '',
+        address: '',
+        city: '',
+        phone: '',
+        email: '',
+        is_main_branch: false,
+        is_active: true,
+        parent_pharmacy_id: pharmacyId,
+      },
+      user: {
+        name: currentUser?.nom_complet || currentUser?.email || 'Utilisateur',
+        email: currentUser?.email || '',
+        role: currentUser?.role || '',
+      },
+      date: new Date().toLocaleDateString('fr-FR'),
+      categories: categoriesArray,
+      uncategorized: uncategorized || {
+        categoryName: 'Sans catégorie',
+        totalQuantity: 0,
+        totalPurchaseValue: 0,
+        totalSellingValue: 0,
+        totalProfit: 0,
+        productCount: 0,
+        products: [],
+      },
+      globalTotals,
+    };
+  }, [branchId, pharmacyId]);
+
+  // Chargement des données avec limite pour performance
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
 
-      // Charger les produits avec les filtres
+      // Charger les produits avec limite pour éviter de surcharger le frontend
       const productsData = await apiService.getProducts({ 
         get_all: true,
         pharmacy_id: pharmacyId,
-        branch_id: branchId
+        branch_id: branchId,
+        limit: 4000 // Limite à 4000 produits pour les performances
       });
 
       setAllProducts(productsData);
 
-      // Extraire les catégories uniques des produits
+      // Extraire les catégories uniques
       const uniqueCategories = Array.from(
         new Set(
           productsData
@@ -292,141 +596,11 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
     } finally {
       setLoading(false);
     }
-  }, [user, enqueueSnackbar, pharmacyId, branchId]);
+  }, [user, enqueueSnackbar, pharmacyId, branchId, calculateStatsByCategory]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  const calculateStatsByCategory = (
-    productsList: Product[],
-    branch: BranchInfo | null,
-    currentUser: any
-  ): ReportData => {
-    const categoryMap = new Map<string, CategoryStats>();
-
-    // Grouper les produits par catégorie (texte direct)
-    productsList.forEach(product => {
-      const quantity = product.quantity || 0;
-      const purchaseValue = quantity * (product.purchase_price || 0);
-      const sellingValue = quantity * (product.selling_price || 0);
-      const profit = sellingValue - purchaseValue;
-      const categoryName = product.category && product.category.trim() !== '' 
-        ? product.category.trim() 
-        : 'Sans catégorie';
-
-      const productWithStats = { ...product };
-
-      if (!categoryMap.has(categoryName)) {
-        categoryMap.set(categoryName, {
-          categoryName,
-          totalQuantity: 0,
-          totalPurchaseValue: 0,
-          totalSellingValue: 0,
-          totalProfit: 0,
-          productCount: 0,
-          products: [],
-        });
-      }
-
-      const stats = categoryMap.get(categoryName)!;
-      stats.totalQuantity += quantity;
-      stats.totalPurchaseValue += purchaseValue;
-      stats.totalSellingValue += sellingValue;
-      stats.totalProfit += profit;
-      stats.productCount += 1;
-      stats.products.push(productWithStats);
-    });
-
-    // Séparer les catégories normales et "Sans catégorie"
-    let uncategorized: CategoryStats | null = null;
-    const categoriesArray: CategoryStats[] = [];
-
-    for (const [name, stats] of categoryMap.entries()) {
-      if (name === 'Sans catégorie') {
-        uncategorized = stats;
-      } else {
-        categoriesArray.push(stats);
-      }
-    }
-
-    // Trier les catégories par nom
-    categoriesArray.sort((a, b) => a.categoryName.localeCompare(b.categoryName));
-
-    // Calculer les totaux globaux
-    const globalTotals = {
-      totalQuantity: categoriesArray.reduce((sum, c) => sum + c.totalQuantity, 0) + (uncategorized?.totalQuantity || 0),
-      totalPurchaseValue: categoriesArray.reduce((sum, c) => sum + c.totalPurchaseValue, 0) + (uncategorized?.totalPurchaseValue || 0),
-      totalSellingValue: categoriesArray.reduce((sum, c) => sum + c.totalSellingValue, 0) + (uncategorized?.totalSellingValue || 0),
-      totalProfit: categoriesArray.reduce((sum, c) => sum + c.totalProfit, 0) + (uncategorized?.totalProfit || 0),
-      productCount: productsList.length,
-    };
-
-    return {
-      branch: branch || {
-        id: branchId || '',
-        name: 'Branche',
-        code: '',
-        address: '',
-        city: '',
-        phone: '',
-        email: '',
-        is_main_branch: false,
-        is_active: true,
-        parent_pharmacy_id: pharmacyId,
-      },
-      user: {
-        name: currentUser?.nom_complet || currentUser?.email || 'Utilisateur',
-        email: currentUser?.email || '',
-        role: currentUser?.role || '',
-      },
-      date: new Date().toLocaleDateString('fr-FR'),
-      categories: categoriesArray,
-      uncategorized: uncategorized || {
-        categoryName: 'Sans catégorie',
-        totalQuantity: 0,
-        totalPurchaseValue: 0,
-        totalSellingValue: 0,
-        totalProfit: 0,
-        productCount: 0,
-        products: [],
-      },
-      globalTotals,
-    };
-  };
-
-  const getFilteredProducts = (productsList: Product[]): Product[] => {
-    let filtered = [...productsList];
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(p =>
-        p.name.toLowerCase().includes(query) ||
-        p.code.toLowerCase().includes(query) ||
-        (p.barcode && p.barcode.toLowerCase().includes(query))
-      );
-    }
-
-    filtered.sort((a, b) => {
-      let comparison = 0;
-      switch (sortBy) {
-        case 'name':
-          comparison = a.name.localeCompare(b.name);
-          break;
-        case 'quantity':
-          comparison = (a.quantity || 0) - (b.quantity || 0);
-          break;
-        case 'profit':
-          const profitA = (a.quantity || 0) * ((a.selling_price || 0) - (a.purchase_price || 0));
-          const profitB = (b.quantity || 0) * ((b.selling_price || 0) - (b.purchase_price || 0));
-          comparison = profitA - profitB;
-          break;
-      }
-      return sortOrder === 'asc' ? comparison : -comparison;
-    });
-
-    return filtered;
-  };
 
   const handleDeleteProduct = async () => {
     if (!selectedProduct) return;
@@ -480,7 +654,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
           totalSellingValue: cat.totalSellingValue,
           totalProfit: cat.totalProfit,
           productCount: cat.productCount,
-          products: cat.products.map(p => ({
+          products: cat.products.slice(0, 500).map(p => ({  // Limiter pour le PDF
             id: p.id,
             name: p.name,
             code: p.code,
@@ -516,7 +690,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
     }
   };
 
-  const toggleCategory = (categoryName: string) => {
+  const toggleCategory = useCallback((categoryName: string) => {
     setExpandedCategories(prev => {
       const next = new Set(prev);
       if (next.has(categoryName)) {
@@ -526,14 +700,14 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
       }
       return next;
     });
-  };
+  }, []);
 
   const totalProductsCount = allProducts.length;
   const branchName = currentBranch?.name || 'Branche';
   const branchCode = currentBranch?.code || '';
 
-  // Filtrer les catégories à afficher
-  const getCategoriesToDisplay = () => {
+  // Filtrer les catégories à afficher avec useMemo
+  const categoriesToDisplay = useMemo(() => {
     if (!reportData) return [];
     
     const allCats = [...reportData.categories];
@@ -545,11 +719,8 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
     }
     const found = allCats.find(c => c.categoryName === selectedCategory);
     return found ? [found] : [];
-  };
+  }, [reportData, selectedCategory]);
 
-  const categoriesToDisplay = getCategoriesToDisplay();
-
-  // Afficher les filtres actifs
   const activeFilters = [];
   if (pharmacyId) activeFilters.push(`Pharmacie: ${pharmacyId.substring(0, 8)}...`);
   if (branchId) activeFilters.push(`Branche: ${branchId.substring(0, 8)}...`);
@@ -745,7 +916,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
         </Paper>
       )}
 
-      {/* Categories List */}
+      {/* Categories List - Version optimisée avec CategorySection */}
       <Box>
         {categoriesToDisplay.length === 0 ? (
           <Paper sx={{ p: 4, textAlign: 'center' }}>
@@ -761,141 +932,23 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
           </Paper>
         ) : (
           categoriesToDisplay.map(category => (
-            <Paper key={category.categoryName} sx={{ mb: 2, overflow: 'hidden' }}>
-              <Box
-                sx={{
-                  p: 2,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  bgcolor: category.categoryName === 'Sans catégorie' ? '#FFF3E0' : '#FAFAFA',
-                  '&:hover': { bgcolor: '#F0F0F0' },
-                }}
-                onClick={() => toggleCategory(category.categoryName)}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  {category.categoryName === 'Sans catégorie' ? (
-                    <WarningIcon sx={{ color: '#FF9800' }} />
-                  ) : (
-                    <FolderIcon color="primary" />
-                  )}
-                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                    {category.categoryName}
-                  </Typography>
-                  {category.categoryName === 'Sans catégorie' && (
-                    <Chip label="Sans catégorie" size="small" color="warning" variant="outlined" />
-                  )}
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Typography variant="body2" color="textSecondary">
-                    {category.productCount} produits | {category.totalQuantity} unités
-                  </Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.main' }}>
-                    Profit: {formatCurrency(category.totalProfit)}
-                  </Typography>
-                  {expandedCategories.has(category.categoryName) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                </Box>
-              </Box>
-
-              <Collapse in={expandedCategories.has(category.categoryName)}>
-                <Box sx={{ p: 2 }}>
-                  <TableContainer>
-                    <Table size="small" stickyHeader>
-                      <TableHead>
-                        <StyledTableRow>
-                          <StyledTableCell>Code</StyledTableCell>
-                          <StyledTableCell>Produit</StyledTableCell>
-                          <StyledTableCell align="right">Qté</StyledTableCell>
-                          <StyledTableCell align="right">PA</StyledTableCell>
-                          <StyledTableCell align="right">PV</StyledTableCell>
-                          <StyledTableCell align="right">Val Achat</StyledTableCell>
-                          <StyledTableCell align="right">Val Vente</StyledTableCell>
-                          <StyledTableCell align="right">Profit</StyledTableCell>
-                          <StyledTableCell align="center">Actions</StyledTableCell>
-                        </StyledTableRow>
-                      </TableHead>
-                      <TableBody>
-                        {getFilteredProducts(category.products).map(product => {
-                          const purchaseValue = (product.quantity || 0) * (product.purchase_price || 0);
-                          const sellingValue = (product.quantity || 0) * (product.selling_price || 0);
-                          const profit = sellingValue - purchaseValue;
-
-                          return (
-                            <StyledTableRow key={product.id}>
-                              <StyledTableCell>{product.code}</StyledTableCell>
-                              <StyledTableCell>
-                                <Tooltip title={product.name}>
-                                  <span>{product.name.length > 30 ? product.name.substring(0, 30) + '...' : product.name}</span>
-                                </Tooltip>
-                                {product.commercial_name && (
-                                  <Typography variant="caption" component="div" color="textSecondary">
-                                    {product.commercial_name}
-                                  </Typography>
-                                )}
-                              </StyledTableCell>
-                              <StyledTableCell align="right">{product.quantity || 0}</StyledTableCell>
-                              <StyledTableCell align="right">{formatCurrency(product.purchase_price || 0)}</StyledTableCell>
-                              <StyledTableCell align="right">{formatCurrency(product.selling_price || 0)}</StyledTableCell>
-                              <StyledTableCell align="right">{formatCurrency(purchaseValue)}</StyledTableCell>
-                              <StyledTableCell align="right">{formatCurrency(sellingValue)}</StyledTableCell>
-                              <StyledTableCell align="right" sx={{ color: profit >= 0 ? '#4CAF50' : '#F44336' }}>
-                                {formatCurrency(profit)}
-                              </StyledTableCell>
-                              <StyledTableCell align="center">
-                                {category.categoryName === 'Sans catégorie' && (
-                                  <Tooltip title="Attribuer une catégorie">
-                                    <IconButton
-                                      size="small"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setProductToCategorize(product);
-                                        setCategoryDialogOpen(true);
-                                      }}
-                                    >
-                                      <EditIcon fontSize="small" sx={{ color: '#4CAF50' }} />
-                                    </IconButton>
-                                  </Tooltip>
-                                )}
-                                <Tooltip title="Supprimer">
-                                  <IconButton
-                                    size="small"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedProduct(product);
-                                      setDeleteDialogOpen(true);
-                                    }}
-                                  >
-                                    <DeleteIcon fontSize="small" sx={{ color: '#F44336' }} />
-                                  </IconButton>
-                                </Tooltip>
-                              </StyledTableCell>
-                            </StyledTableRow>
-                          );
-                        })}
-
-                        {/* Category Total Row */}
-                        <StyledTableRow sx={{ bgcolor: '#F5F5F5' }}>
-                          <StyledTableCell colSpan={5}>
-                            <Typography sx={{ fontWeight: 'bold' }}>Totaux {category.categoryName}</Typography>
-                          </StyledTableCell>
-                          <StyledTableCell align="right">
-                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalPurchaseValue)}</Typography>
-                          </StyledTableCell>
-                          <StyledTableCell align="right">
-                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalSellingValue)}</Typography>
-                          </StyledTableCell>
-                          <StyledTableCell align="right" sx={{ color: '#4CAF50' }}>
-                            <Typography sx={{ fontWeight: 'bold' }}>{formatCurrency(category.totalProfit)}</Typography>
-                          </StyledTableCell>
-                          <StyledTableCell />
-                        </StyledTableRow>
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                </Box>
-              </Collapse>
-            </Paper>
+            <CategorySection
+              key={category.categoryName}
+              category={category}
+              expanded={expandedCategories.has(category.categoryName)}
+              onToggle={() => toggleCategory(category.categoryName)}
+              searchQuery={searchQuery}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onCategorize={(product) => {
+                setProductToCategorize(product);
+                setCategoryDialogOpen(true);
+              }}
+              onDelete={(product) => {
+                setSelectedProduct(product);
+                setDeleteDialogOpen(true);
+              }}
+            />
           ))
         )}
       </Box>
@@ -946,7 +999,7 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
         </DialogActions>
       </Dialog>
 
-      {/* Category Dialog - Modification pour utiliser un champ texte */}
+      {/* Category Dialog */}
       <Dialog open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>🏷️ Attribuer une catégorie</DialogTitle>
         <DialogContent>
@@ -954,13 +1007,12 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
             {productToCategorize?.name}
           </Typography>
           
-          {/* Sélection parmi les catégories existantes */}
           <FormControl fullWidth margin="normal">
-            <InputLabel>Ou choisir une catégorie existante</InputLabel>
+            <InputLabel>Choisir une catégorie existante</InputLabel>
             <Select
               value={newCategoryName}
               onChange={(e: SelectChangeEvent) => setNewCategoryName(e.target.value)}
-              label="Ou choisir une catégorie existante"
+              label="Choisir une catégorie existante"
             >
               <MenuItem value="">-- Choisir --</MenuItem>
               {availableCategories.map(cat => (
@@ -973,7 +1025,6 @@ export default function ReportStockView({ pharmacyId, branchId }: ReportStockVie
             — OU —
           </Typography>
           
-          {/* Nouvelle catégorie en texte libre */}
           <TextField
             fullWidth
             label="Nouvelle catégorie"
