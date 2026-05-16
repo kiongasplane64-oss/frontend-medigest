@@ -1,4 +1,4 @@
-// routes/AppRoutes.tsx - Version corrigée
+// routes/AppRoutes.tsx - Version complète et corrigée
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 
@@ -29,7 +29,6 @@ import Expense from '@/modules/finance/depense/Expense';
 import DebtPage from '@/modules/finance/dette/DebtPage';
 import ReturnPage from '@/modules/finance/views/returnPage';
 import SubscriptionPage from '@/pages/SubscriptionPage';
-///import SupplierCreditPage from '@/modules/finance/capital/SupplierCreditPage';
 import PaymentPage from '@/pages/PaymentPage';
 import PaymentSuccessPage from '@/pages/PaymentSuccessPage';
 import ConfigViewWrapper from '@/modules/core/ConfigViewWrapper';
@@ -99,9 +98,7 @@ const NotFoundPage = () => (
   </div>
 );
 
-// routes/AppRoutes.tsx - Version optimisée avec normalisation
-
-// ========== LAYOUT ADMIN ==========
+// ========== LAYOUT ADMIN (CORRIGÉ) ==========
 const AdminLayout = () => {
   const { user, isLoading } = useAuthStore();
   
@@ -113,11 +110,9 @@ const AdminLayout = () => {
     );
   }
   
-  // Après normalisation, 'vendeur' devient 'seller'
-  // Donc on vérifie uniquement 'seller' (pas besoin de 'vendeur')
-  const isAuthorized = user && 
-                       user.role !== 'super_admin' && 
-                       user.role !== 'seller';
+  // CORRECTION: Autoriser admin, super_admin et tous les rôles backoffice
+  // Seuls les vendeurs (seller) sont exclus car ils ont leur propre layout
+  const isAuthorized = user && user.role !== 'seller' && user.role !== 'vendeur';
   
   if (!isAuthorized) {
     console.log('Accès refusé - AdminLayout:', { role: user?.role });
@@ -151,8 +146,8 @@ const VendorLayout = () => {
     );
   }
   
-  // La normalisation convertit 'vendeur' → 'seller'
-  const isSeller = user?.role === 'seller';
+  // Le vendeur peut avoir le rôle 'seller' ou 'vendeur'
+  const isSeller = user?.role === 'seller' || user?.role === 'vendeur';
   
   if (!isSeller) {
     console.log('Accès refusé - VendorLayout:', { role: user?.role });
@@ -205,14 +200,15 @@ const PublicLayout = () => {
   }
   
   if (isAuthenticated && user) {
-    // Utiliser les rôles normalisés
+    // Redirection basée sur le rôle
     switch (user.role) {
       case 'super_admin':
         return <Navigate to="/super-admin" replace />;
-      case 'seller':  // 'vendeur' est déjà normalisé en 'seller'
+      case 'seller':
+      case 'vendeur':
         return <Navigate to="/vendor-pos" replace />;
       default:
-        // admin, user, pharmacien, caissier, comptable, etc.
+        // admin, pharmacien, caissier, comptable, user, etc.
         return <Navigate to="/dashboard" replace />;
     }
   }
@@ -238,14 +234,11 @@ const GlobalLoadingSpinner = () => (
 // ========== ROUTES PRINCIPALES ==========
 
 export default function AppRoutes() {
-  const { isLoading: isAuthLoading } = useAuthStore(); // Supprimer isInitialized
+  const { isLoading: isAuthLoading } = useAuthStore();
   const [showRoutes, setShowRoutes] = useState(false);
   
-  // Attendre que l'auth soit complètement initialisée avant d'afficher les routes
   useEffect(() => {
-    // isAuthLoading devient false après la rehydratation complète
     if (!isAuthLoading) {
-      // Petit délai pour stabiliser
       const timer = setTimeout(() => {
         setShowRoutes(true);
       }, 50);
@@ -253,7 +246,6 @@ export default function AppRoutes() {
     }
   }, [isAuthLoading]);
   
-  // Afficher le loader pendant l'initialisation
   if (!showRoutes) {
     return <GlobalLoadingSpinner />;
   }
@@ -283,7 +275,7 @@ export default function AppRoutes() {
         <Route path="stock-report" element={<StockReport />} />
       </Route>
       
-      {/* ROUTES ADMIN */}
+      {/* ROUTES ADMIN (toutes ces routes sont accessibles à admin, super_admin et autres rôles backoffice) */}
       <Route path="/" element={<AdminLayout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
       </Route>
@@ -392,8 +384,8 @@ export default function AppRoutes() {
         <Route index element={<AdminGenerateCodePage />} />
       </Route>
 
-      <Route path="/alerts/:pharmacyId" element={<Alerts />}>
-        <Route index element={<ConfigViewWrapper />} />
+      <Route path="/alerts/:pharmacyId" element={<AdminLayout />}>
+        <Route index element={<Alerts />} />
       </Route>
       
       {/* REDIRECTIONS */}
