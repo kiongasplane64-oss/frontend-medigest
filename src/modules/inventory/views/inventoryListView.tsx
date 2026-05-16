@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   Camera,
   Barcode,
-  Printer,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -43,14 +42,14 @@ import InitialStockView from './InitialStockView';
 import ReportStockView from './ReportStockView';
 import ApproView from './ApproView';
 import AchatView from './AchatView';
-import BarcodeLabelView from './BarcodeLabelView';
 import ProductCard from './Productcard';
 import ProductTableRow from './ProductTableRow';
 import ViewToggle from './ViewToggle';
 import StockFilters from './StockFilters';
+import StockAlert from './StockAlerts';
 
 type ViewMode = 'grid' | 'list';
-type ActiveTab = 'products' | 'movements' | 'import_export' | 'initial_stock' | 'reports' | 'appro' | 'achat' | 'barcodes';
+type ActiveTab = 'products' | 'movements' | 'import_export' | 'initial_stock' | 'reports' | 'appro' | 'achat' | 'ruptures';
 type FormMode = 'create' | 'edit';
 
 // Unités disponibles
@@ -1547,8 +1546,19 @@ export default function InventoryListView({
         return <ApproView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'achat':
         return <AchatView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
-      case 'barcodes':
-        return <BarcodeLabelView products={filteredProducts} formatPrice={formatPrice} />;
+      case 'ruptures':
+        return (
+          <StockAlert
+            pharmacyId={effectivePharmacyId}
+            branchId={effectiveBranchId}
+            formatPrice={formatPrice}
+            onViewProduct={(product) => {
+              setSelectedProduct(product);
+              setShowProductDetail(true);
+            }}
+            onEditProduct={(product) => handleOpenEditForm(product)}
+          />
+        );
       default:
         return null;
     }
@@ -1616,15 +1626,15 @@ export default function InventoryListView({
                 Approvisionnement
               </button>
               <button
-                onClick={() => setActiveTab('barcodes')}
+                onClick={() => setActiveTab('ruptures')}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  activeTab === 'barcodes'
+                  activeTab === 'ruptures'
                     ? 'bg-medical text-white'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <Printer size={16} className="inline mr-1" />
-                Étiquettes
+                <AlertTriangle size={16} className="inline mr-1" />
+                Rupture
               </button>
               <button
                 onClick={() => setActiveTab('reports')}
