@@ -1528,7 +1528,6 @@ export default function InventoryListView({
       )}
     </div>
   );
-
   // Rendu des différents onglets
   const renderActiveTab = () => {
     switch (activeTab) {
@@ -1552,11 +1551,10 @@ export default function InventoryListView({
             pharmacyId={effectivePharmacyId}
             branchId={effectiveBranchId}
             formatPrice={formatPrice}
-            onViewProduct={(product) => {
+            onViewProduct={(product: Product) => {
               setSelectedProduct(product);
               setShowProductDetail(true);
             }}
-            onEditProduct={(product) => handleOpenEditForm(product)}
           />
         );
       default:
