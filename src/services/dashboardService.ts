@@ -566,7 +566,7 @@ class DashboardService {
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
       console.log(`📊 Dashboard stats request: branch=${filters?.branch_id || 'current'}`);
-      const response = await this.api.get('/api/v1/dashboard/stats', {
+      const response = await this.api.get('/dashboard/stats', {
         params: this.buildParams(filters),
         timeout: DASHBOARD_TIMEOUT,
       });

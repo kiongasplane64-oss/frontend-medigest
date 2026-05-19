@@ -102,7 +102,7 @@ interface ExportProgress {
 }
 
 // Service API pour les exports
-const API_BASE = '/api/v1';
+const API_BASE = '';
 
 const exportService = {
   getBranches: async (): Promise<Branch[]> => {
