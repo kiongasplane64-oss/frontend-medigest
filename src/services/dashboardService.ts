@@ -381,7 +381,7 @@ class DashboardApiClient {
 
   private constructor() {
     this.client = axios.create({
-      baseURL: `${API_BASE_URL}/api/v1`,
+      baseURL: API_BASE_URL,
       timeout: DASHBOARD_TIMEOUT,
       headers: {
         'Content-Type': 'application/json',
@@ -464,7 +464,7 @@ class DashboardApiClient {
       const refreshToken = localStorage.getItem('refresh_token');
       if (!refreshToken) return false;
 
-      const response = await axios.post(`${API_BASE_URL}/api/v1/auth/refresh`, {
+      const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
         refresh_token: refreshToken
       });
 
@@ -566,7 +566,7 @@ class DashboardService {
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
       console.log(`📊 Dashboard stats request: branch=${filters?.branch_id || 'current'}`);
-      const response = await this.api.get('/dashboard/stats', {
+      const response = await this.api.get('/api/v1/dashboard/stats', {
         params: this.buildParams(filters),
         timeout: DASHBOARD_TIMEOUT,
       });
