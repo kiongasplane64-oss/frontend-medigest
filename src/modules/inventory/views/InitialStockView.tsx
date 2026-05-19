@@ -143,8 +143,7 @@ export default function InitialStockView({ pharmacyId, branchId }: InitialStockV
       purchase_price: product.purchase_price,
       selling_price: product.selling_price,
       expiry_date: product.expiry_date?.split('T')[0],
-      batch_number: product.batch_number,
-      location: product.location,
+      
     });
   };
 

@@ -11,6 +11,7 @@ import {
   ShoppingCart,
   AlertTriangle,
   Camera,
+  Calendar,
   Barcode,
   RefreshCw,
   ChevronLeft,
@@ -47,9 +48,10 @@ import ProductTableRow from './ProductTableRow';
 import ViewToggle from './ViewToggle';
 import StockFilters from './StockFilters';
 import StockAlert from './StockAlerts';
+import Expiration from './Expiration';
 
 type ViewMode = 'grid' | 'list';
-type ActiveTab = 'products' | 'movements' | 'import_export' | 'initial_stock' | 'reports' | 'appro' | 'achat' | 'ruptures';
+type ActiveTab = 'products' | 'movements' | 'import_export' | 'initial_stock' | 'reports' | 'appro' | 'achat' | 'ruptures'| 'expiration';
 type FormMode = 'create' | 'edit';
 
 // Unités disponibles
@@ -1545,6 +1547,19 @@ export default function InventoryListView({
         return <ApproView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
       case 'achat':
         return <AchatView pharmacyId={effectivePharmacyId} branchId={effectiveBranchId} />;
+      
+        case 'expiration':
+          return (
+            <Expiration
+              pharmacyId={effectivePharmacyId}
+              branchId={effectiveBranchId}
+              formatPrice={formatPrice}
+              onViewProduct={(product: Product) => {
+                setSelectedProduct(product);
+                setShowProductDetail(true);
+              }}
+            />
+          );
       case 'ruptures':
         return (
           <StockAlert
@@ -1633,6 +1648,17 @@ export default function InventoryListView({
               >
                 <AlertTriangle size={16} className="inline mr-1" />
                 Rupture
+              </button>
+              <button
+                onClick={() => setActiveTab('expiration')}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  activeTab === 'expiration'
+                    ? 'bg-medical text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Calendar size={16} className="inline mr-1" />
+                Expiration
               </button>
               <button
                 onClick={() => setActiveTab('reports')}

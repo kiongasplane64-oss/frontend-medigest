@@ -1,13 +1,10 @@
-// services/dashboard.service.ts
 /**
- * Service de tableau de bord
- * Communication 100% avec les endpoints dashboard.py
- * Version unifiée - Basée sur la BRANCHE de l'utilisateur
- * Mars 2026
+ * Service de tableau de bord - Version optimisée pour gros volumes
+ * Gère 100 000+ produits/ventes avec timeouts adaptés et retry intelligent
+ * Avril 2026
  */
 
-import api from '@/api/client';
-import axios from 'axios';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import axiosRetry from 'axios-retry';
 
 // ===================================================================
@@ -15,7 +12,6 @@ import axiosRetry from 'axios-retry';
 // ===================================================================
 
 export interface DashboardFilters {
-  /** ID de la branche (utilisé uniquement, plus de pharmacy_id) */
   branch_id?: string;
   start_date?: string;
   end_date?: string;
@@ -39,10 +35,7 @@ export interface DashboardBranchInfo {
 }
 
 export interface DashboardStats {
-  // Informations de la branche active
   branch_info?: DashboardBranchInfo;
-  
-  // Ventes
   daily_sales: number;
   daily_sales_count: number;
   weekly_sales: number;
@@ -51,15 +44,11 @@ export interface DashboardStats {
   daily_transactions: number;
   monthly_transactions: number;
   sales_history: SalesHistoryItem[];
-
-  // Stock
   total_products: number;
   out_of_stock_count: number;
   low_stock_count: number;
   expired_count: number;
   expiring_soon_count: number;
-
-  // Finances
   total_stock_value: number;
   total_purchase_value: number;
   potential_profit: number;
@@ -69,31 +58,19 @@ export interface DashboardStats {
   daily_profit: number;
   profit_margin: number;
   stock_turnover: number;
-
-  // Dettes
   monthly_debts: number;
   total_debts: number;
   unpaid_debts: number;
   recovery_rate: number;
-
-  // Achats
   monthly_purchases: number;
   daily_purchases: number;
   suppliers_count: number;
   pending_orders: number;
-
-  // Clients
   total_customers: number;
   average_basket: number;
-
-  // Utilisateurs
   active_users: number;
-
-  // Transferts
   pending_transfers: number;
   in_transit_transfers: number;
-
-  // Tenant
   tenant?: {
     id: string;
     name: string;
@@ -101,19 +78,13 @@ export interface DashboardStats {
     max_users: number;
     subscription_end: string | null;
   };
-
-  // Alertes
   has_critical_alerts: boolean;
-
-  // Données supplémentaires
   recent_transactions: RecentTransaction[];
   recent_purchases: RecentPurchase[];
   debt_list: DebtItem[];
   expense_categories: ExpenseCategory[];
   low_stock_products: LowStockProduct[];
   expiring_products: ExpiringProduct[];
-  
-  // Période
   period_start?: string;
   period_end?: string;
 }
@@ -392,376 +363,377 @@ export interface ProfitHistoryItem {
 }
 
 // ===================================================================
-// SERVICE
+// CONFIGURATION
+// ===================================================================
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backend-medigest.onrender.com';
+const DASHBOARD_TIMEOUT = 120000; // 120 secondes pour les gros volumes
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 2000; // 2 secondes
+
+// ===================================================================
+// CLIENT AXIOS OPTIMISÉ
+// ===================================================================
+
+class DashboardApiClient {
+  private client: AxiosInstance;
+  private static instance: DashboardApiClient;
+
+  private constructor() {
+    this.client = axios.create({
+      baseURL: `${API_BASE_URL}/api/v1`,
+      timeout: DASHBOARD_TIMEOUT,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      withCredentials: false,
+    });
+
+    // Intercepteur pour ajouter le token
+    this.client.interceptors.request.use(
+      (config: InternalAxiosRequestConfig) => {
+        const token = this.getAuthToken();
+        if (token && config.headers) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+        // Ajouter timestamp anti-cache
+        if (config.params) {
+          config.params.t = Date.now();
+        } else {
+          config.params = { t: Date.now() };
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+
+    // Intercepteur pour gérer les erreurs 401
+    this.client.interceptors.response.use(
+      (response) => response,
+      async (error: AxiosError) => {
+        if (error.response?.status === 401) {
+          const refreshed = await this.refreshToken();
+          if (refreshed && error.config) {
+            const token = this.getAuthToken();
+            if (error.config.headers) {
+              error.config.headers.Authorization = `Bearer ${token}`;
+            }
+            return this.client.request(error.config);
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    // Configuration du retry
+    axiosRetry(this.client, {
+      retries: MAX_RETRIES,
+      retryDelay: (retryCount) => {
+        console.log(`🔄 Tentative ${retryCount}/${MAX_RETRIES}...`);
+        return RETRY_DELAY * retryCount;
+      },
+      retryCondition: (error: AxiosError) => {
+        return (
+          error.code === 'ECONNABORTED' ||
+          error.code === 'ERR_NETWORK' ||
+          error.code === 'ETIMEDOUT' ||
+          (error.response?.status ?? 0) >= 500 ||
+          error.response?.status === 429
+        );
+      },
+      onRetry: (retryCount, error, requestConfig) => {
+        console.warn(`⚠️ Retry ${retryCount} pour ${requestConfig.url}:`, error.message);
+      }
+    });
+  }
+
+  static getInstance(): DashboardApiClient {
+    if (!DashboardApiClient.instance) {
+      DashboardApiClient.instance = new DashboardApiClient();
+    }
+    return DashboardApiClient.instance;
+  }
+
+  private getAuthToken(): string | null {
+    return localStorage.getItem('access_token') || localStorage.getItem('token');
+  }
+
+  private async refreshToken(): Promise<boolean> {
+    try {
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (!refreshToken) return false;
+
+      const response = await axios.post(`${API_BASE_URL}/api/v1/auth/refresh`, {
+        refresh_token: refreshToken
+      });
+
+      if (response.data.access_token) {
+        localStorage.setItem('access_token', response.data.access_token);
+        if (response.data.refresh_token) {
+          localStorage.setItem('refresh_token', response.data.refresh_token);
+        }
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('❌ Refresh token failed:', error);
+      localStorage.clear();
+      window.location.href = '/login';
+      return false;
+    }
+  }
+
+  getClient(): AxiosInstance {
+    return this.client;
+  }
+}
+
+// ===================================================================
+// SERVICE PRINCIPAL
 // ===================================================================
 
 class DashboardService {
+  private api: AxiosInstance;
+
   constructor() {
-    // Configuration du retry sur l'instance api centralisée
-    axiosRetry(api, {
-      retries: 3,
-      retryDelay: axiosRetry.exponentialDelay,
-      retryCondition: (error) => {
-        return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
-               error.response?.status === 429 ||
-               (error.response?.status ?? 0) >= 500;
-      }
-    });
+    this.api = DashboardApiClient.getInstance().getClient();
   }
 
   private handleError(error: unknown, context: string): never {
     console.error(`Erreur DashboardService.${context}:`, error);
     
-    if (axios.isAxiosError(error) && error.response) {
-      switch (error.response.status) {
-        case 401:
-          throw new Error('Session expirée. Veuillez vous reconnecter.');
-        case 403:
-          throw new Error('Accès non autorisé à ces données.');
-        case 404:
-          throw new Error('Données du tableau de bord non trouvées.');
-        case 422:
-          throw new Error('Paramètres invalides pour la requête.');
-        case 429:
-          throw new Error('Trop de requêtes. Veuillez patienter.');
-        default:
-          const message = error.response.data?.message || 
-                         error.response.data?.detail || 
-                         `Erreur serveur (${error.response.status})`;
-          throw new Error(message);
+    if (axios.isAxiosError(error)) {
+      if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        throw new Error('Le serveur met trop de temps à répondre. Réessayez dans quelques instants.');
       }
-    } else if (axios.isAxiosError(error) && error.request) {
-      throw new Error('Impossible de contacter le serveur. Vérifiez votre connexion.');
-    } else if (error instanceof Error) {
-      throw new Error(`Erreur: ${error.message}`);
-    } else {
-      throw new Error('Une erreur inconnue est survenue');
+      
+      if (error.code === 'ERR_NETWORK') {
+        throw new Error('Connexion au serveur impossible. Vérifiez votre connexion internet.');
+      }
+      
+      if (error.message?.includes('CORS')) {
+        throw new Error('Problème de configuration CORS. Contactez le support.');
+      }
+      
+      if (error.response) {
+        switch (error.response.status) {
+          case 401:
+            throw new Error('Session expirée. Veuillez vous reconnecter.');
+          case 403:
+            throw new Error('Accès non autorisé à ces données.');
+          case 404:
+            throw new Error('Données du tableau de bord non trouvées.');
+          case 429:
+            throw new Error('Trop de requêtes. Veuillez patienter.');
+          default:
+            const message = error.response.data?.message || 
+                           error.response.data?.detail || 
+                           `Erreur serveur (${error.response.status})`;
+            throw new Error(message);
+        }
+      }
+      
+      throw new Error(`Erreur réseau: ${error.message}`);
     }
+    
+    if (error instanceof Error) {
+      throw new Error(`Erreur: ${error.message}`);
+    }
+    
+    throw new Error('Une erreur inconnue est survenue');
   }
 
   private buildParams(filters?: DashboardFilters): Record<string, any> {
-    const params: Record<string, any> = {
-      t: Date.now()
-    };
+    const params: Record<string, any> = {};
     
-    // Utiliser branch_id au lieu de pharmacy_id
-    if (filters?.branch_id) {
-      params.branch_id = filters.branch_id;
-    }
-    if (filters?.start_date) {
-      params.start_date = filters.start_date;
-    }
-    if (filters?.end_date) {
-      params.end_date = filters.end_date;
-    }
-    if (filters?.period) {
-      params.period = filters.period;
-    }
-    if (filters?.limit) {
-      params.limit = filters.limit;
-    }
-    if (filters?.severity) {
-      params.severity = filters.severity;
-    }
-    if (filters?.type) {
-      params.type = filters.type;
-    }
-    if (filters?.include_resolved !== undefined) {
-      params.include_resolved = filters.include_resolved;
-    }
+    if (filters?.branch_id) params.branch_id = filters.branch_id;
+    if (filters?.start_date) params.start_date = filters.start_date;
+    if (filters?.end_date) params.end_date = filters.end_date;
+    if (filters?.period) params.period = filters.period;
+    if (filters?.limit) params.limit = filters.limit;
+    if (filters?.severity) params.severity = filters.severity;
+    if (filters?.type) params.type = filters.type;
+    if (filters?.include_resolved !== undefined) params.include_resolved = filters.include_resolved;
     
     return params;
   }
 
   // ===================================================================
-  // ENDPOINTS PRINCIPAUX (Basés sur BRANCH)
+  // ENDPOINTS PRINCIPAUX
   // ===================================================================
 
-  /**
-   * Récupère toutes les statistiques du dashboard
-   * GET /dashboard/stats
-   * @param filters Filtres (branch_id obligatoire)
-   */
   async getDashboardStats(filters?: DashboardFilters): Promise<DashboardStats> {
     try {
-      const response = await api.get('/dashboard/stats', {
-        params: this.buildParams(filters)
+      console.log(`📊 Dashboard stats request: branch=${filters?.branch_id || 'current'}`);
+      const response = await this.api.get('/dashboard/stats', {
+        params: this.buildParams(filters),
+        timeout: DASHBOARD_TIMEOUT,
       });
-      
+      console.log(`✅ Dashboard stats reçues`);
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getDashboardStats');
     }
   }
 
-  /**
-   * Récupère les alertes d'inventaire
-   * GET /dashboard/alerts
-   * @param filters Filtres (branch_id obligatoire)
-   */
   async getAlerts(filters?: DashboardFilters): Promise<DashboardAlertsResponse> {
     try {
-      const response = await api.get('/dashboard/alerts', {
-        params: this.buildParams(filters)
+      const response = await this.api.get('/dashboard/alerts', {
+        params: {
+          ...this.buildParams(filters),
+          limit: filters?.limit || 50,
+        },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getAlerts');
     }
   }
 
-  /**
-   * Récupère l'historique de la valeur du stock
-   * GET /dashboard/stock-value-history
-   * @param branchId ID de la branche
-   * @param days Nombre de jours
-   */
   async getStockValueHistory(branchId: string, days: number = 30): Promise<StockValueHistoryResponse> {
     try {
-      const response = await api.get('/dashboard/stock-value-history', {
-        params: {
-          branch_id: branchId,
-          days,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/stock-value-history', {
+        params: { branch_id: branchId, days },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getStockValueHistory');
     }
   }
 
-  /**
-   * Récupère l'historique des ventes
-   * GET /dashboard/sales-history
-   * @param branchId ID de la branche
-   * @param days Nombre de jours
-   */
   async getSalesHistory(branchId: string, days: number = 30): Promise<SalesHistoryResponse> {
     try {
-      const response = await api.get('/dashboard/sales-history', {
-        params: {
-          branch_id: branchId,
-          days,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/sales-history', {
+        params: { branch_id: branchId, days },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getSalesHistory');
     }
   }
 
-  /**
-   * Récupère l'historique des bénéfices
-   * GET /dashboard/profit-history
-   * @param branchId ID de la branche
-   * @param days Nombre de jours
-   */
   async getProfitHistory(branchId: string, days: number = 30): Promise<ProfitHistoryResponse> {
     try {
-      const response = await api.get('/dashboard/profit-history', {
-        params: {
-          branch_id: branchId,
-          days,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/profit-history', {
+        params: { branch_id: branchId, days },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getProfitHistory');
     }
   }
 
-  /**
-   * Récupère l'historique des ventes (alias pour compatibilité)
-   * GET /dashboard/sales-history
-   */
   async getSalesHistoryLegacy(filters?: DashboardFilters): Promise<{ history: SalesHistoryItem[] }> {
     try {
-      const response = await api.get('/dashboard/sales-history', {
-        params: this.buildParams(filters)
+      const response = await this.api.get('/dashboard/sales-history', {
+        params: this.buildParams(filters),
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
-      return this.handleError(error, 'getSalesHistory');
+      return this.handleError(error, 'getSalesHistoryLegacy');
     }
   }
 
-  /**
-   * Récupère les tendances des ventes
-   * GET /dashboard/sales/trends
-   * @param branchId ID de la branche
-   * @param period Période
-   */
   async getSalesTrends(branchId: string, period: 'day' | 'week' | 'month' | 'year' = 'week'): Promise<SalesTrend[]> {
     try {
-      const response = await api.get('/dashboard/sales/trends', {
-        params: {
-          branch_id: branchId,
-          period,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/sales/trends', {
+        params: { branch_id: branchId, period },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getSalesTrends');
     }
   }
 
-  /**
-   * Récupère la distribution des produits par catégorie
-   * GET /dashboard/products/categories
-   * @param branchId ID de la branche
-   */
   async getProductsByCategory(branchId?: string): Promise<ProductCategory[]> {
     try {
-      const response = await api.get('/dashboard/products/categories', {
-        params: {
-          branch_id: branchId,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/products/categories', {
+        params: { branch_id: branchId },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getProductsByCategory');
     }
   }
 
-  /**
-   * Récupère les produits expirés et ceux qui expirent bientôt
-   * GET /dashboard/expired-products
-   * @param branchId ID de la branche
-   * @param days Nombre de jours pour l'expiration
-   */
   async getExpiryReport(branchId?: string, days: number = 30): Promise<ExpiryProductsResponse> {
     try {
-      const response = await api.get('/dashboard/expired-products', {
-        params: {
-          branch_id: branchId,
-          days,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/expired-products', {
+        params: { branch_id: branchId, days },
+        timeout: 45000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getExpiryReport');
     }
   }
 
-  /**
-   * Récupère les produits qui n'ont jamais été vendus
-   * GET /dashboard/products/never-sold
-   * @param branchId ID de la branche
-   * @param limit Nombre de résultats
-   */
   async getNeverSoldProducts(branchId?: string, limit: number = 50): Promise<NeverSoldProductsResponse> {
     try {
-      const response = await api.get('/dashboard/products/never-sold', {
-        params: {
-          branch_id: branchId,
-          limit,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/products/never-sold', {
+        params: { branch_id: branchId, limit },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getNeverSoldProducts');
     }
   }
 
-  /**
-   * Récupère les ventes par utilisateur
-   * GET /dashboard/sales/by-user
-   * @param branchId ID de la branche
-   * @param startDate Date de début
-   * @param endDate Date de fin
-   */
   async getSalesByUser(
     branchId?: string,
     startDate?: string,
     endDate?: string
   ): Promise<SalesByUserResponse> {
     try {
-      const response = await api.get('/dashboard/sales/by-user', {
-        params: {
-          branch_id: branchId,
-          start_date: startDate,
-          end_date: endDate,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/sales/by-user', {
+        params: { branch_id: branchId, start_date: startDate, end_date: endDate },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getSalesByUser');
     }
   }
 
-  /**
-   * Récupère le bénéfice journalier détaillé
-   * GET /dashboard/daily-profit
-   * @param branchId ID de la branche
-   * @param targetDate Date cible
-   */
   async getDailyProfit(branchId?: string, targetDate?: string): Promise<DailyProfitResponse> {
     try {
-      const response = await api.get('/dashboard/daily-profit', {
-        params: {
-          branch_id: branchId,
-          target_date: targetDate,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/daily-profit', {
+        params: { branch_id: branchId, target_date: targetDate },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getDailyProfit');
     }
   }
 
-  /**
-   * Récupère les indicateurs de performance
-   * GET /dashboard/performance
-   * @param branchId ID de la branche
-   * @param period Période
-   */
   async getPerformanceIndicators(
     branchId?: string,
     period: 'day' | 'week' | 'month' | 'year' = 'month'
   ): Promise<PerformanceIndicators> {
     try {
-      const response = await api.get('/dashboard/performance', {
-        params: {
-          branch_id: branchId,
-          period,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/performance', {
+        params: { branch_id: branchId, period },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getPerformanceIndicators');
     }
   }
 
-  /**
-   * Rafraîchit le cache du dashboard
-   * POST /dashboard/refresh-cache
-   * @param branchId ID de la branche
-   */
   async refreshDashboardCache(branchId?: string): Promise<{ success: boolean; message: string }> {
     try {
-      const response = await api.post('/dashboard/refresh-cache', { branch_id: branchId });
+      const response = await this.api.post('/dashboard/refresh-cache', { branch_id: branchId });
       return response.data;
     } catch (error) {
       console.warn('Erreur lors du rafraîchissement du cache:', error);
@@ -769,36 +741,21 @@ class DashboardService {
     }
   }
 
-  /**
-   * Récupère le rapport des produits en stock bas
-   * GET /dashboard/low-stock-report
-   * @param branchId ID de la branche
-   * @param thresholdMultiplier Multiplicateur de seuil
-   */
   async getLowStockReport(branchId?: string, thresholdMultiplier: number = 1.0): Promise<LowStockReportResponse> {
     try {
-      const response = await api.get('/dashboard/low-stock-report', {
-        params: {
-          branch_id: branchId,
-          threshold_multiplier: thresholdMultiplier,
-          t: Date.now()
-        }
+      const response = await this.api.get('/dashboard/low-stock-report', {
+        params: { branch_id: branchId, threshold_multiplier: thresholdMultiplier },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getLowStockReport');
     }
   }
 
-  /**
-   * Marque une alerte comme résolue
-   * POST /dashboard/alerts/{alert_id}/resolve
-   * @param alertId ID de l'alerte
-   */
   async resolveAlert(alertId: string): Promise<{ success: boolean; message: string; alert_id: string }> {
     try {
-      const response = await api.post(`/dashboard/alerts/${alertId}/resolve`, {});
+      const response = await this.api.post(`/dashboard/alerts/${alertId}/resolve`, {});
       return response.data;
     } catch (error) {
       return this.handleError(error, 'resolveAlert');
@@ -809,10 +766,6 @@ class DashboardService {
   // SESSIONS UTILISATEUR
   // ===================================================================
 
-  /**
-   * Enregistre une nouvelle session utilisateur
-   * POST /dashboard/session/register
-   */
   async registerSession(params: {
     platform?: string;
     device_type?: string;
@@ -827,75 +780,55 @@ class DashboardService {
     location_country?: string;
   }): Promise<{ session_id: string; platform: string; device_name: string | null; created_at: string; expires_at: string }> {
     try {
-      const response = await api.post('/dashboard/session/register', null, {
-        params
-      });
-      
+      const response = await this.api.post('/dashboard/session/register', null, { params });
       return response.data;
     } catch (error) {
       return this.handleError(error, 'registerSession');
     }
   }
 
-  /**
-   * Récupère les sessions de l'utilisateur
-   * GET /dashboard/sessions
-   */
   async getUserSessions(includeInactive: boolean = false): Promise<UserSessionsResponse> {
     try {
-      const response = await api.get('/dashboard/sessions', {
-        params: { include_inactive: includeInactive, t: Date.now() }
+      const response = await this.api.get('/dashboard/sessions', {
+        params: { include_inactive: includeInactive },
+        timeout: 30000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getUserSessions');
     }
   }
 
-  /**
-   * Récupère les ventes d'une session spécifique
-   * GET /dashboard/sessions/{session_id}/sales
-   */
   async getSessionSales(
     sessionId: string,
     startDate?: string,
     endDate?: string
   ): Promise<{ session: any; sales: any[]; summary: any }> {
     try {
-      const response = await api.get(`/dashboard/sessions/${sessionId}/sales`, {
-        params: { start_date: startDate, end_date: endDate, t: Date.now() }
+      const response = await this.api.get(`/dashboard/sessions/${sessionId}/sales`, {
+        params: { start_date: startDate, end_date: endDate },
+        timeout: 60000,
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'getSessionSales');
     }
   }
 
-  /**
-   * Déconnecte une session
-   * POST /dashboard/session/logout
-   */
   async logoutSession(sessionId?: string): Promise<{ message: string; sessions_count: number }> {
     try {
-      const response = await api.post('/dashboard/session/logout', null, {
+      const response = await this.api.post('/dashboard/session/logout', null, {
         params: sessionId ? { session_id: sessionId } : {}
       });
-      
       return response.data;
     } catch (error) {
       return this.handleError(error, 'logoutSession');
     }
   }
 
-  /**
-   * Met à jour l'activité d'une session
-   * POST /dashboard/session/{session_id}/activity
-   */
   async updateSessionActivity(sessionId: string): Promise<{ message: string }> {
     try {
-      const response = await api.post(`/dashboard/session/${sessionId}/activity`, {});
+      const response = await this.api.post(`/dashboard/session/${sessionId}/activity`, {});
       return response.data;
     } catch (error) {
       return this.handleError(error, 'updateSessionActivity');
@@ -906,10 +839,6 @@ class DashboardService {
   // ENDPOINTS DE TEST
   // ===================================================================
 
-  /**
-   * Teste la connexion au module dashboard
-   * GET /dashboard/test
-   */
   async testDashboard(): Promise<{
     message: string;
     version: string;
@@ -917,7 +846,7 @@ class DashboardService {
     features: string[];
   }> {
     try {
-      const response = await api.get('/dashboard/test');
+      const response = await this.api.get('/dashboard/test', { timeout: 10000 });
       return response.data;
     } catch (error) {
       return this.handleError(error, 'testDashboard');
@@ -931,3 +860,12 @@ class DashboardService {
 
 export const dashboardService = new DashboardService();
 export default dashboardService;
+
+export const checkDashboardHealth = async (): Promise<boolean> => {
+  try {
+    await dashboardService.testDashboard();
+    return true;
+  } catch {
+    return false;
+  }
+};

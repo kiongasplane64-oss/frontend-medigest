@@ -1,5 +1,3 @@
-// types/inventory.types.ts
-
 // =========================================================
 // TYPES DE BASE
 // =========================================================
@@ -150,7 +148,7 @@ export interface Product {
   id: ID;
   code: string;
   name: string;
-  commercial_name?: string;
+  commercial_name?: string | null;
   description?: string;
 
   category?: string | Category;
@@ -158,8 +156,8 @@ export interface Product {
 
   purchase_price: number;
   selling_price: number;
-  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
-  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
 
   quantity: number;
   available_quantity: number;
@@ -171,19 +169,19 @@ export interface Product {
 
   expiry_date?: string | null;
 
-  supplier?: string;
+  supplier?: string | null;
   main_supplier?: string;
   supplier_id?: ID;
 
-  location?: string;
-  barcode?: string;
+  location?: string | null;
+  barcode?: string | null;
 
   laboratory?: string;
   galenic_form?: string;
   dci?: string;
   active_ingredient?: string;
-  unit?: string;
-  batch_number?: string;  // AJOUTÉ : numéro de lot
+  unit?: string | null;
+  batch_number?: string | null;
 
   has_tva: boolean;
   tva_rate: number;
@@ -201,7 +199,7 @@ export interface Product {
   created_at: string;
   updated_at: string;
 
-  days_until_expiry?: number;
+  days_until_expiry?: number | null;
 
   purchase_value: number;
   selling_value: number;
@@ -211,21 +209,26 @@ export interface Product {
   image_url?: string | null;
   notes?: string | null;
   
-  pharmacy_id?: string;  // AJOUTÉ : ID de la pharmacie
-  branch_id?: string;    // AJOUTÉ : ID de la succursale
+  pharmacy_id?: string | null;
+  branch_id?: string | null;
+
+  // Pour les statistiques de vente
+  stock_version?: number;
+  synced_quantity?: number;
+  last_sync_at?: string | null;
 }
 
 export interface ProductCreate {
   code: string;
   name: string;
-  commercial_name?: string;
+  commercial_name?: string | null;
   description?: string;
   category?: string;
   category_id?: ID;
   purchase_price: number;
   selling_price?: number;
-  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
-  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
@@ -243,7 +246,7 @@ export interface ProductCreate {
   dci?: string;
   active_ingredient?: string;
   unit?: string;
-  batch_number?: string;  // AJOUTÉ : numéro de lot
+  batch_number?: string;
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
@@ -260,14 +263,14 @@ export interface ProductCreate {
 export interface ProductUpdate {
   code?: string;
   name?: string;
-  commercial_name?: string;
+  commercial_name?: string | null;
   description?: string;
   category?: string;
   category_id?: ID;
   purchase_price?: number;
   selling_price?: number;
-  selling_price_wholesale?: number;  // AJOUTÉ : prix de vente en gros
-  selling_price_retail?: number;     // AJOUTÉ : prix de vente au détail
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
   quantity?: number;
   available_quantity?: number;
   reserved_quantity?: number;
@@ -285,7 +288,7 @@ export interface ProductUpdate {
   dci?: string;
   active_ingredient?: string;
   unit?: string;
-  batch_number?: string;  // AJOUTÉ : numéro de lot
+  batch_number?: string;
   has_tva?: boolean;
   tva_rate?: number;
   is_active?: boolean;
@@ -308,12 +311,12 @@ export interface ProductFormInitialValues {
   laboratory?: string;
   purchase_price?: number;
   selling_price?: number;
-  selling_price_wholesale?: number;  // AJOUTÉ
-  selling_price_retail?: number;     // AJOUTÉ
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
   quantity?: number;
   alert_threshold?: number;
   expiry_date?: string;
-  pharmacy_id?: string;  // AJOUTÉ
+  pharmacy_id?: string;
 }
 
 export interface ProductSearch {
@@ -330,8 +333,8 @@ export interface ProductSearch {
   max_price?: number;
   min_quantity?: number;
   max_quantity?: number;
-  expiry_before?: string;
-  expiry_after?: string;
+  expiry_before?: string;   // produits dont la date d'expiration est avant cette date
+  expiry_after?: string;    // produits dont la date d'expiration est après cette date
   has_tva?: boolean;
   is_active?: boolean;
   is_available?: boolean;
@@ -342,9 +345,11 @@ export interface ProductSearch {
   sort_order?: 'asc' | 'desc';
   product_type?: string;
   branch_id?: string;
-  pharmacy_id?: string;
+  pharmacy_id?: string | number;
   include_sales_stats?: boolean;
-  location?: string;  // AJOUTÉ : filtre par emplacement
+  location?: string;        // filtre par emplacement
+  batch_number?: string;    // filtrer par numéro de lot
+  has_expiry_date?: boolean; // uniquement les produits avec date d'expiration
 }
 
 export interface ProductListResponse {
@@ -378,6 +383,142 @@ export interface ProductMergeRequest {
   keep_attributes?: string[];
   merge_strategy?: 'sum' | 'average' | 'max' | 'min' | 'keep_main';
   expiry_strategy?: 'earliest' | 'latest' | 'keep_main';
+}
+
+// =========================================================
+// EXPIRATION - TYPES SPÉCIFIQUES
+// =========================================================
+
+// Type pour les alertes de péremption (pour l'API)
+export interface ExpiryAlertItem {
+  id: ID;
+  name: string;
+  code: string | null;
+  barcode?: string | null;
+  quantity: number;
+  purchase_price?: number | null;
+  selling_price?: number | null;
+  expiry_date: string;
+  days_until_expiry: number;
+  status: 'expired' | 'critical' | 'warning';
+  location?: string | null;
+  supplier?: string | null;
+  category?: string | null;
+  commercial_name?: string | null;
+  unit?: string | null;
+  alert_threshold?: number | null;
+  branch_id?: string | null;
+  pharmacy_id?: string | null;
+}
+
+// Réponse de l'API pour les alertes de péremption
+export interface ExpiryAlertsResponse {
+  expired: ExpiryAlertItem[];
+  expiring_soon: ExpiryAlertItem[];
+  counts: {
+    expired: number;
+    expiring_soon: number;
+  };
+  days_threshold: number;
+  pharmacy_id?: string | null;
+}
+
+// Interface pour les produits avec infos d'expiration (utilisée dans le composant)
+export interface ProductWithExpiry extends Product {
+  days_until_expiry?: number | null;
+  
+}
+
+// Filtres pour l'écran d'expiration
+export interface ExpirationFilters {
+  statusFilter: 'expired' | 'critical' | 'warning' | 'all';
+  searchQuery: string;
+  sortField: 'expiry_date' | 'name' | 'quantity' | 'days_until_expiry';
+  sortOrder: 'asc' | 'desc';
+  branchId?: string | null;
+  pharmacyId?: string | null;
+}
+
+// Statistiques de l'écran d'expiration
+export interface ExpirationStats {
+  expired: number;
+  critical: number;
+  warning: number;
+  total: number;
+}
+
+// Configuration des seuils de péremption
+export interface ExpiryThresholds {
+  critical: number;  // jours avant expiration pour alerte critique
+  warning: number;   // jours avant expiration pour alerte simple
+}
+
+// Options de statut pour l'affichage
+export interface ExpiryStatusOption {
+  value: 'expired' | 'critical' | 'warning' | 'all';
+  label: string;
+  color: string;
+  borderColor: string;
+  icon: string;  // nom de l'icône lucide-react
+  description: string;
+}
+
+// Données exportées pour le rapport d'expiration
+export interface ExpirationExportRow {
+  'Nom': string;
+  'Code': string;
+  'Code-barres': string;
+  'Quantité': number;
+  "Prix d'achat": number;
+  'Prix de vente': number;
+  "Date d'expiration": string;
+  'Jours restants': number | string;
+  'Statut': string;
+  'Emplacement': string;
+  'Fournisseur': string;
+  'Catégorie': string;
+  'Lot': string;
+}
+
+// Paramètres pour getExpiryAlerts
+export interface GetExpiryAlertsParams {
+  pharmacyId: string;
+  days?: number;
+  branchId?: string;
+  includeDetails?: boolean;
+}
+
+// Réponse pour getExpiryAlerts
+export interface GetExpiryAlertsResponse {
+  expired: ExpiryAlertItem[];
+  expiringSoon: ExpiryAlertItem[];
+  counts: {
+    expired: number;
+    expiringSoon: number;
+  };
+  daysThreshold: number;
+}
+
+// Paramètres pour getProductsByExpiry
+export interface GetProductsByExpiryParams {
+  pharmacyId: string;
+  branchId?: string;
+  status?: 'expired' | 'critical' | 'warning' | 'all';
+  days?: number;
+  search?: string;
+  page?: number;
+  limit?: number;
+  sortBy?: 'expiry_date' | 'name' | 'quantity' | 'days_until_expiry';
+  sortOrder?: 'asc' | 'desc';
+}
+
+// Réponse pour getProductsByExpiry
+export interface GetProductsByExpiryResponse {
+  products: ProductWithExpiry[];
+  total: number;
+  page: number;
+  limit: number;
+  stats: ExpirationStats;
 }
 
 // =========================================================
@@ -909,8 +1050,8 @@ export interface ImportPreviewProduct {
   // Prix et coûts
   purchase_price: number;
   selling_price: number;
-  selling_price_wholesale?: number;  // AJOUTÉ
-  selling_price_retail?: number;     // AJOUTÉ
+  selling_price_wholesale?: number;
+  selling_price_retail?: number;
   wholesale_price?: number;
   
   // Stock
@@ -1082,7 +1223,7 @@ export interface PharmacyConfig {
   expiryWarningDays?: number;
   allowNegativeStock?: boolean;
   
-  // AJOUTÉ : type de vente configuré pour la pharmacie
+  // Type de vente configuré pour la pharmacie
   salesType?: SalesType;
   
   workingHours?: {
@@ -1119,7 +1260,9 @@ export interface PharmacyConfig {
   lock_stock_modification?: boolean;
 }
 
-// Ajouter ces interfaces
+// =========================================================
+// BRANCHES / MULTI-SUCCURSALES
+// =========================================================
 
 export interface BranchStockOverview {
   pharmacy: {
