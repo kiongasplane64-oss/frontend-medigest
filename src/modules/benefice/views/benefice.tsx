@@ -8,10 +8,14 @@ import {
   Award,
   DollarSign,
   Activity,
-  AlertTriangle
+  AlertTriangle,
+  Table,
+  ChevronUp,
+  ChevronDown,
+  Minus
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery} from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs';
@@ -19,21 +23,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { profitService } from '@/services/profitService';
-import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  PieChart as RePieChart,
-  Pie,
-  Cell
-} from 'recharts';
 
 // Types pour les données
 interface DailyProfitData {
@@ -124,21 +113,21 @@ export default function ProfitAnalysis() {
     queryFn: () => profitService.getDailyProfit(30)
   });
 
-  // 3. Top vendeurs
-  const { data: topSellers } = useQuery<TopSeller[]>({
-    queryKey: ['top-sellers', period, dateRange],
+  // 3. Tous les vendeurs
+  const { data: allSellers } = useQuery<TopSeller[]>({
+    queryKey: ['all-sellers', period, dateRange],
     queryFn: () => profitService.getProfitByUser(
-      period, 5, 
+      period, 1000, // Récupère tous les vendeurs
       dateRange.from?.toISOString().split('T')[0],
       dateRange.to?.toISOString().split('T')[0]
     )
   });
 
-  // 4. Top produits
+  // 4. Tous les produits
   const { data: bestPerformers } = useQuery<BestPerformer>({
     queryKey: ['best-performers', period, dateRange],
     queryFn: () => profitService.getBestPerformers(
-      period, 5,
+      period, 1000, // Récupère tous les produits
       dateRange.from?.toISOString().split('T')[0],
       dateRange.to?.toISOString().split('T')[0]
     )
@@ -177,65 +166,46 @@ export default function ProfitAnalysis() {
     }
   });
 
-  const COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
-
   const formatCurrency = (value: number): string => {
     return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'CDF' }).format(value);
   };
 
-  // Formateur compatible avec toutes les signatures de Recharts
-  const tooltipFormatter = (value: any): React.ReactNode => {
-    // Gérer undefined, null
-    if (value === undefined || value === null) {
-      return '0 FCFA';
+  const formatDate = (dateString: string): string => {
+    return new Date(dateString).toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: 'short'
+    });
+  };
+
+  const getTrendIcon = (trend: 'up' | 'down' | 'stable') => {
+    switch (trend) {
+      case 'up':
+        return <ChevronUp className="text-emerald-500" size={16} />;
+      case 'down':
+        return <ChevronDown className="text-red-500" size={16} />;
+      default:
+        return <Minus className="text-slate-500" size={16} />;
     }
-    
-    // Gérer les tableaux (stacked charts)
-    if (Array.isArray(value)) {
-      const firstValue = value[0];
-      if (typeof firstValue === 'number') {
-        return formatCurrency(firstValue);
-      }
-      return String(firstValue || '0');
-    }
-    
-    // Gérer les nombres
-    if (typeof value === 'number') {
-      return formatCurrency(value);
-    }
-    
-    // Gérer les strings
-    if (typeof value === 'string') {
-      const parsed = parseFloat(value);
-      if (!isNaN(parsed)) {
-        return formatCurrency(parsed);
-      }
-      return value;
-    }
-    
-    // Fallback
-    return '0 FCFA';
   };
 
   if (statsLoading) {
     return (
-      <div className="min-h-[80vh] flex flex-col space-y-8 pb-10">
-        <div className="flex justify-between items-center">
-          <Skeleton className="h-12 w-64" />
-          <Skeleton className="h-10 w-32" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw size={48} className="animate-spin text-blue-500 mx-auto mb-4" />
+          <p className="text-slate-600 text-lg">Chargement des analyses de bénéfices...</p>
+          <div className="mt-6 space-y-3">
+            {[...Array(4)].map((_, i) => (
+              <Skeleton key={i} className="h-16 w-96 rounded-xl" />
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-32 rounded-2xl" />
-          ))}
-        </div>
-        <Skeleton className="h-96 rounded-2xl" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-10">
+    <div className="min-h-screen bg-slate-50">
       <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b border-slate-100">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -282,9 +252,9 @@ export default function ProfitAnalysis() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8 mt-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6 mt-6">
         {/* Cartes KPI */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="bg-linear-to-br from-blue-50 to-white border-blue-100">
             <CardContent className="pt-6">
               <div className="flex items-center justify-between">
@@ -362,245 +332,387 @@ export default function ProfitAnalysis() {
           </Card>
         </div>
 
-        {/* Graphiques principaux */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Évolution quotidienne */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity size={20} className="text-blue-500" />
-                Évolution des bénéfices (30 jours)
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={dailyProfit}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                  <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip 
-                    formatter={tooltipFormatter}
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                  />
-                  <Legend />
-                  <Line type="monotone" dataKey="profit" stroke="#3b82f6" strokeWidth={2} name="Bénéfice" dot={false} />
-                  <Line type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2} name="CA" dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Tendance avec prévisions */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp size={20} className="text-blue-500" />
-                Tendance & Prévisions
-                {trend && (
-                  <span className={`ml-2 text-xs px-2 py-1 rounded-full font-bold ${
-                    trend.trend_direction === 'up' ? 'bg-emerald-100 text-emerald-700' :
-                    trend.trend_direction === 'down' ? 'bg-red-100 text-red-700' :
-                    'bg-slate-100 text-slate-700'
-                  }`}>
-                    {trend.trend_direction === 'up' ? '↑ +' : trend.trend_direction === 'down' ? '↓ ' : '→ '}
-                    {Math.abs(trend.trend_percentage).toFixed(1)}%
-                  </span>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={trend?.monthly_data?.slice(-6)}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12, angle: -45, textAnchor: 'end' }} height={80} />
-                  <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip formatter={tooltipFormatter} />
-                  <Bar dataKey="profit" fill="#3b82f6" radius={[8, 8, 0, 0]} name="Bénéfice" />
-                  <Bar dataKey="revenue" fill="#10b981" radius={[8, 8, 0, 0]} name="CA" />
-                </BarChart>
-              </ResponsiveContainer>
-              {trend?.forecast && trend.forecast.length > 0 && (
-                <div className="mt-4 p-3 bg-blue-50 rounded-xl">
-                  <p className="text-xs font-bold text-blue-700 mb-2">📈 Prévisions 3 mois</p>
-                  <div className="flex justify-between">
-                    {trend.forecast.map((f, i) => (
-                      <div key={i} className="text-center">
-                        <p className="text-xs text-slate-500">{f.month.split(' ')[0]}</p>
-                        <p className="text-sm font-bold text-blue-600">{formatCurrency(f.projected_profit)}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <Tabs defaultValue="sellers" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-3">
-            <TabsTrigger value="sellers">Top Vendeurs</TabsTrigger>
-            <TabsTrigger value="products">Top Produits</TabsTrigger>
+        {/* Tableaux de données */}
+        <Tabs defaultValue="all" className="w-full">
+          <TabsList className="grid w-full max-w-2xl grid-cols-4">
+            <TabsTrigger value="all">Toutes les données</TabsTrigger>
+            <TabsTrigger value="sellers">Vendeurs</TabsTrigger>
+            <TabsTrigger value="products">Produits</TabsTrigger>
             <TabsTrigger value="categories">Catégories</TabsTrigger>
           </TabsList>
 
-          {/* Top Vendeurs */}
-          <TabsContent value="sellers" className="mt-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {topSellers?.map((seller, index) => (
-                <Card key={seller.user_id} className="hover:shadow-lg transition-all">
-                  <CardContent className="pt-6">
-                    <div className="flex items-center gap-4">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white font-bold ${
-                        index === 0 ? 'bg-linear-to-br from-amber-400 to-amber-600' :
-                        index === 1 ? 'bg-linear-to-br from-slate-400 to-slate-600' :
-                        'bg-linear-to-br from-blue-400 to-blue-600'
-                      }`}>
-                        {index + 1}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-bold text-slate-800">{seller.user_name}</p>
-                        <p className="text-xs text-slate-500">{seller.user_role}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold text-emerald-600">{formatCurrency(seller.total_profit)}</p>
-                        <p className="text-xs text-slate-500">{seller.sale_count} ventes</p>
-                      </div>
-                    </div>
-                    <div className="mt-3 pt-3 border-t border-slate-100">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-500">CA: {formatCurrency(seller.total_revenue)}</span>
-                        <span className="text-slate-500">Marge: {seller.margin_rate.toFixed(1)}%</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+          {/* Tableau complet */}
+          <TabsContent value="all" className="mt-6 space-y-6">
+            {/* Évolution quotidienne */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity size={20} className="text-blue-500" />
+                  Évolution des bénéfices (30 jours)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b-2 border-slate-200">
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Date</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Bénéfice</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Chiffre d'affaires</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Marge</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dailyProfit?.map((day, index) => (
+                        <tr 
+                          key={day.date} 
+                          className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                            index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-4 font-medium text-slate-700">
+                            {formatDate(day.date)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-medium text-emerald-600">
+                            {formatCurrency(day.profit)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-slate-600">
+                            {formatCurrency(day.revenue)}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              (day.profit / day.revenue * 100) > 20 
+                                ? 'bg-emerald-100 text-emerald-700' 
+                                : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {((day.profit / day.revenue) * 100).toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Tendance mensuelle */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <TrendingUp size={20} className="text-blue-500" />
+                  Tendance mensuelle
+                  {trend && (
+                    <span className={`ml-2 text-xs px-2 py-1 rounded-full font-bold ${
+                      trend.trend_direction === 'up' ? 'bg-emerald-100 text-emerald-700' :
+                      trend.trend_direction === 'down' ? 'bg-red-100 text-red-700' :
+                      'bg-slate-100 text-slate-700'
+                    }`}>
+                      {getTrendIcon(trend.trend_direction)}
+                      {Math.abs(trend.trend_percentage).toFixed(1)}%
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b-2 border-slate-200">
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Mois</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Bénéfice</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Chiffre d'affaires</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Prévision</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {trend?.monthly_data?.map((month, index) => (
+                        <tr 
+                          key={month.month}
+                          className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                            index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-4 font-medium text-slate-700">{month.month}</td>
+                          <td className="py-3 px-4 text-right font-medium text-emerald-600">
+                            {formatCurrency(month.profit)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-slate-600">
+                            {formatCurrency(month.revenue)}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            {trend?.forecast?.find(f => f.month === month.month) ? (
+                              <span className="text-blue-600 font-medium">
+                                {formatCurrency(trend.forecast.find(f => f.month === month.month)!.projected_profit)}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
-          {/* Top Produits */}
+          {/* Vendeurs */}
+          <TabsContent value="sellers" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Table size={20} className="text-blue-500" />
+                  Tous les vendeurs ({allSellers?.length || 0})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b-2 border-slate-200">
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">#</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Vendeur</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Rôle</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Bénéfice</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">CA</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Ventes</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Marge</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allSellers?.map((seller, index) => (
+                        <tr 
+                          key={seller.user_id}
+                          className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                            index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-4">
+                            <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs ${
+                              index === 0 ? 'bg-amber-500' :
+                              index === 1 ? 'bg-slate-500' :
+                              index === 2 ? 'bg-amber-700' :
+                              'bg-blue-500'
+                            }`}>
+                              {index + 1}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-700">{seller.user_name}</td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-1 bg-slate-100 rounded-full text-xs text-slate-600">
+                              {seller.user_role}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right font-medium text-emerald-600">
+                            {formatCurrency(seller.total_profit)}
+                          </td>
+                          <td className="py-3 px-4 text-right text-slate-600">
+                            {formatCurrency(seller.total_revenue)}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className="px-2 py-1 bg-blue-50 rounded-full text-xs font-medium text-blue-600">
+                              {seller.sale_count}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              seller.margin_rate > 25 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {seller.margin_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Produits */}
           <TabsContent value="products" className="mt-6">
-            <div className="space-y-3">
-              {bestPerformers?.top_products.map((product, index) => (
-                <Card key={product.product_id} className="hover:shadow-md transition-all">
-                  <CardContent className="py-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4">
-                        <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 font-bold">
-                          {index + 1}
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800">{product.product_name}</p>
-                          <p className="text-xs text-slate-500">Code: {product.product_code}</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-6">
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-blue-600">{formatCurrency(product.profit)}</p>
-                          <p className="text-xs text-slate-500">Bénéfice</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-emerald-600">{product.total_sold} unités</p>
-                          <p className="text-xs text-slate-500">Vendues</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-purple-600">{product.margin_rate.toFixed(1)}%</p>
-                          <p className="text-xs text-slate-500">Marge</p>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Table size={20} className="text-blue-500" />
+                  Tous les produits ({bestPerformers?.top_products.length || 0})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b-2 border-slate-200">
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">#</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Produit</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Code</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Bénéfice</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Unités vendues</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Marge</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bestPerformers?.top_products.map((product, index) => (
+                        <tr 
+                          key={product.product_id}
+                          className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                            index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-4">
+                            <span className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 font-bold text-xs">
+                              {index + 1}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-700">{product.product_name}</td>
+                          <td className="py-3 px-4">
+                            <code className="px-2 py-1 bg-slate-100 rounded text-xs text-slate-600">
+                              {product.product_code}
+                            </code>
+                          </td>
+                          <td className="py-3 px-4 text-right font-medium text-emerald-600">
+                            {formatCurrency(product.profit)}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className="px-2 py-1 bg-blue-50 rounded-full text-xs font-medium text-blue-600">
+                              {product.total_sold}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              product.margin_rate > 25 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                            }`}>
+                              {product.margin_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Catégories */}
           <TabsContent value="categories" className="mt-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Répartition des ventes par catégorie</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <RePieChart>
-                      <Pie
-                        data={bestPerformers?.top_categories}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={5}
-                        dataKey="total_revenue"
-                        nameKey="category"
-                      >
-                        {bestPerformers?.top_categories.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={tooltipFormatter} />
-                      <Legend />
-                    </RePieChart>
-                  </ResponsiveContainer>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Détail par catégorie</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {bestPerformers?.top_categories.map((category, index) => (
-                    <div key={category.category} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                      <div className="flex items-center gap-3">
-                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                        <span className="font-medium">{category.category}</span>
-                      </div>
-                      <div className="flex gap-4">
-                        <span className="font-bold">{formatCurrency(category.total_revenue)}</span>
-                        <span className="text-slate-500">{category.percentage.toFixed(1)}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Table size={20} className="text-blue-500" />
+                  Répartition par catégorie
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b-2 border-slate-200">
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">#</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Catégorie</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Chiffre d'affaires</th>
+                        <th className="text-right py-3 px-4 text-slate-600 font-semibold">Part (%)</th>
+                        <th className="text-left py-3 px-4 text-slate-600 font-semibold">Répartition</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bestPerformers?.top_categories.map((category, index) => (
+                        <tr 
+                          key={category.category}
+                          className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${
+                            index % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'
+                          }`}
+                        >
+                          <td className="py-3 px-4">
+                            <span className="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center text-purple-600 font-bold text-xs">
+                              {index + 1}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-700">{category.category}</td>
+                          <td className="py-3 px-4 text-right font-medium text-slate-700">
+                            {formatCurrency(category.total_revenue)}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className="px-2 py-1 bg-blue-50 rounded-full text-xs font-medium text-blue-600">
+                              {category.percentage.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="w-full bg-slate-100 rounded-full h-2">
+                              <div 
+                                className="bg-purple-500 h-2 rounded-full transition-all" 
+                                style={{ width: `${category.percentage}%` }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
 
         {/* Comparaison des périodes */}
         {comparison && (
           <Card className="bg-linear-to-r from-blue-50 to-indigo-50 border-blue-100">
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between flex-wrap gap-4">
-                <div>
-                  <p className="text-sm font-medium text-blue-600">Comparaison des périodes</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {new Date(comparison.period2.start).toLocaleDateString()} → {new Date(comparison.period1.start).toLocaleDateString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="text-center">
-                    <p className="text-xs text-slate-500">Période précédente</p>
-                    <p className="text-xl font-bold text-slate-700">{formatCurrency(comparison.period2.profit)}</p>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-blue-700">
+                <Activity size={20} />
+                Comparaison des périodes
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-blue-200">
+                      <th className="text-left py-3 px-4 text-blue-700 font-semibold">Période précédente</th>
+                      <th className="text-center py-3 px-4 text-blue-700 font-semibold">Évolution</th>
+                      <th className="text-right py-3 px-4 text-blue-700 font-semibold">Période actuelle</th>
+                      <th className="text-right py-3 px-4 text-blue-700 font-semibold">Variation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="bg-white/50">
+                      <td className="py-4 px-4 font-medium text-slate-600">
+                        {formatCurrency(comparison.period2.profit)}
+                        <div className="text-xs text-slate-400 mt-1">
+                          {formatDate(comparison.period2.start)}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-center">
+                        {getTrendIcon(comparison.trend)}
+                      </td>
+                      <td className="py-4 px-4 text-right font-bold text-slate-800">
+                        {formatCurrency(comparison.period1.profit)}
+                        <div className="text-xs text-slate-400 mt-1">
+                          {formatDate(comparison.period1.start)}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                          comparison.trend === 'up' ? 'bg-emerald-100 text-emerald-700' :
+                          comparison.trend === 'down' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>
+                          {comparison.percentage_change > 0 ? '+' : ''}
+                          {comparison.percentage_change.toFixed(1)}%
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                {comparison.analysis && (
+                  <div className="mt-4 p-3 bg-white/50 rounded-xl">
+                    <p className="text-sm text-slate-600 italic">{comparison.analysis}</p>
                   </div>
-                  <div className="text-2xl font-bold">
-                    {comparison.trend === 'up' ? '→' : comparison.trend === 'down' ? '←' : '•'}
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs text-slate-500">Période actuelle</p>
-                    <p className="text-xl font-bold text-slate-800">{formatCurrency(comparison.period1.profit)}</p>
-                  </div>
-                  <div className={`px-3 py-2 rounded-xl font-bold ${
-                    comparison.trend === 'up' ? 'bg-emerald-100 text-emerald-700' :
-                    comparison.trend === 'down' ? 'bg-red-100 text-red-700' :
-                    'bg-slate-100 text-slate-700'
-                  }`}>
-                    {comparison.percentage_change > 0 ? '+' : ''}{comparison.percentage_change.toFixed(1)}%
-                  </div>
-                </div>
-                <p className="text-sm text-slate-600 italic max-w-md">{comparison.analysis}</p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -616,14 +728,18 @@ export default function ProfitAnalysis() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2">
-                  {swot.strengths.map((s, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <span className="text-green-500">✓</span>
-                      <span>{s.description}</span>
-                    </li>
-                  ))}
-                </ul>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {swot.strengths.map((s, i) => (
+                      <tr key={i} className="border-b border-green-100 last:border-0">
+                        <td className="py-2 px-1">
+                          <span className="text-green-500 mr-2">✓</span>
+                          {s.description}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
 
@@ -634,14 +750,18 @@ export default function ProfitAnalysis() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2">
-                  {swot.weaknesses.map((w, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <span className="text-red-500">⚠</span>
-                      <span>{w.description}</span>
-                    </li>
-                  ))}
-                </ul>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {swot.weaknesses.map((w, i) => (
+                      <tr key={i} className="border-b border-red-100 last:border-0">
+                        <td className="py-2 px-1">
+                          <span className="text-red-500 mr-2">⚠</span>
+                          {w.description}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
 
@@ -652,14 +772,18 @@ export default function ProfitAnalysis() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2">
-                  {swot.opportunities.map((o, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <span className="text-blue-500">💡</span>
-                      <span>{o.description}</span>
-                    </li>
-                  ))}
-                </ul>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {swot.opportunities.map((o, i) => (
+                      <tr key={i} className="border-b border-blue-100 last:border-0">
+                        <td className="py-2 px-1">
+                          <span className="text-blue-500 mr-2">💡</span>
+                          {o.description}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
 
@@ -670,14 +794,18 @@ export default function ProfitAnalysis() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2">
-                  {swot.threats.map((t, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <span className="text-amber-500">⚠</span>
-                      <span>{t.description}</span>
-                    </li>
-                  ))}
-                </ul>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {swot.threats.map((t, i) => (
+                      <tr key={i} className="border-b border-amber-100 last:border-0">
+                        <td className="py-2 px-1">
+                          <span className="text-amber-500 mr-2">⚠</span>
+                          {t.description}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
           </div>
@@ -693,16 +821,22 @@ export default function ProfitAnalysis() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {swot.recommendations.map((rec, i) => (
-                  <div key={i} className="flex items-start gap-3 p-3 bg-white rounded-xl">
-                    <div className="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold text-xs">
-                      {i + 1}
-                    </div>
-                    <p className="text-sm text-slate-700">{rec}</p>
-                  </div>
-                ))}
-              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {swot.recommendations.map((rec, i) => (
+                    <tr key={i} className="border-b border-indigo-100 last:border-0">
+                      <td className="py-3 px-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold text-xs">
+                            {i + 1}
+                          </div>
+                          <p className="text-slate-700">{rec}</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </CardContent>
           </Card>
         )}
